@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-brand-green: #f59e0b;
+  --color-brand-green-hover: #d97706;
+  --color-brand-accent: #f59e0b;
+  --color-brand-dark: #2D3A44;
+  --color-brand-slate: #18181b;
+
+  --color-brand-primary: #2D3A44;
+  --color-brand-steel: #516270;
+  --color-brand-taupe: #8D897F;
+  --color-brand-beige: #DACFBE;
+  --color-brand-beige-hover: #C5B9A8;
+  --color-brand-darker: #1E272F;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* Base modifications for the application design */
+body {
+  font-family: var(--font-sans);
+  background-color: #0A0A0B;
+  color: #e2e8f0;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Custom interactive classes */
+.emerald-glow {
+  box-shadow: 0 4px 20px -2px rgba(13, 92, 52, 0.15);
+}
+
+.premium-card-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.premium-card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 30px -4px rgba(13, 92, 52, 0.1);
+}
+
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

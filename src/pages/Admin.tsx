@@ -1,0 +1,1493 @@
+import React, { useState, useEffect } from 'react';
+import { database, sandboxState } from '../lib/supabase';
+import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem } from '../types';
+import Sidebar from '../components/layout/Sidebar';
+import { Button } from '../components/common/Button';
+import { Loader } from '../components/common/Loader';
+import { Modal } from '../components/common/Modal';
+import PropertyForm from '../components/property/PropertyForm';
+import RoomForm from '../components/room/RoomForm';
+import CouponList from '../components/coupon/CouponList';
+import InvoiceCard from '../components/transaction/InvoiceCard';
+import { formatRupiah } from '../utils/formatCurrency';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { 
+  Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, 
+  Trash2, Edit2, PlayCircle, Plus, Eye, Check, X, FileSpreadsheet,
+  History, Users, UserPlus, Download, Search, UserCheck, Activity,
+  FileText, Printer, ShieldPlus, Trash, UserCog, Terminal, HelpCircle,
+  ExternalLink, RefreshCw, Server, Copy
+} from 'lucide-react';
+
+interface AdminProps {
+  refreshTrigger: number;
+  triggerAppRefresh: () => void;
+}
+
+export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps) {
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [surveys, setSurveys] = useState<Survey[]>([]);
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [users, setUsers] = useState<UserSystem[]>([]);
+  const [tenantsList, setTenantsList] = useState<Tenant[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Search parameters for easy filtering
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Invoice display state
+  const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
+
+  // Dynamic user & role registration modal states
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [activeUserEdit, setActiveUserEdit] = useState<UserSystem | null>(null);
+  const [userForm, setUserForm] = useState({
+    fullName: '',
+    email: '',
+    role: 'staff' as 'super' | 'admin' | 'staff' | 'finance',
+    access: 'Staff akses terbatas',
+    active: true
+  });
+
+  // Manual Tenant creation modal states
+  const [showTenantModal, setShowTenantModal] = useState(false);
+  const [activeTenantEdit, setActiveTenantEdit] = useState<Tenant | null>(null);
+  const [tenantForm, setTenantForm] = useState({
+    full_name: '',
+    phone: '',
+    email: '',
+    property_id: 0,
+    room_number: '',
+    start_date: '',
+    duration_months: 1,
+    payment_status: 'paid' as 'paid' | 'unpaid'
+  });
+
+  // Property modal triggers
+  const [showPropertyModal, setShowPropertyModal] = useState(false);
+  const [activePropertyEdit, setActivePropertyEdit] = useState<Property | null>(null);
+
+  // Room modal triggers
+  const [showRoomModal, setShowRoomModal] = useState(false);
+  const [activeRoomEdit, setActiveRoomEdit] = useState<Room | null>(null);
+
+  // Coupon creator modal triggers
+  const [showCouponModal, setShowCouponModal] = useState(false);
+  const [couponForm, setCouponForm] = useState({
+    code: '',
+    discount_type: 'percentage' as 'percentage' | 'fixed',
+    discount_value: 10,
+    max_discount_amount: 100000,
+    is_active: true,
+    description: ''
+  });
+
+  // Midtrans Logs Dashboard States
+  const [midtransLogs, setMidtransLogs] = useState<any[]>([]);
+  const [midtransFilter, setMidtransFilter] = useState<string>('all');
+  const [midtransLoading, setMidtransLoading] = useState<boolean>(false);
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState<boolean>(true);
+
+  const fetchMidtransLogs = async () => {
+    try {
+      setMidtransLoading(true);
+      const res = await fetch('/api/midtrans/logs');
+      if (res.ok) {
+        const data = await res.json();
+        setMidtransLogs(data.logs || []);
+      }
+    } catch (err) {
+      console.warn('Error fetching Midtrans logs:', err);
+    } finally {
+      setMidtransLoading(false);
+    }
+  };
+
+  const handleClearMidtransLogs = async () => {
+    if (window.confirm('Hapus seluruh log transaksi Midtrans dari server?')) {
+      try {
+        const res = await fetch('/api/midtrans/logs/clear', { method: 'POST' });
+        if (res.ok) {
+          setMidtransLogs([]);
+        }
+      } catch (err) {
+        console.warn('Error clearing Midtrans logs:', err);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'midtrans_logs') {
+      fetchMidtransLogs();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    let interval: any;
+    if (activeTab === 'midtrans_logs' && autoRefreshLogs) {
+      interval = setInterval(() => {
+        fetchMidtransLogs();
+      }, 5000);
+    }
+    return () => clearInterval(interval);
+  }, [activeTab, autoRefreshLogs]);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        setLoading(true);
+        const [p, r, b, s, c, t, logs, uList, tList] = await Promise.all([
+          database.fetchProperties(),
+          database.fetchRooms(),
+          database.fetchBookings(),
+          database.fetchSurveys(),
+          database.fetchCoupons(),
+          database.fetchFinancialTransactions(),
+          database.fetchActivityLogs(),
+          database.fetchUsers(),
+          database.fetchTenants()
+        ]);
+        setProperties(p);
+        setRooms(r);
+        setBookings(b);
+        setSurveys(s);
+        setCoupons(c);
+        setTransactions(t);
+        setActivityLogs(logs);
+        setUsers(uList);
+        setTenantsList(tList);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, [refreshTrigger]);
+
+  const handleApproveBooking = async (b: Booking) => {
+    if (window.confirm(`Setujui sewa kamar ${b.room_number} untuk tenant ${b.tenant_name}?`)) {
+      const updated = { ...b, status: 'approved' as const };
+      await database.saveBooking(updated);
+      database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleCancelBooking = async (b: Booking) => {
+    if (window.confirm(`Tolak / batalkan reservasi sewa untuk tenant ${b.tenant_name}?`)) {
+      const updated = { ...b, status: 'rejected' as const };
+      await database.saveBooking(updated);
+      database.logActivity("System", "BOOKING_REJECT", `Sewa kamar ${b.room_number} ditolak`);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleApproveSurvey = async (s: Survey) => {
+    if (window.confirm(`Selesaikan janji kunjungan survey kamar ${s.room_number}? Tindakan ini memindahkan status ke Completed.`)) {
+      const updated = { ...s, status: 'survey_completed' as const };
+      await database.saveSurvey(updated);
+      database.logActivity("System", "SURVEY_COMPLETED", `Survey untuk kamar ${s.room_number} selesai`);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleNoShowSurvey = async (s: Survey) => {
+    if (window.confirm(`Tandai sebagai No-Show? Jaminan komitmen DP Rp 500rb akan dipindahkan langsung sebagai pendapatan hangus korporasi (transparansi PBJT).`)) {
+      const updated = { ...s, status: 'no_show' as const };
+      await database.saveSurvey(updated);
+      
+      // Seed an income transaction for lost DP
+      const trPayload = {
+        transaction_date: new Date().toISOString().split('T')[0],
+        category: 'income' as const,
+        amount: 500000,
+        description: `DP Survey Hangus - ${s.tenant_name} (Unit ${s.room_number})`,
+        account_coa: 4200 // Pendapatan DP Survey Hangus
+      };
+      await (database as any).sandboxState?.saveFinancialTransaction(trPayload);
+      
+      database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleApproveSurveyPayment = async (s: Survey) => {
+    if (window.confirm(`Setujui pembayaran DP survey sebesar Rp 500.000 untuk calon tenant ${s.tenant_name}?`)) {
+      const updated = { ...s, status: 'survey_confirmed' as const };
+      await database.saveSurvey(updated);
+      database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleCancelSurvey = async (s: Survey) => {
+    if (window.confirm(`Batalkan / tolak pengajuan survey untuk calon tenant ${s.tenant_name}?`)) {
+      const updated = { ...s, status: 'expired' as const };
+      await database.saveSurvey(updated);
+      database.logActivity("System", "SURVEY_CANCEL", `Pengajuan survey kamar ${s.room_number} dibatalkan`);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleAddProperty = async (payload: Partial<Property>) => {
+    await database.saveProperty(payload);
+    setShowPropertyModal(false);
+    triggerAppRefresh();
+  };
+
+  const handleDeleteProperty = async (id: number) => {
+    if (window.confirm("Apakah Anda yakin ingin menghapus properti kos ini? Semua metadata kamar di dalamnya juga akan terhapus.")) {
+      await database.deleteProperty(id);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleAddRoom = async (payload: Partial<Room>) => {
+    await database.saveRoom(payload);
+    setShowRoomModal(false);
+    triggerAppRefresh();
+  };
+
+  const handleDeleteRoom = async (id: number) => {
+    if (window.confirm("Ingin menghapus unit kamar ini?")) {
+      await database.deleteRoom(id);
+      triggerAppRefresh();
+    }
+  };
+
+  const handleCreateCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload: Partial<Coupon> = {
+      code: couponForm.code.toUpperCase(),
+      discount_type: couponForm.discount_type,
+      discount_value: Number(couponForm.discount_value),
+      max_discount_amount: Number(couponForm.max_discount_amount),
+      is_active: couponForm.is_active,
+      description: couponForm.description,
+      min_duration_months: 1
+    };
+    await database.saveCoupon(payload);
+    setShowCouponModal(false);
+    triggerAppRefresh();
+  };
+
+  const handleSaveUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload: Partial<UserSystem> = {
+      ...(activeUserEdit ? { id: activeUserEdit.id } : {}),
+      full_name: userForm.fullName,
+      email: userForm.email,
+      role: userForm.role,
+      role_id: userForm.role === 'super' ? 1 : userForm.role === 'admin' ? 2 : userForm.role === 'finance' ? 3 : 4,
+      access: userForm.role === 'super' ? 'Akses penuh sistem, log audit & database' : userForm.role === 'admin' ? 'Akses kontrol panel asrama & inventaris' : userForm.role === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas',
+      active: userForm.active
+    };
+    await database.saveUser(payload);
+    setShowUserModal(false);
+    setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true });
+    setActiveUserEdit(null);
+    triggerAppRefresh();
+  };
+
+  const handleDeleteUser = async (id: string) => {
+    if (window.confirm("Apakah Anda yakin ingin mencabut seluruh hak akses fungsionaris ini?")) {
+      await database.deleteUser(id);
+      triggerAppRefresh();
+    }
+  };
+
+  // Aggregated pricing math
+  const totalOccupied = rooms.filter(r=>r.status === 'occupied').length;
+  const occupancyRate = rooms.length > 0 ? Math.round((totalOccupied / rooms.length) * 100) : 0;
+  
+  // Real time direct calculated PBJT values
+  const rawRevenue = bookings.filter(b=>b.status === 'approved').reduce((acc,curr)=>acc+Number(curr.total_price),0);
+  const totalPBJT = Math.round(rawRevenue * 0.10); // 10% Local tax
+
+  // Recharts parameters parser
+  const chartData = [
+    { name: 'KOS PUTRI', Terisi: rooms.filter(r=>r.status==='occupied' && properties.find(p=>p.id===r.property_id)?.type==='putri').length },
+    { name: 'KOS PUTRA', Terisi: rooms.filter(r=>r.status==='occupied' && properties.find(p=>p.id===r.property_id)?.type==='putra').length },
+    { name: 'KOS CAMPUR', Terisi: rooms.filter(r=>r.status==='occupied' && properties.find(p=>p.id===r.property_id)?.type==='campur').length }
+  ];
+
+  if (loading) {
+    return <Loader label="Memuat Panel Manajemen Birokrasi.." />;
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 flex flex-col lg:flex-row gap-6 font-sans">
+      
+      {/* Sidebar layouts controls */}
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+
+      {/* Primary tab views switcher */}
+      <div className="flex-1 bg-slate-905 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6 min-h-[70vh]">
+        
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            <div className="border-b border-slate-800 pb-3">
+              <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Kinerja Finansial & Hunian</h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">Analisis occupancy kamar dan rasio penarikan pajak PBJT 10% secara langsung.</p>
+            </div>
+
+            {/* Quick KPI stats row */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
+                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Okupansi Kamar</span>
+                <span className="text-xl font-extrabold text-amber-500 font-mono block">{occupancyRate}%</span>
+                <span className="text-[9px] text-slate-450 font-sans block">{totalOccupied} terisi dari {rooms.length} unit</span>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
+                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Sewa Bulanan Aktif</span>
+                <span className="text-xl font-extrabold text-white font-mono block">{bookings.length} kontrak</span>
+                <span className="text-[9px] text-slate-455 font-sans block">Approved settlement</span>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
+                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Estimasi Omzet</span>
+                <span className="text-xs font-extrabold text-emerald-450 font-mono block leading-loose select-all">{formatRupiah(rawRevenue)}</span>
+                <span className="text-[9px] text-slate-450 font-sans block">Sewa terakumulasi</span>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
+                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Pemberlakuan PBJT (10%)</span>
+                <span className="text-xs font-extrabold text-[#f5a623] font-mono block leading-loose select-all">{formatRupiah(totalPBJT)}</span>
+                <span className="text-[9px] text-slate-450 font-sans block">Kewajiban pajak daerah</span>
+              </div>
+            </div>
+
+            {/* Occupants Charting visuals */}
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-3">
+              <h4 className="text-[10px] font-bold uppercase text-slate-450 tracking-wider font-mono">Okupansi Kamar Berdasarkan Gender</h4>
+              <div className="h-48 text-[9px] font-mono">
+                <ResponsiveContainer width="100%" height={180} minWidth={0} minHeight={0}>
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#222" />
+                    <XAxis dataKey="name" stroke="#888" />
+                    <YAxis stroke="#888" />
+                    <Tooltip contentStyle={{ backgroundColor: '#111', borderColor: '#333' }} />
+                    <Bar dataKey="Terisi" fill="#f5a623" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'properties' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Katalog Kompleks Properti Kos</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Kelola seluruh asrama kosan, lokasi GPS, dan data penunjang operasional.</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setActivePropertyEdit(null);
+                  setShowPropertyModal(true);
+                }}
+                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
+              >
+                <Plus size={12} />
+                Tambah Properti
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {properties.map(p => (
+                <div key={p.id} className="bg-slate-900 border border-slate-800 p-4 rounded-3xl flex justify-between items-center text-xs">
+                  <div>
+                    <h4 className="font-extrabold text-slate-100 uppercase font-display">{p.name}</h4>
+                    <span className="text-[9px] text-slate-450 font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        setActivePropertyEdit(p);
+                        setShowPropertyModal(true);
+                      }}
+                      className="p-1 px-2.5 bg-slate-800 hover:bg-slate-750 text-slate-205 rounded-lg border border-slate-750 transition cursor-pointer text-[10px] flex items-center gap-1"
+                    >
+                      <Edit2 size={11} />
+                      Ubah
+                    </button>
+                    <button 
+                      onClick={() => handleDeleteProperty(p.id)}
+                      className="p-1 px-2.5 bg-red-950/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition cursor-pointer text-[10px] flex items-center gap-1"
+                    >
+                      <Trash2 size={11} />
+                      Hapus
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'rooms' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Ketersediaan Kamar / Unit</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Pantau tarif harian, bulanan, detail lantai, dan metrik ketersediaan kamar.</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setActiveRoomEdit(null);
+                  setShowRoomModal(true);
+                }}
+                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
+              >
+                <Plus size={12} />
+                Tambah Kamar
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {rooms.map(r => {
+                const parentProj = properties.find(p=>p.id === r.property_id)?.name || 'Properti N/A';
+                return (
+                  <div key={r.id} className="bg-slate-900 border border-slate-800 p-4 rounded-3xl flex justify-between items-center text-xs">
+                    <div>
+                      <h4 className="font-extrabold text-slate-100 uppercase">KAMAR {r.room_number} ({r.room_type})</h4>
+                      <p className="text-[9px] text-slate-450 font-mono">{parentProj} | Lantai {r.floor} | Stat: {r.status}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => {
+                          setActiveRoomEdit(r);
+                          setShowRoomModal(true);
+                        }}
+                        className="p-1 px-2.5 bg-slate-800 hover:bg-slate-750 text-slate-205 rounded-lg border border-slate-750 transition cursor-pointer text-[10px] flex items-center gap-1"
+                      >
+                        <Edit2 size={11} />
+                        Kustomisasi
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteRoom(r.id)}
+                        className="p-1 px-2.5 bg-red-950/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition cursor-pointer text-[10px] flex items-center gap-1"
+                      >
+                        <Trash2 size={11} />
+                        Hapus
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'surveys' && (
+          <div className="space-y-4">
+            <div className="border-b border-slate-800 pb-3">
+              <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Antrian Jadwal Survey Lapangan</h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">Saring jadwal survey masuk dengan DP Rp 500rb komitmen.</p>
+            </div>
+
+            <div className="space-y-3">
+              {surveys.map(s => (
+                <div key={s.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl space-y-3 text-xs">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="text-[9px] font-mono bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-550/25 font-bold uppercase tracking-wider">{s.invoice_id}</span>
+                      <h4 className="font-extrabold text-slate-150 uppercase mt-1">Calon Penghuni: {s.client_name} ({s.phone})</h4>
+                      <p className="text-[9px] text-slate-450 font-mono">Pilihan: Kamar {s.room_number} | Jadwal: {s.survey_date} @ {s.survey_time_slot}</p>
+                    </div>
+                    <span className={`text-[8px] font-mono px-2 py-0.5 rounded-full border font-bold uppercase ${
+                      s.status === 'survey_confirmed' 
+                        ? 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse' 
+                        : s.status === 'survey_completed' 
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/10' 
+                          : s.status === 'pending_payment'
+                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 animate-pulse'
+                            : 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+                    }`}>
+                      {s.status === 'survey_confirmed' 
+                        ? 'MENUNGGU KEDATANGAN' 
+                        : s.status === 'survey_completed' 
+                          ? 'SUKSES DI-SURVEY' 
+                          : s.status === 'pending_payment'
+                            ? 'MENUNGGU BAYAR DP'
+                            : s.status === 'no_show'
+                              ? 'NO SHOW DP HANGUS'
+                              : 'DIBATALKAN'}
+                    </span>
+                  </div>
+
+                  {s.status === 'survey_confirmed' && (
+                    <div className="flex gap-2 border-t border-slate-850/80 pt-2.5">
+                      <button 
+                        onClick={() => handleApproveSurvey(s)}
+                        className="p-1 px-3 bg-emerald-600 hover:bg-emerald-550 text-white rounded-xl font-bold font-sans cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md shadow-emerald-600/5"
+                      >
+                        <Check size={11} />
+                        Selesai Survey (Sesuai Janji)
+                      </button>
+                      <button 
+                        onClick={() => handleNoShowSurvey(s)}
+                        className="p-1 px-3 bg-red-650 hover:bg-red-550 text-white rounded-xl font-bold font-sans cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md"
+                      >
+                        <X size={11} />
+                        No-Show (DP Hangus)
+                      </button>
+                    </div>
+                  )}
+
+                  {s.status === 'pending_payment' && (
+                    <div className="flex gap-2 border-t border-slate-850/80 pt-2.5">
+                      <button 
+                        onClick={() => handleApproveSurveyPayment(s)}
+                        className="p-1 px-3 bg-emerald-600 hover:bg-emerald-550 text-white rounded-xl font-bold font-sans cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md shadow-emerald-600/5"
+                      >
+                        <Check size={11} />
+                        Setujui Pembayaran DP
+                      </button>
+                      <button 
+                        onClick={() => handleCancelSurvey(s)}
+                        className="p-1 px-3 bg-red-950/20 hover:bg-red-500 text-red-500 rounded-xl transition cursor-pointer text-[10px] flex items-center gap-1 border border-red-500/20"
+                      >
+                        <X size={11} />
+                        Tolak
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {surveys.length === 0 && (
+                <p className="text-xs text-slate-500 text-center py-6">Belum ada antrian pengajuan survey untuk minggu ini.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'finance' && (
+          <div className="space-y-6">
+            <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Buku Besar Akuntansi (General Ledger)</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Penarikan neraca saldo, pelacakan chart of accounts (COA) properti secara tertib.</p>
+              </div>
+              <div className="text-right">
+                <span className="text-[8px] font-bold text-slate-400 font-mono uppercase block">Sistem Akrual</span>
+                <span className="text-[10px] text-emerald-400 font-bold font-mono">BALANCED LEDGER</span>
+              </div>
+            </div>
+
+            {/* Quick Balance information panel */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl relative overflow-hidden">
+                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Total Kas Bank Mandiri</span>
+                <span className="text-base font-bold text-white font-mono block mt-1">{formatRupiah(rawRevenue)}</span>
+                <span className="text-[9px] text-slate-450 font-sans block mt-1">Rekening setelmen penampung</span>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl">
+                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Utang PBJT Pajak (10%)</span>
+                <span className="text-base font-bold text-amber-500 font-mono block mt-1">{formatRupiah(totalPBJT)}</span>
+                <span className="text-[9px] text-slate-455 font-sans block mt-1">Wajib disetorkan ke BPD</span>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl">
+                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Pendapatan Bersih Kos</span>
+                <span className="text-base font-bold text-emerald-450 font-mono block mt-1">{formatRupiah(rawRevenue - totalPBJT)}</span>
+                <span className="text-[9px] text-slate-450 font-sans block mt-1">Laba setelah penyisihan PBJT</span>
+              </div>
+            </div>
+
+            {/* General ledger log */}
+            <div className="space-y-3">
+              <h4 className="text-[10px] font-bold uppercase text-slate-400 tracking-wider font-mono">Mutasi Keuangan Masuk (Cash Inflows)</h4>
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-2 max-h-60 overflow-y-auto no-scrollbar font-mono text-[10px]">
+                {bookings.filter(b=>b.status==='approved').map(b => (
+                  <div key={b.id} className="flex justify-between items-center border-b border-white/5 pb-2 text-slate-350">
+                    <div>
+                      <span className="text-slate-400 font-bold uppercase">SETELMEN {b.midtrans_order_id}</span>
+                      <p className="text-[9px] text-slate-500">Kamar {b.room_number} - Tenant {b.tenant_name} (10% PBJT Disisihkan)</p>
+                    </div>
+                    <span className="font-bold text-emerald-400">+{formatRupiah(b.total_price)}</span>
+                  </div>
+                ))}
+                
+                {surveys.filter(s=>s.status==='no_show').map(s => (
+                  <div key={s.id} className="flex justify-between items-center border-b border-white/5 pb-2 text-slate-350">
+                    <div>
+                      <span className="text-slate-400 font-bold uppercase">SURVEY NO SHOW {s.invoice_id}</span>
+                      <p className="text-[9px] text-slate-500">Pengamanan kamar {s.room_number} hangus atas nama {s.client_name}</p>
+                    </div>
+                    <span className="font-bold text-emerald-400">+Rp 500.000</span>
+                  </div>
+                ))}
+
+                {bookings.filter(b=>b.status==='approved').length === 0 && surveys.filter(s=>s.status==='no_show').length === 0 && (
+                  <p className="text-center text-slate-650 py-4 font-sans text-xs">Belum ada mutasi keuangan tercatat pada peridose pembukuan ini.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'coupons' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Kupon Promo & Kampanye Diskon</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Terbitkan potongan harga sewa eksklusif untuk mendongkrak minat okupansi.</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setCouponForm({
+                    code: '',
+                    discount_type: 'percentage',
+                    discount_value: 15,
+                    max_discount_amount: 150000,
+                    is_active: true,
+                    description: 'Potongan Diskon Akhir Tahun'
+                  });
+                  setShowCouponModal(true);
+                }}
+                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
+              >
+                <Plus size={12} />
+                Terbitkan Kupon
+              </button>
+            </div>
+
+            <CouponList coupons={coupons} />
+          </div>
+        )}
+
+        {activeTab === 'bookings_history' && (
+          <div className="space-y-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Riwayat Transaksi Pemesanan & Kontrak Sewa</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Pantau settlement pembayaran, unduh lembar spreadsheet, serta lihat & cetak bukti invoice penagihan.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const headers = ['Order ID', 'Penyewa', 'Unit', 'Masa Kontrak', 'Total Tagihan', 'Pembayaran', 'Status', 'Tanggal Settle', 'No WhatsApp'];
+                  const rows = bookings.map(b => [
+                    b.midtrans_order_id || `BOOK-${b.id}`,
+                    b.tenant_name,
+                    `Kamar ${b.room_number}`,
+                    b.duration_months > 0 ? `${b.duration_months} Bulan` : 'Harian',
+                    String(b.total_price),
+                    b.payment_method || 'Midtrans VA/QRIS',
+                    b.status.toUpperCase(),
+                    b.check_in_date || b.booking_date,
+                    b.phone || '-'
+                  ]);
+                  const csvContent = "data:text/csv;charset=utf-8," 
+                    + [headers.join(','), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))].join('\n');
+                  const encodedUri = encodeURI(csvContent);
+                  const link = document.createElement("a");
+                  link.setAttribute("href", encodedUri);
+                  link.setAttribute("download", `riwayat_sewa_samarastay_${new Date().toISOString().split('T')[0]}.csv`);
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  database.logActivity("System", "EXCEL_EXPORT", "Mengunduh file spreadsheet rekap kontrak sewa");
+                }}
+                className="bg-emerald-600 hover:bg-emerald-550 text-white font-extrabold text-[10px] uppercase px-3 py-2 rounded-xl flex items-center gap-1.5 transition-all shadow-md shrink-0 cursor-pointer"
+              >
+                <Download size={12} />
+                Unduh Rekap CSV
+              </button>
+            </div>
+
+            {/* Live Filter Bar */}
+            <div className="relative">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500 pointer-events-none">
+                <Search size={12} />
+              </span>
+              <input
+                type="text"
+                placeholder="Cari nama penyewa atau nomor kamar..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 text-xs pl-9 pr-4 py-2.5 rounded-2xl outline-none text-slate-200 focus:border-amber-500 transition-colors"
+              />
+            </div>
+
+            <div className="space-y-3">
+              {bookings
+                .filter(b => 
+                  b.tenant_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  b.room_number.toLowerCase().includes(searchQuery.toLowerCase())
+                )
+                .map(b => {
+                  const propertyName = properties.find(p => p.id === b.property_id)?.name || 'Properti Kos';
+                  return (
+                    <div key={b.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl space-y-3 text-xs">
+                      <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[9px] font-mono bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded border border-blue-500/20 font-bold uppercase tracking-wider">
+                              {b.midtrans_order_id || `BOOK-${b.id}`}
+                            </span>
+                            <span className="text-[9px] text-slate-500 font-mono italic">
+                              Masuk: {b.booking_date}
+                            </span>
+                          </div>
+                          <h4 className="font-extrabold text-white uppercase mt-1.5">
+                            {b.tenant_name}
+                          </h4>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            Kamar <strong className="text-amber-500">{b.room_number}</strong> | {propertyName}
+                          </p>
+                          <p className="text-[9px] text-slate-450 font-mono mt-1">
+                            Durasi: {b.duration_months > 0 ? `${b.duration_months} Bulan` : 'Sewa Harian'} | Mulai Sewa: {b.check_in_date}
+                          </p>
+                        </div>
+                        <div className="text-left sm:text-right space-y-1.5 shrink-0 self-stretch sm:self-auto flex sm:flex-col justify-between sm:justify-start items-center sm:items-end">
+                          <span className={`text-[8px] font-mono px-2.5 py-0.5 rounded-full border font-bold uppercase block w-fit ${
+                            b.status === 'approved' 
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
+                              : b.status === 'pending'
+                                ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 animate-pulse'
+                                : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          }`}>
+                            {b.status === 'approved' ? 'Lunas / Berjalan' : b.status === 'pending' ? 'Menunggu Bayar' : 'Dibatalkan'}
+                          </span>
+                          <span className="text-xs font-mono font-bold text-slate-200 block">
+                            {formatRupiah(b.total_price)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 border-t border-slate-850/80 pt-2.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedInvoice({
+                              type: 'booking',
+                              id: b.midtrans_order_id || `BOOK-${b.id}`,
+                              name: b.tenant_name,
+                              roomNo: b.room_number,
+                              propertyName: propertyName,
+                              amountPaid: b.total_price,
+                              method: b.payment_method || 'Virtual Account Mandiri / QRIS',
+                              date: b.check_in_date || b.booking_date
+                            });
+                          }}
+                          className="p-1 px-3 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-xl transition font-medium cursor-pointer text-[10px] flex items-center gap-1 border border-slate-700"
+                        >
+                          <FileText size={11} />
+                          Lihat & Cetak Invoice (Kwitansi)
+                        </button>
+
+                        {b.status === 'pending' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleApproveBooking(b)}
+                              className="p-1 px-3 bg-emerald-650 hover:bg-emerald-600 text-white rounded-xl font-bold cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md"
+                            >
+                              <Check size={11} />
+                              Setujui Pembayaran
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelBooking(b)}
+                              className="p-1 px-3 bg-red-950/20 hover:bg-red-500 text-red-500 rounded-xl transition cursor-pointer text-[10px] flex items-center gap-1 border border-red-500/20"
+                            >
+                              <X size={11} />
+                              Tolak
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {bookings.length === 0 && (
+                <p className="text-sm text-slate-500 text-center py-8">Belum ada riwayat transaksi sewa kos.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'tenants' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3 flex-wrap gap-2">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Daftar Aktif Penghuni Kamar (Tenants)</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Daftar seluruh penghuni kosmopolit terverifikasi dengan info alokasi kamar & jangka waktu sewa berjalan.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const phoneNum = prompt("Ketik nomor WhatsApp penghuni baru (misal: 081293840293):");
+                  const nameInput = prompt("Ketik nama penghuni baru:");
+                  const roomInput = prompt("Ketik nomor kamar penghuni (misal: R201 atau 202):");
+                  const durationInMonthsInput = prompt("Ketik jangka waktu sewa (dalam bulan):", "3");
+
+                  if (nameInput && roomInput && durationInMonthsInput) {
+                    const matchedRoom = rooms.find(r => r.room_number.toLowerCase() === roomInput.toLowerCase());
+                    const payload: Partial<Tenant> = {
+                      full_name: nameInput,
+                      phone: phoneNum || '081293840293',
+                      email: 'manual.tenant@samarastay.com',
+                      avatar_initials: nameInput.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(),
+                      avatar_color: "bg-amber-600",
+                      property_id: matchedRoom ? matchedRoom.property_id : (properties[0]?.id || 1),
+                      room_number: roomInput,
+                      start_date: new Date().toISOString().split('T')[0],
+                      duration_months: Number(durationInMonthsInput) || 1,
+                      payment_status: 'paid'
+                    };
+                    // Save to local storage state
+                    const list = sandboxState.getTenants();
+                    const nextId = list.length ? Math.max(...list.map(t => t.id)) + 1 : 1;
+                    sandboxState.setTenants([...list, { ...payload, id: nextId } as Tenant]);
+                    
+                    // Also mark room as occupied if it exists
+                    if (matchedRoom) {
+                      database.saveRoom({ ...matchedRoom, status: 'occupied', current_tenant_name: nameInput });
+                    }
+                    database.logActivity("System", "MANUAL_TENANT_ADD", `Menambah penghuni manual: ${nameInput} di kamar ${roomInput}`);
+                    triggerAppRefresh();
+                  }
+                }}
+                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 transition-all shadow-md focus:outline-none cursor-pointer"
+              >
+                <Plus size={11} />
+                Pendaftaran Manual
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {tenantsList.map(t => {
+                const propertyName = properties.find(p => p.id === t.property_id)?.name || 'Properti Kos';
+                const dateEnd = new Date(new Date(t.start_date).setMonth(new Date(t.start_date).getMonth() + (t.duration_months || 1))).toISOString().split('T')[0];
+                return (
+                  <div key={t.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl flex gap-3.5 items-start text-xs relative overflow-hidden shadow-sm">
+                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-extrabold text-white shrink-0 shadow-inner bg-slate-800`}>
+                      {t.avatar_initials || t.full_name.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="space-y-1.5 flex-1 min-w-0">
+                      <div>
+                        <h4 className="font-extrabold text-white text-sm tracking-tight truncate capitalize">{t.full_name}</h4>
+                        <p className="text-[10px] text-slate-455 font-mono font-bold uppercase">{propertyName}</p>
+                      </div>
+
+                      <div className="space-y-1 text-slate-350 text-[11px]">
+                        <p>📍 Kamar Alokasi: <strong className="text-amber-500 font-mono">Kamar {t.room_number}</strong></p>
+                        <p>📞 No. WhatsApp: <span className="font-mono text-slate-300">{t.phone}</span></p>
+                        <p>⏱️ Jangka Pemesanan: <span className="font-mono text-slate-200 font-bold">{t.duration_months || 1} Bulan</span></p>
+                        <p className="text-[10px] text-slate-450 mt-1">
+                          Periode: <span className="font-mono font-bold text-slate-400">{t.start_date}</span> s/d <span className="font-mono font-bold text-slate-450">{dateEnd}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex gap-2 pt-1.5 border-t border-slate-800 mt-2 flex-wrap items-center justify-between">
+                        <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/15">
+                          Verified Tenant
+                        </span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (window.confirm(`Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`)) {
+                              const list = sandboxState.getTenants();
+                              sandboxState.setTenants(list.filter(item => item.id !== t.id));
+                              
+                              // return room back to available 
+                              const rList = rooms.filter(x => x.room_number === t.room_number);
+                              for (const matchedRoom of rList) {
+                                await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
+                              }
+                              database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name}`);
+                              triggerAppRefresh();
+                            }
+                          }}
+                          className="text-rose-450 hover:text-rose-400 text-[10px] font-bold font-sans transition-colors cursor-pointer"
+                        >
+                          Check Out / Hapus
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {tenantsList.length === 0 && (
+                <div className="col-span-2 text-center text-slate-500 text-xs py-10">Belum ada penyewa yang check-in aktif berjalan.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'user_roles' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">User & Manajemen Hak Akses (RBAC)</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Daftarkan fungsionaris klerikal / petugas lapangan, atur limit akses finansial & modifikasi basis data.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveUserEdit(null);
+                  setUserForm({
+                    fullName: '',
+                    email: '',
+                    role: 'staff',
+                    access: 'Staff akses terbatas',
+                    active: true
+                  });
+                  setShowUserModal(true);
+                }}
+                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition-all shadow-md focus:outline-none cursor-pointer"
+              >
+                <UserPlus size={12} />
+                Daftar Staf/Role Baru
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {users.map(u => (
+                <div key={u.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3.5 text-xs">
+                  <div className="space-y-1.5 flex-1 select-all">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-white text-sm capitalize">{u.full_name}</span>
+                      <span className={`text-[8px] font-mono font-bold uppercase px-2 py-0.5 rounded-full ${
+                        u.role === 'super' || u.role === 'admin' 
+                          ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' 
+                          : u.role === 'finance'
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-slate-800 text-slate-400'
+                      }`}>
+                        {u.role === 'super' ? 'SUPER COOP' : u.role === 'admin' ? 'SYSTEM ADMIN' : u.role === 'finance' ? 'CHIEF FINANCIAL' : 'FIELD OPERATOR'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">📧 Email: <span className="font-mono text-slate-300">{u.email}</span></p>
+                    <p className="text-[10px] text-slate-500 flex items-center gap-1">🔑 Izin Otoritas: <span className="font-sans text-slate-305">{u.access}</span></p>
+                    <span className="text-[9px] text-slate-600 block">Last login: {u.last_login || 'Masa aktif hari ini'}</span>
+                  </div>
+
+                  <div className="flex gap-2 shrink-0 md:ml-auto w-full md:w-auto mt-2 md:mt-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveUserEdit(u);
+                        setUserForm({
+                          fullName: u.full_name,
+                          email: u.email,
+                          role: u.role,
+                          access: u.access,
+                          active: u.active
+                        });
+                        setShowUserModal(true);
+                      }}
+                      className="flex-1 md:flex-initial p-1.5 px-3 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center"
+                    >
+                      <Edit2 size={11} />
+                      Ubah Izin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteUser(u.id)}
+                      className="flex-1 md:flex-initial p-1.5 px-3 bg-red-950/25 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center"
+                    >
+                      <Trash2 size={11} />
+                      Cabut Akses
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'activity_logs' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Audit Trail & Log Aktivitas Kepegawaian</h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Mutasi kronologis perubahan inventaris kamar, setoran reservasi survey, serta reset ledger akuntansi.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm("Apakah Anda yakin ingin mematikan / membersihkan semua log aktivitas sistem penampungan?")) {
+                    sandboxState.setActivityLogs([]);
+                    triggerAppRefresh();
+                  }
+                }}
+                className="text-red-400 hover:text-white text-[10px] font-bold py-1.5 px-3 border border-red-500/20 rounded-xl hover:bg-red-550 transition-all cursor-pointer"
+              >
+                Clear All Logs
+              </button>
+            </div>
+
+            <div className="bg-slate-950 rounded-2xl border border-slate-850 p-4 font-mono text-[10px] space-y-2.5 overflow-y-auto max-h-[60vh] no-scrollbar">
+              {activityLogs.map(l => (
+                <div key={l.id} className="border-b border-white/5 pb-2.5 flex flex-col sm:flex-row justify-between text-slate-350 gap-1 select-all">
+                  <div>
+                    <span className="text-amber-500 font-bold uppercase tracking-wider">[{l.time || '11:15'}]</span>{' '}
+                    <span className="text-indigo-400 font-extrabold">@{l.admin_name}</span>{' '}
+                    <span className="text-white font-bold bg-slate-900 px-1 py-0.2 rounded tracking-wide border border-slate-800 text-[9px] uppercase">{l.action}</span>
+                    <p className="text-[#8e9aa8] text-[9.5px] mt-0.5">{l.detail}</p>
+                  </div>
+                  <span className="text-[8px] text-slate-550 shrink-0 sm:text-right">IP: {l.ip_address || '127.0.0.1'}</span>
+                </div>
+              ))}
+
+              {activityLogs.length === 0 && (
+                <p className="text-center text-slate-650 py-10 font-sans text-xs">Belum ada rekam jejak audit terkoneksi pada cluster server.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'midtrans_logs' && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-800 pb-3 gap-2">
+              <div>
+                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight flex items-center gap-2">
+                  <Terminal size={14} className="text-amber-500" />
+                  Midtrans Sandbox & Diagnostics Ledger
+                </h2>
+                <p className="text-[11px] text-slate-400 mt-0.5 font-sans">Real-time monitoring of browser client payments, API requests, state responses, and webhook ingestions.</p>
+              </div>
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <label className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-400 uppercase cursor-pointer bg-slate-900 border border-slate-805 px-3 py-1.5 rounded-xl">
+                  <input 
+                    type="checkbox" 
+                    checked={autoRefreshLogs} 
+                    onChange={(e) => setAutoRefreshLogs(e.target.checked)}
+                    className="accent-amber-500 rounded font-mono"
+                  />
+                  Auto-Refresh (5s)
+                </label>
+                <button
+                  type="button"
+                  onClick={fetchMidtransLogs}
+                  className="bg-slate-850 hover:bg-slate-800 text-slate-350 hover:text-white p-1.5 px-3 rounded-xl transition text-[10px] border border-slate-850 flex items-center gap-1.5 font-bold cursor-pointer"
+                >
+                  <RefreshCw size={12} className={midtransLoading ? "animate-spin" : ""} />
+                  Sync
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearMidtransLogs}
+                  className="text-red-400 hover:text-white text-[10px] font-bold py-1.5 px-3 border border-red-500/20 rounded-xl hover:bg-red-550 transition-all cursor-pointer"
+                >
+                  Clear Logs
+                </button>
+              </div>
+            </div>
+
+            {/* Diagnostics and Setup Advice Panel */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 font-sans">
+              <div className="bg-slate-900 border border-slate-805 p-4 rounded-3xl lg:col-span-2 space-y-3">
+                <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                  <Server size={12} className="text-indigo-400" />
+                  Environment & Credential Inspections
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[10px]">
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-850 space-y-1">
+                    <span className="text-slate-500 block uppercase font-mono font-bold">Client Key (Public-Facing)</span>
+                    <p className="font-mono text-slate-300 break-all select-all">
+                      {(import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || '🔴 NOT DETECTED'}
+                    </p>
+                    <span className={`inline-block text-[8px] font-bold uppercase rounded-full px-2 py-0.2 mt-1 ${((import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || '').startsWith('SB-') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-450 border border-red-500/20'}`}>
+                      {((import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || '').startsWith('SB-') ? 'Valid Sandbox Format' : 'Missing SB- Prefix (Production or Invalid)'}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-850 space-y-1">
+                    <span className="text-slate-500 block uppercase font-mono font-bold">Server Key (Secure API Proxy)</span>
+                    <p className="font-mono text-slate-300">
+                      ••••••••••••••••{midtransLogs.length > 0 ? " (Configured)" : " (Loading diagnostics)"}
+                    </p>
+                    <span className="inline-block text-[8px] font-bold bg-amber-500/10 text-amber-550 border border-amber-500/20 uppercase rounded-full px-2 py-0.2 mt-1">
+                      Secure Proxy Enabled
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-[10px] text-slate-400 space-y-1.5 leading-relaxed bg-slate-950/40 p-3 rounded-2xl border border-white/5">
+                  <p className="font-bold text-slate-300">💡 Cara Menyelesaikan Pembayaran Sandbox / Simulasi:</p>
+                  <ul className="list-disc pl-4 space-y-1 text-slate-350">
+                    <li>Saat booking baru di checkout, modal <span className="text-amber-500 font-bold">Midtrans Snap</span> akan muncul otomatis di client browser.</li>
+                    <li>Jika server tidak mendeteksi kredensial asli, tombol <span className="text-emerald-400 font-bold">"Failsafe Interactive Simulation"</span> gratis akan terdorong secara otomatis!</li>
+                    <li>Untuk melakukan flow transaksi sandbox asli, salin nomor rekening virtual (VA) yang ditunjuk oleh Midtrans popup sandbox Anda.</li>
+                    <li>Masukkan nomor VA tersebut ke simulator resmi di: <a href="https://payment-simulator.sandbox.midtrans.com" target="_blank" rel="noopener noreferrer" className="text-amber-550 hover:underline font-bold inline-flex items-center gap-0.5 font-mono">Simulator Midtrans <ExternalLink size={9} /></a> lalu klik Bayar/Settle untuk menembak webhook API secara instan!</li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Stats Summary Widget */}
+              <div className="bg-indigo-950/20 border border-indigo-500/10 p-4 rounded-3xl flex flex-col justify-between space-y-3.5">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                    <Activity size={12} className="text-amber-500" />
+                    Ledger Metrics
+                  </h3>
+                  <p className="text-[10px] text-slate-400 mt-1">Metrik agregat sandbox request sejak server runtime diinisialisasi:</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-center font-mono">
+                  <div className="bg-slate-950/80 p-2.5 rounded-2xl border border-white/5">
+                    <span className="text-xs font-extrabold text-white block">{midtransLogs.length}</span>
+                    <span className="text-[8px] text-slate-500 uppercase font-sans">Total Logs</span>
+                  </div>
+                  <div className="bg-slate-950/80 p-2.5 rounded-2xl border border-white/5">
+                    <span className="text-xs font-extrabold text-emerald-400 block">
+                      {midtransLogs.filter(l => l.status === 'success' || l.status === 'simulated').length}
+                    </span>
+                    <span className="text-[8px] text-slate-500 uppercase font-sans">Success / Sim</span>
+                  </div>
+                  <div className="bg-slate-950/80 p-2.5 rounded-2xl border border-white/5">
+                    <span className="text-xs font-extrabold text-indigo-400 block">
+                      {midtransLogs.filter(l => l.type === 'webhook').length}
+                    </span>
+                    <span className="text-[8px] text-slate-500 uppercase font-sans">Webhooks</span>
+                  </div>
+                  <div className="bg-slate-950/80 p-2.5 rounded-2xl border border-white/5">
+                    <span className="text-xs font-extrabold text-red-400 block">
+                      {midtransLogs.filter(l => l.type === 'error' || l.status === 'failed').length}
+                    </span>
+                    <span className="text-[8px] text-slate-500 uppercase font-sans">Errors</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Filter buttons */}
+            <div className="flex flex-wrap gap-1.5 border-b border-slate-850 pb-2 font-sans">
+              {[
+                { id: 'all', name: 'Semua Log' },
+                { id: 'charge', name: 'Charge Requests' },
+                { id: 'webhook', name: 'Webhook Events' },
+                { id: 'simulation', name: 'Simulation Failsafes' },
+                { id: 'error', name: 'Errors' }
+              ].map(f => (
+                <button
+                  key={f.id}
+                  onClick={() => setMidtransFilter(f.id)}
+                  className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all duration-155 cursor-pointer ${
+                    midtransFilter === f.id
+                      ? 'bg-amber-500 text-black shadow-sm'
+                      : 'bg-slate-900 border border-slate-805 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {f.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Logs Timeline Display */}
+            <div className="bg-slate-950 rounded-2xl border border-slate-850 p-4 font-mono text-[10px] space-y-2 max-h-[100vh] overflow-y-auto no-scrollbar">
+              {midtransLogs
+                .filter(l => {
+                  if (midtransFilter === 'all') return true;
+                  if (midtransFilter === 'error') return l.type === 'error' || l.status === 'failed';
+                  return l.type === midtransFilter;
+                })
+                .map((log) => {
+                  const isExpanded = expandedLogId === log.id;
+                  return (
+                    <div key={log.id} className="border-b border-white/5 pb-2.5 last:border-0 last:pb-0">
+                      <div 
+                        onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                        className="flex flex-col md:flex-row justify-between items-start md:items-center py-1.5 hover:bg-white/[0.02] px-2 rounded-xl cursor-pointer transition select-none gap-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-slate-500">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                          
+                          <span className={`text-[8px] font-bold uppercase px-1.5 py-0.2 rounded-md ${
+                            log.type === 'charge' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' :
+                            log.type === 'webhook' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' :
+                            log.type === 'simulation' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
+                            log.type === 'error' ? 'bg-red-500/10 text-red-500 border border-red-500/20' :
+                            'bg-slate-800 text-slate-400'
+                          }`}>
+                            {log.type.toUpperCase()}
+                          </span>
+
+                          <span className={`text-[8px] font-bold uppercase px-1.5 py-0.2 rounded-md ${
+                            log.status === 'success' || log.status === 'simulated' ? 'bg-emerald-555/15 text-emerald-400' :
+                            log.status === 'pending' ? 'bg-amber-400/15 text-amber-400' :
+                            'bg-red-500/15 text-red-400'
+                          }`}>
+                            {log.status.toUpperCase()}
+                          </span>
+
+                          <span className="text-slate-300 font-extrabold select-all">Order: {log.orderId}</span>
+                          
+                          {log.amount && (
+                            <span className="text-amber-500 font-bold">{formatRupiah(log.amount)}</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 justify-end w-full md:w-auto">
+                          <div className="text-slate-400 text-[10px] md:text-right max-w-sm truncate">
+                            {log.message}
+                          </div>
+                          <span className="text-slate-600 text-[10px] font-bold font-sans">
+                            {isExpanded ? 'Collapse ▲' : 'Details ▼'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <div className="mt-2 ml-2 p-3.5 bg-slate-900 border border-slate-800 rounded-2xl space-y-2 select-all relative group">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(JSON.stringify(log, null, 2));
+                              alert('Payload JSON disalin ke papan klip!');
+                            }}
+                            className="absolute right-3 top-3 bg-slate-950 p-1 px-2.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer text-[9px] font-bold font-sans"
+                          >
+                            <Copy size={9} />
+                            Copy JSON
+                          </button>
+                          
+                          <div className="text-[10px] text-slate-500 font-mono space-y-1">
+                            <div><span className="font-bold text-slate-400">Timestamp:</span> {log.timestamp} ({new Date(log.timestamp).toLocaleString()})</div>
+                            {log.customerName && <div><span className="font-bold text-slate-400">Customer:</span> {log.customerName} &lt;{log.customerEmail}&gt;</div>}
+                            <div><span className="font-bold text-slate-400">UUID Tracking ID:</span> {log.id}</div>
+                          </div>
+
+                          <div className="pt-2 border-t border-white/5">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase block font-mono mb-1">State Payload Details:</span>
+                            <pre className="text-[9px] text-[#bdc3c7] font-mono leading-relaxed bg-slate-950 p-3.5 rounded-xl border border-slate-855 overflow-x-auto select-all max-h-60 no-scrollbar whitespace-pre-wrap">
+                              {JSON.stringify(log.details, null, 2)}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+              {midtransLogs.length === 0 && (
+                <div className="text-center text-slate-650 py-12 font-sans space-y-1">
+                  <p className="text-xs">No Midtrans logs captured in current server session yet.</p>
+                  <p className="text-[10px] text-slate-700">Inisialisasi reservasi sewa properti untuk mendaftarkan logs API baru.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      {/* Property Editor modal */}
+      <Modal
+        isOpen={showPropertyModal}
+        onClose={() => setShowPropertyModal(false)}
+        title={activePropertyEdit ? 'Ubah Informasi Properti' : 'Daftarkan Properti Kos Baru'}
+      >
+        <PropertyForm 
+          property={activePropertyEdit}
+          onSave={handleAddProperty}
+          onCancel={() => setShowPropertyModal(false)}
+        />
+      </Modal>
+
+      {/* Room Editor modal */}
+      <Modal
+        isOpen={showRoomModal}
+        onClose={() => setShowRoomModal(false)}
+        title={activeRoomEdit ? 'Sesuaikan Klasifikasi Unit' : 'Tambahkan Kamar Baru'}
+      >
+        <RoomForm 
+          room={activeRoomEdit}
+          properties={properties}
+          onSave={handleAddRoom}
+          onCancel={() => setShowRoomModal(false)}
+        />
+      </Modal>
+
+      {/* Coupon Creator modal */}
+      <Modal
+        isOpen={showCouponModal}
+        onClose={() => setShowCouponModal(false)}
+        title="BUAT KUPON DISKON BARU"
+      >
+        <form onSubmit={handleCreateCoupon} className="space-y-4 font-sans text-xs text-slate-300">
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Kode Unik Kupon (KAPITAL)</label>
+            <input 
+              type="text" required
+              value={couponForm.code}
+              onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value })}
+              placeholder="CONTOH: COVENAN15"
+              className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none uppercase font-mono font-bold text-[11px]"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Deskripsi Kampanye</label>
+            <input 
+              type="text" required
+              value={couponForm.description}
+              onChange={(e) => setCouponForm({ ...couponForm, description: e.target.value })}
+              placeholder="Contoh: Diskon khusus libur natal"
+              className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Tipe Potongan</label>
+              <select
+                value={couponForm.discount_type}
+                onChange={(e) => setCouponForm({ ...couponForm, discount_type: e.target.value as any })}
+                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-bold cursor-pointer"
+              >
+                <option value="percentage">PERSENTASE (%)</option>
+                <option value="fixed">NOMINAL TETAP (IDR)</option>
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Nilai Potongan</label>
+              <input 
+                type="number" required
+                value={couponForm.discount_value}
+                onChange={(e) => setCouponForm({ ...couponForm, discount_value: Number(e.target.value) })}
+                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Maksimal Potongan Nominal (IDR)</label>
+            <input 
+              type="number" required
+              value={couponForm.max_discount_amount}
+              onChange={(e) => setCouponForm({ ...couponForm, max_discount_amount: Number(e.target.value) })}
+              className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
+            />
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setShowCouponModal(false)}
+              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all cursor-pointer"
+            >
+              Batalkan
+            </button>
+            <button
+              type="submit"
+              className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all cursor-pointer text-[11px]"
+            >
+              Terbitkan Sekarang
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Printable Invoice Pop-up Modal */}
+      {selectedInvoice && (
+        <Modal
+          isOpen={!!selectedInvoice}
+          onClose={() => setSelectedInvoice(null)}
+          title="PRINTOUT KWITANSI NOTARIAL RESMI"
+        >
+          <InvoiceCard 
+            receipt={selectedInvoice}
+            onClose={() => setSelectedInvoice(null)}
+          />
+        </Modal>
+      )}
+
+      {/* Administrator User creator/modifier modal */}
+      <Modal
+        isOpen={showUserModal}
+        onClose={() => setShowUserModal(false)}
+        title={activeUserEdit ? "MUTASI HAK AKSES SISTEM" : "DAFTAR AKSES BARU"}
+      >
+        <form onSubmit={handleSaveUser} className="space-y-4 font-sans text-xs text-slate-300">
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-slate-400 font-mono">Nama Lengkap Petugas</label>
+            <input 
+              type="text" required
+              value={userForm.fullName}
+              onChange={(e) => setUserForm({ ...userForm, fullName: e.target.value })}
+              placeholder="misal: Yogi Atmaja"
+              className="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl text-slate-200 outline-none capitalize text-xs"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-slate-400 font-mono">Alamat Email Resmi</label>
+            <input 
+              type="email" required
+              value={userForm.email}
+              onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
+              placeholder="staf@samarastay.co.id"
+              className="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl text-slate-200 outline-none text-xs"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400 font-mono">Jabatan / Role</label>
+              <select
+                value={userForm.role}
+                onChange={(e) => setUserForm({ ...userForm, role: e.target.value as any })}
+                className="w-full bg-slate-950 border border-slate-805 p-2.5 rounded-xl text-slate-200 cursor-pointer font-bold text-xs"
+              >
+                <option value="super">SUPER ADMIN</option>
+                <option value="admin">SISTEM ADMIN</option>
+                <option value="finance">BENDAHARA (FINANCE)</option>
+                <option value="staff">SURVEYOR (STAFF)</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 pt-4">
+              <input
+                type="checkbox"
+                id="active_status"
+                checked={userForm.active}
+                onChange={(e) => setUserForm({ ...userForm, active: e.target.checked })}
+                className="w-4 h-4 accent-amber-500 rounded border-slate-800 bg-slate-950"
+              />
+              <label htmlFor="active_status" className="text-[10px] font-bold text-slate-300 font-mono uppercase cursor-pointer">AKUN AKTIF</label>
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setShowUserModal(false)}
+              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all text-xs cursor-pointer"
+            >
+              Batalkan
+            </button>
+            <button
+              type="submit"
+              className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all text-xs cursor-pointer"
+            >
+              Simpan Otorisasi
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+    </div>
+  );
+}
+export { Admin };

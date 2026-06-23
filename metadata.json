@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Samara Stay",
+  "description": "Boarding House Management System for Samara Stay with integrated room bookings, DP survey planners, and double-entry COA financial bookkeeping ledger.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
