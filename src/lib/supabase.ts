@@ -9,10 +9,11 @@ import {
   UserSystem, ActivityLog, Survey, AccountCOA, FinancialTransaction, 
   JournalEntry, LedgerEntry, SystemSettings, Coupon 
 } from '../types';
+import { PRESETS } from '../utils/imagePresets';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
-let activeSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-let activeSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+let activeSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || (import.meta as any).env?.SUPABASE_URL || '';
+let activeSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || (import.meta as any).env?.SUPABASE_ANON_KEY || '';
 
 export let isSupabaseConfigured = Boolean(activeSupabaseUrl && activeSupabaseAnonKey && activeSupabaseUrl !== 'undefined' && activeSupabaseAnonKey !== 'undefined');
 
@@ -20,6 +21,17 @@ export let isSupabaseConfigured = Boolean(activeSupabaseUrl && activeSupabaseAno
 export let supabase = isSupabaseConfigured 
   ? createClient(activeSupabaseUrl, activeSupabaseAnonKey) 
   : null;
+
+/**
+ * Foolproof getters for live Supabase references to avoid any ESM live-binding copy issues.
+ */
+export function getIsSupabaseConfigured(): boolean {
+  return isSupabaseConfigured;
+}
+
+export function getSupabaseClient() {
+  return supabase;
+}
 
 /**
  * Dynamically configure Supabase at runtime (e.g. from container environment variables retrieved via API).
@@ -115,13 +127,20 @@ const SEED_PROPERTIES: Property[] = [
     total_rooms: 20,
     available_rooms: 15,
     facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "Dapur Bersama", "Parkir Mobil"],
-    image_url: "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80",
+    image_url: PRESETS[0].dataUrl,
     images: [
-      "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80",
-      "https://images.unsplash.com/photo-1598928506311-c55ded91a20c?auto=format&fit=crop&w=800&q=80"
+      PRESETS[0].dataUrl,
+      PRESETS[3].dataUrl,
+      PRESETS[4].dataUrl,
+      PRESETS[5].dataUrl
     ],
     lat: -6.2243,
-    lng: 106.8425
+    lng: 106.8425,
+    description: "Hunian eksklusif dengan fasilitas lengkap, berlokasi sangat strategis di area Jakarta Selatan yang dekat dengan pusat bisnis, perkantoran, dan kampus ternama. Lingkungan asri, tenang, aman dan nyaman untuk mendukung produktivitas maupun istirahat Anda.",
+    additional_rules: "1. Tamu lawan jenis dilarang masuk kamar demi kenyamanan bersama.\n2. Dilarang membawa hewan peliharaan dalam bentuk apa pun.\n3. Tidak boleh menggunakan peralatan elektronik berdaya tinggi tanpa izin.",
+    policies: "Pembayaran uang sewa dilakukan paling lambat tanggal 1 setiap bulannya. Keterlambatan pembayaran akan dikenakan denda administratif sesuai kesepakatan.",
+    terms: "Deposit sewa bulanan sebesar Rp 500.000 wajib dibayarkan saat melakukan check-in dan akan dikembalikan utuh saat masa sewa berakhir jika tidak ada kerusakan unit.",
+    regulations: "1. Jam berkunjung tamu maksimal hingga pukul 22:00 WIB.\n2. Wajib membersihkan kembali fasilitas dapur bersama setelah digunakan.\n3. Harap matikan AC dan lampu jika meninggalkan kamar untuk menghemat energi."
   },
   {
     id: 2,
@@ -132,13 +151,20 @@ const SEED_PROPERTIES: Property[] = [
     total_rooms: 12,
     available_rooms: 8,
     facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "Dapur Bersama", "Kulkas", "Keamanan 24 Jam"],
-    image_url: "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=800&q=80",
+    image_url: PRESETS[1].dataUrl,
     images: [
-      "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=800&q=80",
-      "https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=800&q=80"
+      PRESETS[1].dataUrl,
+      PRESETS[3].dataUrl,
+      PRESETS[4].dataUrl,
+      PRESETS[5].dataUrl
     ],
     lat: -6.1751,
-    lng: 106.7891
+    lng: 106.7891,
+    description: "Kost putri eksklusif dengan sistem keamanan ketat 24 jam dan CCTV. Kamar bernuansa hangat, luas, bersih, dan dilengkapi perabotan berkualitas premium. Terletak strategis dekat mal, halte busway, dan universitas di Jakarta Barat.",
+    additional_rules: "1. Tamu pria dilarang masuk ke area lorong kamar hunian putri.\n2. Dilarang membawa barang yang berbau tajam atau mengganggu penghuni lain.\n3. Menjaga kerapihan jemuran bersama.",
+    policies: "Masa tinggal minimal adalah 3 bulan. Pelunasan tagihan wajib dikonfirmasi melalui aplikasi ini dengan mengunggah bukti bayar resmi.",
+    terms: "Deposit jaminan kerusakan sebesar Rp 500.000 wajib dilunasi sebelum tanggal serah terima kunci.",
+    regulations: "1. Tamu menginap wajib melapor ke pengelola atau penjaga keamanan.\n2. Dilarang membuat kegaduhan atau memutar musik dengan volume keras setelah pukul 21:00 WIB.\n3. Wajib menjaga kebersihan dan higienitas toilet serta area komunal."
   },
   {
     id: 3,
@@ -149,31 +175,39 @@ const SEED_PROPERTIES: Property[] = [
     total_rooms: 15,
     available_rooms: 12,
     facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Dapur Bersama", "Parkir Motor"],
-    image_url: "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=800&q=80",
+    image_url: PRESETS[2].dataUrl,
     images: [
-      "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=800&q=80"
+      PRESETS[2].dataUrl,
+      PRESETS[3].dataUrl,
+      PRESETS[4].dataUrl,
+      PRESETS[5].dataUrl
     ],
     lat: -6.3725,
-    lng: 106.8331
+    lng: 106.8331,
+    description: "Kost putra modern dengan suasana tenang di kawasan Margonda, sangat dekat dengan akses transportasi umum KRL Commuter Line dan kampus utama. Sangat cocok bagi mahasiswa maupun profesional muda yang aktif.",
+    additional_rules: "1. Penggunaan area parkir motor wajib rapi dan teratur.\n2. Dilarang merokok di dalam kamar ber-AC (gunakan area smoking yang disediakan).\n3. Penggunaan air dan listrik secara bijak.",
+    policies: "Sewa dapat diperpanjang secara bulanan. Pembatalan kurang dari seminggu sebelum check-in dikenakan potongan DP hangus.",
+    terms: "Uang deposit sebesar Rp 500.000 dikembalikan penuh jika kondisi kamar saat check-out bersih dan tidak ada kerusakan fasilitas.",
+    regulations: "1. Segala bentuk pelanggaran hukum (narkoba, miras) akan dilaporkan langsung ke pihak berwajib.\n2. Tamu berkunjung wajib parkir di area yang telah ditentukan.\n3. Sampah kamar wajib dibungkus rapi sebelum ditaruh di tempat sampah luar."
   }
 ];
 
 const SEED_ROOMS: Room[] = [
   // Property 1 Rooms
-  { id: 101, property_id: 1, room_number: "R101", room_type: "Standard", price: 1800000, size_sqm: 15.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam"], is_daily_enabled: false, daily_price: 0 },
-  { id: 102, property_id: 1, room_number: "R102", room_type: "Deluxe", price: 2200000, size_sqm: 18.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: true, daily_price: 120000 },
-  { id: 103, property_id: 1, room_number: "R103", room_type: "Premium", price: 2800000, size_sqm: 24.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "TV Screen", "Mini Couch"], is_daily_enabled: true, daily_price: 180000 },
-  { id: 104, property_id: 1, room_number: "R201", room_type: "Standard", price: 1800000, size_sqm: 15.0, floor: 2, status: "occupied", current_tenant_name: "Yogi Atmaja", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam"], is_daily_enabled: false, daily_price: 0 },
-  { id: 105, property_id: 1, room_number: "R202", room_type: "Deluxe", price: 2200000, size_sqm: 18.0, floor: 2, status: "maintenance", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: false, daily_price: 0 },
+  { id: 101, property_id: 1, room_number: "R101", room_type: "Standard", price: 1800000, size_sqm: 15.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam"], is_daily_enabled: false, daily_price: 0, image_url: PRESETS[3].dataUrl },
+  { id: 102, property_id: 1, room_number: "R102", room_type: "Deluxe", price: 2200000, size_sqm: 18.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: true, daily_price: 120000, image_url: PRESETS[4].dataUrl },
+  { id: 103, property_id: 1, room_number: "R103", room_type: "Premium", price: 2800000, size_sqm: 24.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "TV Screen", "Mini Couch"], is_daily_enabled: true, daily_price: 180000, image_url: PRESETS[5].dataUrl },
+  { id: 104, property_id: 1, room_number: "R201", room_type: "Standard", price: 1800000, size_sqm: 15.0, floor: 2, status: "occupied", current_tenant_name: "Yogi Atmaja", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam"], is_daily_enabled: false, daily_price: 0, image_url: PRESETS[3].dataUrl },
+  { id: 105, property_id: 1, room_number: "R202", room_type: "Deluxe", price: 2200000, size_sqm: 18.0, floor: 2, status: "maintenance", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: false, daily_price: 0, image_url: PRESETS[4].dataUrl },
 
   // Property 2 Rooms
-  { id: 201, property_id: 2, room_number: "F101", room_type: "Standard", price: 2200000, size_sqm: 16.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: false, daily_price: 0 },
-  { id: 202, property_id: 2, room_number: "F102", room_type: "Deluxe", price: 2600000, size_sqm: 20.0, floor: 1, status: "occupied", current_tenant_name: "Siska Wardani", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "Kulkas"], is_daily_enabled: true, daily_price: 150000 },
-  { id: 203, property_id: 2, room_number: "F201", room_type: "Premium", price: 3200000, size_sqm: 26.0, floor: 2, status: "reserved", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "TV Screen", "Kulkas"], is_daily_enabled: true, daily_price: 200000 },
+  { id: 201, property_id: 2, room_number: "F101", room_type: "Standard", price: 2200000, size_sqm: 16.0, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: false, daily_price: 0, image_url: PRESETS[3].dataUrl },
+  { id: 202, property_id: 2, room_number: "F102", room_type: "Deluxe", price: 2600000, size_sqm: 20.0, floor: 1, status: "occupied", current_tenant_name: "Siska Wardani", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "Kulkas"], is_daily_enabled: true, daily_price: 150000, image_url: PRESETS[4].dataUrl },
+  { id: 203, property_id: 2, room_number: "F201", room_type: "Premium", price: 3200000, size_sqm: 26.0, floor: 2, status: "reserved", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "TV Screen", "Kulkas"], is_daily_enabled: true, daily_price: 200000, image_url: PRESETS[5].dataUrl },
 
   // Property 3 Rooms
-  { id: 301, property_id: 3, room_number: "M101", room_type: "Standard", price: 1500000, size_sqm: 14.5, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam"], is_daily_enabled: false, daily_price: 0 },
-  { id: 302, property_id: 3, room_number: "M102", room_type: "Deluxe", price: 1800000, size_sqm: 17.5, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: true, daily_price: 100000 }
+  { id: 301, property_id: 3, room_number: "M101", room_type: "Standard", price: 1500000, size_sqm: 14.5, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam"], is_daily_enabled: false, daily_price: 0, image_url: PRESETS[3].dataUrl },
+  { id: 302, property_id: 3, room_number: "M102", room_type: "Deluxe", price: 1800000, size_sqm: 17.5, floor: 1, status: "available", facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater"], is_daily_enabled: true, daily_price: 100000, image_url: PRESETS[4].dataUrl }
 ];
 
 const SEED_TENANTS: Tenant[] = [
@@ -588,8 +622,15 @@ export const database = {
   // --- PROPERTIES ---
   async fetchProperties(): Promise<Property[]> {
     if (isSupabaseConfigured && supabase) {
+      console.log('[SUPABASE] Fetching properties...');
       const { data, error } = await supabase.from('properties').select('*').order('id', { ascending: true });
-      if (!error && data) return data as Property[];
+      if (!error && data) {
+        console.log(`[SUPABASE] Successfully fetched ${data.length} properties.`);
+        return data as Property[];
+      }
+      if (error) {
+        console.error('[SUPABASE fetchProperties error]:', error.message, error);
+      }
     }
     return sandboxState.getProperties();
   },
@@ -641,8 +682,21 @@ export const database = {
   // --- ROOMS ---
   async fetchRooms(): Promise<Room[]> {
     if (isSupabaseConfigured && supabase) {
+      console.log('[SUPABASE] Fetching rooms...');
       const { data, error } = await supabase.from('rooms').select('*').order('room_number', { ascending: true });
-      if (!error && data) return data as Room[];
+      if (!error && data) {
+        console.log(`[SUPABASE] Successfully fetched ${data.length} rooms.`);
+        return data as Room[];
+      }
+      if (error) {
+        console.warn('[SUPABASE fetchRooms warning, trying fallback ordering by id]:', error.message);
+        const { data: retryData, error: retryErr } = await supabase.from('rooms').select('*').order('id', { ascending: true });
+        if (!retryErr && retryData) {
+          console.log(`[SUPABASE] Successfully fetched ${retryData.length} rooms with id ordering.`);
+          return retryData as Room[];
+        }
+        console.error('[SUPABASE fetchRooms error]:', retryErr || error);
+      }
     }
     return sandboxState.getRooms();
   },
@@ -719,8 +773,24 @@ export const database = {
   // --- BOOKINGS ---
   async fetchBookings(): Promise<Booking[]> {
     if (isSupabaseConfigured && supabase) {
+      console.log('[SUPABASE] Fetching bookings...');
+      // Try ordering by created_at first
       const { data, error } = await supabase.from('bookings').select('*').order('created_at', { ascending: false });
-      if (!error && data) return data as Booking[];
+      if (!error && data) {
+        console.log(`[SUPABASE] Successfully fetched ${data.length} bookings ordered by created_at.`);
+        return data as Booking[];
+      }
+      
+      if (error) {
+        console.warn('[SUPABASE fetchBookings warning, retrying with id ordering]:', error.message);
+        // Retry ordering by id
+        const { data: retryData, error: retryErr } = await supabase.from('bookings').select('*').order('id', { ascending: false });
+        if (!retryErr && retryData) {
+          console.log(`[SUPABASE] Successfully fetched ${retryData.length} bookings ordered by id.`);
+          return retryData as Booking[];
+        }
+        console.error('[SUPABASE fetchBookings error]:', retryErr || error);
+      }
     }
     return sandboxState.getBookings();
   },
@@ -886,8 +956,15 @@ export const database = {
   // --- SURVEYS & COMPACT SURVEY SYSTEM ---
   async fetchSurveys(): Promise<Survey[]> {
     if (isSupabaseConfigured && supabase) {
+      console.log('[SUPABASE] Fetching surveys...');
       const { data, error } = await supabase.from('surveys').select('*').order('id', { ascending: false });
-      if (!error && data) return data as Survey[];
+      if (!error && data) {
+        console.log(`[SUPABASE] Successfully fetched ${data.length} surveys.`);
+        return data as Survey[];
+      }
+      if (error) {
+        console.error('[SUPABASE fetchSurveys error]:', error.message, error);
+      }
     }
     return sandboxState.getSurveys();
   },

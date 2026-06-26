@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { getSupabaseClient, getIsSupabaseConfigured } from '../lib/supabase';
 
 export function useRealtimeTable<T>(
   tableName: string, 
@@ -26,22 +26,30 @@ export function useRealtimeTable<T>(
   useEffect(() => {
     loadData();
 
-    if (isSupabaseConfigured && supabase) {
-      const channel = supabase
+    const isConfigured = getIsSupabaseConfigured();
+    const client = getSupabaseClient();
+
+    if (isConfigured && client) {
+      console.log(`[REALTIME] Subscribing to channel for table: ${tableName}`);
+      const channel = client
         .channel(`public:${tableName}-changes`)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: tableName },
-          () => {
+          (payload) => {
+            console.log(`[REALTIME EVENT] Received update for ${tableName}:`, payload);
             loadData();
           }
         )
-        .subscribe();
+        .subscribe((status) => {
+          console.log(`[REALTIME STATUS] Subscription status for ${tableName}:`, status);
+        });
 
       return () => {
-        supabase.removeChannel(channel);
+        client.removeChannel(channel);
       };
     } else {
+      console.log(`[REALTIME FALLBACK] Supabase not active. Polling every 10 seconds for table: ${tableName}`);
       // Fallback: poll every 10 seconds in design sandbox to simulate real-time feed updates
       const timer = setInterval(() => {
         loadData();

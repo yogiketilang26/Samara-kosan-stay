@@ -53,9 +53,9 @@ async function startServer() {
   // Client-Side configuration bridge API (Allows frontend to sync on container credentials at runtime)
   app.get('/api/config', (req, res) => {
     res.json({
-      supabaseUrl: process.env.VITE_SUPABASE_URL || '',
-      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || '',
-      midtransClientKey: process.env.VITE_MIDTRANS_CLIENT_KEY || ''
+      supabaseUrl: process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '',
+      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '',
+      midtransClientKey: process.env.VITE_MIDTRANS_CLIENT_KEY || process.env.MIDTRANS_CLIENT_KEY || ''
     });
   });
 
@@ -237,6 +237,42 @@ async function startServer() {
     }
   }
 
+  // Helper function to send email via MailerSend API
+  async function sendServerEmail(to: string, subject: string, text: string, html: string) {
+    try {
+      let apiKey = process.env.MAILERSEND_API_KEY || 'mlsn.654e012b23f2049e7d07dee9ec00ce04e52c6c21c418ed3e46133b2c69f79b22';
+      apiKey = apiKey.trim();
+      if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
+      else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
+      apiKey = apiKey.trim();
+
+      const fromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+      const fromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+
+      const payload = {
+        from: { email: fromEmail, name: fromName },
+        to: [{ email: to, name: to.split('@')[0] }],
+        subject,
+        text,
+        html
+      };
+
+      console.log('[SERVER EMAIL TRIGGER] Sending:', subject, 'to:', to);
+      const res = await fetch('https://api.mailersend.com/v1/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload)
+      });
+      const dataText = await res.text();
+      console.log('[SERVER EMAIL TRIGGER] Result:', res.status, dataText);
+    } catch (err) {
+      console.error('[SERVER EMAIL TRIGGER ERROR]', err);
+    }
+  }
+
   // 2. Midtrans Webhook Receiver
   app.post('/api/midtrans/webhook', async (req, res) => {
     try {
@@ -277,8 +313,8 @@ async function startServer() {
       });
 
       // Synchronize changes to Supabase if configured
-      const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
       const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey && supabaseUrl !== 'undefined' && supabaseAnonKey !== 'undefined');
       const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
@@ -358,6 +394,39 @@ async function startServer() {
               };
               const { error: payErr } = await supabase.from('payments').insert(paymentPayload);
               if (payErr) console.error('[SUPABASE WEBHOOK ERROR] Create payment invoice error:', payErr);
+
+              // Send premium email notification via MailerSend
+              if (booking.email) {
+                const subject = `[Samara Stay] Pembayaran Sewa Kamar Berhasil - Unit ${booking.room_number}`;
+                const text = `Halo ${booking.tenant_name}, pembayaran sewa Anda untuk kamar Unit ${booking.room_number} di Samara Stay senilai Rp ${booking.total_price?.toLocaleString('id-ID')} telah disetujui.`;
+                const html = `
+                  <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff; color: #1e293b;">
+                    <div style="text-align: center; border-bottom: 2px solid #f59e0b; padding-bottom: 15px; margin-bottom: 20px;">
+                      <h1 style="color: #2D3A44; margin: 0; font-size: 24px;">SAMARA STAY</h1>
+                      <p style="color: #64748b; font-size: 12px; margin: 5px 0 0 0; text-transform: uppercase; font-family: monospace;">Premium Boarding Residence</p>
+                    </div>
+                    <h2 style="color: #10b981; margin-top: 0;">Pembayaran Sewa Disetujui!</h2>
+                    <p>Halo <strong>${booking.tenant_name}</strong>,</p>
+                    <p>Terima kasih. Pembayaran sewa kamar Anda telah berhasil diverifikasi oleh sistem kami secara otomatis.</p>
+                    
+                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 15px; margin: 20px 0;">
+                      <h3 style="color: #2D3A44; margin-top: 0; margin-bottom: 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Rincian Transaksi</h3>
+                      <table style="width: 100%; font-size: 13px; line-height: 2;">
+                        <tr><td style="color: #64748b; width: 40%;">Nomor Invoice:</td><td><strong>${invoiceId}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Unit Kamar:</td><td><strong>Unit ${booking.room_number}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Jumlah Bayar:</td><td><strong style="color: #f59e0b; font-size: 15px;">Rp ${booking.total_price?.toLocaleString('id-ID')}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Mulai Masuk:</td><td><strong>${booking.check_in_date}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Metode Bayar:</td><td><strong>${paymentType || 'Midtrans Snap Gateway'}</strong></td></tr>
+                      </table>
+                    </div>
+                    <p style="font-size: 13px; color: #64748b; line-height: 1.5;">Kunci elektronik atau akses fisik ke kamar akan diserahkan oleh pengelola asrama saat Anda tiba di lokasi. Harap tunjukkan email konfirmasi ini sebagai bukti bayar sah.</p>
+                    <div style="text-align: center; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 11px; color: #94a3b8;">
+                      &copy; 2026 Samara Stay. Seluruh hak cipta dilindungi.
+                    </div>
+                  </div>
+                `;
+                sendServerEmail(booking.email, subject, text, html);
+              }
             } else {
               console.warn(`[SUPABASE WEBHOOK SYNC] Booking record not found for ${orderId}`);
             }
@@ -421,6 +490,38 @@ async function startServer() {
               };
               const { error: payErr } = await supabase.from('payments').insert(srvInvPayload);
               if (payErr) console.error('[SUPABASE WEBHOOK ERROR] Create survey invoice error:', payErr);
+
+              // Send premium email notification via MailerSend
+              if (survey.email) {
+                const subject = `[Samara Stay] Jadwal Survey Kamar Dikonfirmasi - Unit ${survey.room_number}`;
+                const text = `Halo ${survey.tenant_name}, jadwal survey Anda untuk kamar Unit ${survey.room_number} telah dikonfirmasi untuk tanggal ${survey.survey_date} pukul ${survey.survey_time}.`;
+                const html = `
+                  <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff; color: #1e293b;">
+                    <div style="text-align: center; border-bottom: 2px solid #f59e0b; padding-bottom: 15px; margin-bottom: 20px;">
+                      <h1 style="color: #2D3A44; margin: 0; font-size: 24px;">SAMARA STAY</h1>
+                      <p style="color: #64748b; font-size: 12px; margin: 5px 0 0 0; text-transform: uppercase; font-family: monospace;">Premium Boarding Residence</p>
+                    </div>
+                    <h2 style="color: #f59e0b; margin-top: 0;">Jadwal Survey Dikonfirmasi!</h2>
+                    <p>Halo <strong>${survey.tenant_name}</strong>,</p>
+                    <p>Terima kasih. Jadwal kunjungan survey dan reservasi kamar sementara Anda telah berhasil dikonfirmasi setelah pembayaran DP berhasil diterima.</p>
+                    
+                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 15px; margin: 20px 0;">
+                      <h3 style="color: #2D3A44; margin-top: 0; margin-bottom: 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Rincian Jadwal</h3>
+                      <table style="width: 100%; font-size: 13px; line-height: 2;">
+                        <tr><td style="color: #64748b; width: 40%;">Tanggal Kunjungan:</td><td><strong>${survey.survey_date}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Waktu Slot:</td><td><strong>${survey.survey_time} WIB</strong></td></tr>
+                        <tr><td style="color: #64748b;">Kamar Target:</td><td><strong>Unit ${survey.room_number}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Deposit DP Survey:</td><td><strong style="color: #f59e0b; font-size: 14px;">Rp ${(survey.dp_amount || 500000).toLocaleString('id-ID')}</strong></td></tr>
+                      </table>
+                    </div>
+                    <p style="font-size: 13px; color: #64748b; line-height: 1.5;">Tim lapangan kami akan menemui Anda langsung di lokasi kos sesuai dengan waktu yang Anda pilih. Mohon datang tepat waktu dan tunjukkan email konfirmasi reservasi ini.</p>
+                    <div style="text-align: center; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 11px; color: #94a3b8;">
+                      &copy; 2026 Samara Stay. Seluruh hak cipta dilindungi.
+                    </div>
+                  </div>
+                `;
+                sendServerEmail(survey.email, subject, text, html);
+              }
             } else {
               console.warn(`[SUPABASE WEBHOOK SYNC] Survey record not found for ${orderId}`);
             }
@@ -481,12 +582,73 @@ async function startServer() {
     }
   });
 
+  // MailerSend Send Email API endpoint
+  app.post('/api/email/send', async (req, res) => {
+    try {
+      const { to, subject, text, html, fromEmail, fromName } = req.body;
+
+      let apiKey = process.env.MAILERSEND_API_KEY || 'mlsn.654e012b23f2049e7d07dee9ec00ce04e52c6c21c418ed3e46133b2c69f79b22';
+      apiKey = apiKey.trim();
+      if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
+      else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
+      apiKey = apiKey.trim();
+
+      const resolvedFromEmail = fromEmail || process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+      const resolvedFromName = fromName || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+
+      const payload = {
+        from: { email: resolvedFromEmail, name: resolvedFromName },
+        to: [{ email: to, name: to.split('@')[0] }],
+        subject: subject || 'Notifikasi Samara Stay',
+        text: text || 'Ini adalah notifikasi penting dari Samara Stay.',
+        html: html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`
+      };
+
+      console.log('[API MAILERSEND] Forwarding to MailerSend:', JSON.stringify(payload, null, 2));
+
+      const response = await fetch('https://api.mailersend.com/v1/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const responseText = await response.text();
+      console.log('[API MAILERSEND] Response:', response.status, responseText);
+
+      if (response.status >= 400) {
+        return res.status(response.status).json({
+          success: false,
+          status: response.status,
+          message: 'Gagal mengirim email via MailerSend API.',
+          details: responseText
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: 'Email berhasil terkirim via MailerSend!',
+        details: responseText ? JSON.parse(responseText) : { status: 'accepted' }
+      });
+    } catch (err: any) {
+      console.error('[API MAILERSEND ERROR]', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Terjadi kesalahan sistem internal saat mengirim email.',
+        error: err.message || err
+      });
+    }
+  });
+
   // API Health Indicator
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      midtrans_configured: Boolean(process.env.MIDTRANS_SERVER_KEY)
+      midtrans_configured: Boolean(process.env.MIDTRANS_SERVER_KEY),
+      mailersend_configured: Boolean(process.env.MAILERSEND_API_KEY || 'mlsn.654e012b23f2049e7d07dee9ec00ce04e52c6c21c418ed3e46133b2c69f79b22')
     });
   });
 

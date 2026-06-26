@@ -157,7 +157,7 @@ export default function UserWebsite({ onRefreshTrigger, triggerAppRefresh }: Use
 
     const netRent = Math.max(0, rentBase - discount);
     const taxValue = netRent * 0.10; // PBJT 10%
-    const depositValue = checkoutFlow === 'daily' ? 100000 : 500000;
+    const depositValue = checkoutFlow === 'daily' ? 0 : 500000;
     const finalAmount = netRent + taxValue + depositValue;
 
     return {
@@ -1314,10 +1314,12 @@ export default function UserWebsite({ onRefreshTrigger, triggerAppRefresh }: Use
                             <span className="font-mono text-slate-100">{formatRupiah(bookingCalcs.tax)}</span>
                           </div>
 
-                          <div className="flex justify-between items-center text-slate-300">
-                            <span>Uang Jaminan Deposit Kosan (Refundable)</span>
-                            <span className="font-mono text-slate-100">{formatRupiah(bookingCalcs.deposit)}</span>
-                          </div>
+                          {bookingCalcs.deposit > 0 && (
+                            <div className="flex justify-between items-center text-slate-300">
+                              <span>Uang Jaminan Deposit Kosan (Refundable)</span>
+                              <span className="font-mono text-slate-100">{formatRupiah(bookingCalcs.deposit)}</span>
+                            </div>
+                          )}
 
                           <div className="border-t border-brand-steel/20 pt-3 flex justify-between items-center text-white font-extrabold text-sm font-display">
                             <span>TOTAL PELUNASAN CHECKOUT</span>

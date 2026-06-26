@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Room, Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
 import { UploadCloud, Trash2, Image } from 'lucide-react';
+import { PRESETS } from '../../utils/imagePresets';
 
 interface RoomFormProps {
   room?: Room | null;
@@ -273,6 +274,31 @@ export const RoomForm: React.FC<RoomFormProps> = ({
           accept="image/*"
           className="hidden"
         />
+
+        {/* Room Preset Selector */}
+        <div className="mt-2.5 bg-slate-900 border border-slate-805 p-3 rounded-2xl space-y-2">
+          <span className="text-[9px] font-bold text-slate-400 font-mono block uppercase">Gunakan Preset Kamar Premium (Offline & Cepat)</span>
+          <div className="grid grid-cols-3 gap-2">
+            {PRESETS.filter(p => p.category === 'room').map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setFormData({ ...formData, image_url: p.dataUrl })}
+                className={`group relative rounded-xl overflow-hidden border transition-all text-left bg-slate-950 p-1 cursor-pointer outline-none ${
+                  formData.image_url === p.dataUrl ? 'border-amber-500 ring-1 ring-amber-500/30' : 'border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="relative h-12 rounded-lg overflow-hidden bg-slate-900">
+                  <img src={p.dataUrl} alt={p.name} className="w-full h-full object-cover" />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <span className="text-[8px] font-bold font-mono text-white bg-slate-950/80 px-1 py-0.5 rounded border border-slate-800">PILIH</span>
+                  </div>
+                </div>
+                <span className="text-[8px] font-medium font-sans text-slate-350 block mt-1 truncate px-0.5 leading-none">{p.name.replace('Preset Kamar ', '')}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-850/80 space-y-4">

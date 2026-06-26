@@ -17,6 +17,11 @@ export interface Property {
   lat?: number;
   lng?: number;
   created_at?: string;
+  description?: string;
+  additional_rules?: string;
+  policies?: string;
+  terms?: string;
+  regulations?: string;
 }
 
 export interface Room {

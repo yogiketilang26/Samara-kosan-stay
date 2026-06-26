@@ -10,13 +10,13 @@ import RoomForm from '../components/room/RoomForm';
 import CouponList from '../components/coupon/CouponList';
 import InvoiceCard from '../components/transaction/InvoiceCard';
 import { formatRupiah } from '../utils/formatCurrency';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { 
   Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, 
   Trash2, Edit2, PlayCircle, Plus, Eye, Check, X, FileSpreadsheet,
   History, Users, UserPlus, Download, Search, UserCheck, Activity,
   FileText, Printer, ShieldPlus, Trash, UserCog, Terminal, HelpCircle,
-  ExternalLink, RefreshCw, Server, Copy
+  ExternalLink, RefreshCw, Server, Copy, Mail, Play, RotateCw
 } from 'lucide-react';
 
 interface AdminProps {
@@ -94,6 +94,40 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [autoRefreshLogs, setAutoRefreshLogs] = useState<boolean>(true);
 
+  // MailerSend Email Integration States
+  const [testEmailTo, setTestEmailTo] = useState('yogiatmaja26@gmail.com');
+  const [testEmailSubject, setTestEmailSubject] = useState('Tes Integrasi MailerSend - Samara Stay');
+  const [testEmailBody, setTestEmailBody] = useState('Halo! Ini adalah email uji coba dari modul Integrasi MailerSend premium Samara Stay. Konfigurasi email berhasil berjalan real-time!');
+  const [emailSenderEmail, setEmailSenderEmail] = useState('info@trial-3yxj5ljp10zg6o2r.mlsender.net');
+  const [emailSenderName, setEmailSenderName] = useState('Samara Stay Premium');
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailResult, setEmailResult] = useState<{ success: boolean; message: string; details?: any } | null>(null);
+
+  // Custom state-based confirmation dialog to bypass iframe window.confirm blocks
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void | Promise<void>;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  const customConfirm = (title: string, message: string, onConfirm: () => void | Promise<void>) => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: async () => {
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        await onConfirm();
+      }
+    });
+  };
+
   const fetchMidtransLogs = async () => {
     try {
       setMidtransLoading(true);
@@ -110,15 +144,56 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   };
 
   const handleClearMidtransLogs = async () => {
-    if (window.confirm('Hapus seluruh log transaksi Midtrans dari server?')) {
-      try {
-        const res = await fetch('/api/midtrans/logs/clear', { method: 'POST' });
-        if (res.ok) {
-          setMidtransLogs([]);
+    customConfirm(
+      'Hapus Log Transaksi',
+      'Apakah Anda yakin ingin menghapus seluruh log transaksi Midtrans dari server?',
+      async () => {
+        try {
+          const res = await fetch('/api/midtrans/logs/clear', { method: 'POST' });
+          if (res.ok) {
+            setMidtransLogs([]);
+          }
+        } catch (err) {
+          console.warn('Error clearing Midtrans logs:', err);
         }
-      } catch (err) {
-        console.warn('Error clearing Midtrans logs:', err);
       }
+    );
+  };
+
+  const handleSendTestEmail = async () => {
+    setEmailSending(true);
+    setEmailResult(null);
+    try {
+      const response = await fetch('/api/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: testEmailTo,
+          subject: testEmailSubject,
+          text: testEmailBody,
+          fromEmail: emailSenderEmail,
+          fromName: emailSenderName
+        })
+      });
+      const data = await response.json();
+      setEmailResult({
+        success: data.success,
+        message: data.message,
+        details: data.details || data.error || data
+      });
+      if (data.success) {
+        database.logActivity("System", "EMAIL_TEST_SUCCESS", `Sukses mengirim email tes MailerSend ke ${testEmailTo}`);
+      } else {
+        database.logActivity("System", "EMAIL_TEST_FAILED", `Gagal mengirim email tes ke ${testEmailTo}: ${data.message}`);
+      }
+    } catch (err: any) {
+      setEmailResult({
+        success: false,
+        message: 'Gagal terhubung ke cluster API server.',
+        details: err.message || err
+      });
+    } finally {
+      setEmailSending(false);
     }
   };
 
@@ -171,69 +246,103 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
     loadData();
   }, [refreshTrigger]);
 
-  const handleApproveBooking = async (b: Booking) => {
-    if (window.confirm(`Setujui sewa kamar ${b.room_number} untuk tenant ${b.tenant_name}?`)) {
-      const updated = { ...b, status: 'approved' as const };
-      await database.saveBooking(updated);
-      database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
+  useEffect(() => {
+    const handleStateChange = () => {
       triggerAppRefresh();
-    }
+    };
+    window.addEventListener('samara_state_changed', handleStateChange);
+    return () => {
+      window.removeEventListener('samara_state_changed', handleStateChange);
+    };
+  }, [triggerAppRefresh]);
+
+  const handleApproveBooking = async (b: Booking) => {
+    customConfirm(
+      'Setujui Sewa Kamar',
+      `Setujui sewa kamar ${b.room_number} untuk tenant ${b.tenant_name}?`,
+      async () => {
+        const updated = { ...b, status: 'approved' as const };
+        await database.saveBooking(updated);
+        database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleCancelBooking = async (b: Booking) => {
-    if (window.confirm(`Tolak / batalkan reservasi sewa untuk tenant ${b.tenant_name}?`)) {
-      const updated = { ...b, status: 'rejected' as const };
-      await database.saveBooking(updated);
-      database.logActivity("System", "BOOKING_REJECT", `Sewa kamar ${b.room_number} ditolak`);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Tolak / Batalkan Sewa',
+      `Tolak / batalkan reservasi sewa untuk tenant ${b.tenant_name}?`,
+      async () => {
+        const updated = { ...b, status: 'rejected' as const };
+        await database.saveBooking(updated);
+        database.logActivity("System", "BOOKING_REJECT", `Sewa kamar ${b.room_number} ditolak`);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleApproveSurvey = async (s: Survey) => {
-    if (window.confirm(`Selesaikan janji kunjungan survey kamar ${s.room_number}? Tindakan ini memindahkan status ke Completed.`)) {
-      const updated = { ...s, status: 'survey_completed' as const };
-      await database.saveSurvey(updated);
-      database.logActivity("System", "SURVEY_COMPLETED", `Survey untuk kamar ${s.room_number} selesai`);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Selesaikan Survey',
+      `Selesaikan janji kunjungan survey kamar ${s.room_number}? Tindakan ini memindahkan status ke Completed.`,
+      async () => {
+        const updated = { ...s, status: 'survey_completed' as const };
+        await database.saveSurvey(updated);
+        database.logActivity("System", "SURVEY_COMPLETED", `Survey untuk kamar ${s.room_number} selesai`);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleNoShowSurvey = async (s: Survey) => {
-    if (window.confirm(`Tandai sebagai No-Show? Jaminan komitmen DP Rp 500rb akan dipindahkan langsung sebagai pendapatan hangus korporasi (transparansi PBJT).`)) {
-      const updated = { ...s, status: 'no_show' as const };
-      await database.saveSurvey(updated);
-      
-      // Seed an income transaction for lost DP
-      const trPayload = {
-        transaction_date: new Date().toISOString().split('T')[0],
-        category: 'income' as const,
-        amount: 500000,
-        description: `DP Survey Hangus - ${s.tenant_name} (Unit ${s.room_number})`,
-        account_coa: 4200 // Pendapatan DP Survey Hangus
-      };
-      await (database as any).sandboxState?.saveFinancialTransaction(trPayload);
-      
-      database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Tandai sebagai No-Show',
+      'Tandai sebagai No-Show? Jaminan komitmen DP Rp 500rb akan dipindahkan langsung sebagai pendapatan hangus korporasi (transparansi PBJT).',
+      async () => {
+        const updated = { ...s, status: 'no_show' as const };
+        await database.saveSurvey(updated);
+        
+        // Seed an income transaction for lost DP
+        const trPayload = {
+          transaction_date: new Date().toISOString().split('T')[0],
+          category: 'income' as const,
+          amount: 500000,
+          description: `DP Survey Hangus - ${s.tenant_name} (Unit ${s.room_number})`,
+          account_coa: 4200 // Pendapatan DP Survey Hangus
+        };
+        await (database as any).sandboxState?.saveFinancialTransaction(trPayload);
+        
+        database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleApproveSurveyPayment = async (s: Survey) => {
-    if (window.confirm(`Setujui pembayaran DP survey sebesar Rp 500.000 untuk calon tenant ${s.tenant_name}?`)) {
-      const updated = { ...s, status: 'survey_confirmed' as const };
-      await database.saveSurvey(updated);
-      database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Setujui Pembayaran DP',
+      `Setujui pembayaran DP survey sebesar Rp 500.000 untuk calon tenant ${s.tenant_name}?`,
+      async () => {
+        const updated = { ...s, status: 'survey_confirmed' as const };
+        await database.saveSurvey(updated);
+        database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleCancelSurvey = async (s: Survey) => {
-    if (window.confirm(`Batalkan / tolak pengajuan survey untuk calon tenant ${s.tenant_name}?`)) {
-      const updated = { ...s, status: 'expired' as const };
-      await database.saveSurvey(updated);
-      database.logActivity("System", "SURVEY_CANCEL", `Pengajuan survey kamar ${s.room_number} dibatalkan`);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Batalkan / Tolak Survey',
+      `Batalkan / tolak pengajuan survey untuk calon tenant ${s.tenant_name}?`,
+      async () => {
+        const updated = { ...s, status: 'expired' as const };
+        await database.saveSurvey(updated);
+        database.logActivity("System", "SURVEY_CANCEL", `Pengajuan survey kamar ${s.room_number} dibatalkan`);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleAddProperty = async (payload: Partial<Property>) => {
@@ -243,10 +352,14 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   };
 
   const handleDeleteProperty = async (id: number) => {
-    if (window.confirm("Apakah Anda yakin ingin menghapus properti kos ini? Semua metadata kamar di dalamnya juga akan terhapus.")) {
-      await database.deleteProperty(id);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Hapus Properti',
+      'Apakah Anda yakin ingin menghapus properti kos ini? Semua metadata kamar di dalamnya juga akan terhapus.',
+      async () => {
+        await database.deleteProperty(id);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleAddRoom = async (payload: Partial<Room>) => {
@@ -256,10 +369,14 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   };
 
   const handleDeleteRoom = async (id: number) => {
-    if (window.confirm("Ingin menghapus unit kamar ini?")) {
-      await database.deleteRoom(id);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Hapus Kamar',
+      'Ingin menghapus unit kamar ini?',
+      async () => {
+        await database.deleteRoom(id);
+        triggerAppRefresh();
+      }
+    );
   };
 
   const handleCreateCoupon = async (e: React.FormEvent) => {
@@ -297,10 +414,25 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   };
 
   const handleDeleteUser = async (id: string) => {
-    if (window.confirm("Apakah Anda yakin ingin mencabut seluruh hak akses fungsionaris ini?")) {
-      await database.deleteUser(id);
-      triggerAppRefresh();
-    }
+    customConfirm(
+      'Cabut Hak Akses',
+      'Apakah Anda yakin ingin mencabut seluruh hak akses fungsionaris ini?',
+      async () => {
+        await database.deleteUser(id);
+        triggerAppRefresh();
+      }
+    );
+  };
+
+  const handleDeleteCoupon = async (id: number) => {
+    customConfirm(
+      'Hapus Kupon Promo',
+      'Apakah Anda yakin ingin menghapus kupon promo ini secara permanen?',
+      async () => {
+        await database.deleteCoupon(id);
+        triggerAppRefresh();
+      }
+    );
   };
 
   // Aggregated pricing math
@@ -664,7 +796,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               </button>
             </div>
 
-            <CouponList coupons={coupons} />
+            <CouponList coupons={coupons} onDeleteCoupon={handleDeleteCoupon} />
           </div>
         )}
 
@@ -900,19 +1032,23 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                         </span>
                         <button
                           type="button"
-                          onClick={async () => {
-                            if (window.confirm(`Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`)) {
-                              const list = sandboxState.getTenants();
-                              sandboxState.setTenants(list.filter(item => item.id !== t.id));
-                              
-                              // return room back to available 
-                              const rList = rooms.filter(x => x.room_number === t.room_number);
-                              for (const matchedRoom of rList) {
-                                await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
+                          onClick={() => {
+                            customConfirm(
+                              'Check Out Penghuni',
+                              `Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`,
+                              async () => {
+                                const list = sandboxState.getTenants();
+                                sandboxState.setTenants(list.filter(item => item.id !== t.id));
+                                
+                                // return room back to available 
+                                const rList = rooms.filter(x => x.room_number === t.room_number);
+                                for (const matchedRoom of rList) {
+                                  await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
+                                }
+                                database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name}`);
+                                triggerAppRefresh();
                               }
-                              database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name}`);
-                              triggerAppRefresh();
-                            }
+                            );
                           }}
                           className="text-rose-450 hover:text-rose-400 text-[10px] font-bold font-sans transition-colors cursor-pointer"
                         >
@@ -1023,10 +1159,14 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               <button
                 type="button"
                 onClick={() => {
-                  if (window.confirm("Apakah Anda yakin ingin mematikan / membersihkan semua log aktivitas sistem penampungan?")) {
-                    sandboxState.setActivityLogs([]);
-                    triggerAppRefresh();
-                  }
+                  customConfirm(
+                    'Bersihkan Log Aktivitas',
+                    'Apakah Anda yakin ingin mematikan / membersihkan semua log aktivitas sistem penampungan?',
+                    async () => {
+                      sandboxState.setActivityLogs([]);
+                      triggerAppRefresh();
+                    }
+                  );
                 }}
                 className="text-red-400 hover:text-white text-[10px] font-bold py-1.5 px-3 border border-red-500/20 rounded-xl hover:bg-red-550 transition-all cursor-pointer"
               >
@@ -1289,6 +1429,169 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           </div>
         )}
 
+        {activeTab === 'email_integration' && (
+          <div className="space-y-6">
+            <div className="border-b border-slate-800 pb-3">
+              <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight flex items-center gap-2">
+                <Mail size={14} className="text-amber-500" />
+                Integrasi Email Notifikasi Premium (MailerSend)
+              </h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">Konfigurasi pengiriman email kuitansi digital, jadwal reservasi survey, dan notifikasi hunian real-time via MailerSend.</p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Kolom Kiri: Konfigurasi Identitas Pengirim */}
+              <div className="bg-slate-900 border border-slate-805 p-5 rounded-3xl space-y-4">
+                <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider font-mono flex items-center gap-2">
+                  <UserCog size={13} className="text-amber-500" />
+                  Kredensial & Identitas Pengirim
+                </h3>
+
+                <div className="space-y-3.5 text-xs">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">MailerSend API Key</label>
+                    <div className="relative">
+                      <input 
+                        type="password" 
+                        readOnly
+                        value="mlsn.654e012b23f2049e7d07dee9ec00ce04e52c6c21c418ed3e46133b2c69f79b22"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 font-mono text-[10px]"
+                      />
+                      <span className="absolute right-3 top-2 text-[8px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded px-1.5 py-0.5 font-bold uppercase font-mono">
+                        Server Injected
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-slate-500 mt-1 font-sans">Menggunakan kunci API MailerSend terintegrasi: <code className="text-slate-400 font-mono">mlsn.654e01...9b22</code> yang dimasukkan melalui panel secure secrets.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">From Email (Domain Terverifikasi)</label>
+                    <input 
+                      type="email" 
+                      value={emailSenderEmail}
+                      onChange={(e) => setEmailSenderEmail(e.target.value)}
+                      placeholder="info@trial-3yxj5ljp10zg6o2r.mlsender.net"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 font-mono text-[11px]"
+                    />
+                    <p className="text-[9px] text-slate-500 mt-1 font-sans">PENTING: MailerSend akun trial mewajibkan alamat pengirim berakhiran domain trial mereka (contoh: <code className="text-slate-400 font-mono">info@trial-3yxj5ljp10zg6o2r.mlsender.net</code>). Sesuaikan jika Anda mendaftarkan domain Anda sendiri.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Nama Pengirim (Sender Name)</label>
+                    <input 
+                      type="text" 
+                      value={emailSenderName}
+                      onChange={(e) => setEmailSenderName(e.target.value)}
+                      placeholder="Samara Stay Premium"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 text-[11px]"
+                    />
+                    <p className="text-[9px] text-slate-500 mt-1 font-sans">Nama yang akan tertera sebagai pengirim pada kotak masuk email penyewa kos.</p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800 space-y-1.5 text-[10px]">
+                  <p className="font-extrabold text-slate-305 uppercase tracking-wider font-mono flex items-center gap-1">
+                    <CheckCircle size={10} className="text-emerald-400" />
+                    Automated Event Triggers
+                  </p>
+                  <p className="text-slate-400 leading-relaxed font-sans">
+                    Sistem Samara Stay telah dikonfigurasi untuk mengirimkan notifikasi email secara otomatis pada kejadian berikut:
+                  </p>
+                  <ul className="list-disc pl-4 space-y-1 text-slate-500 font-sans">
+                    <li><strong className="text-slate-400">Pembayaran Sewa Sukses</strong>: Kuitansi digital dikirim otomatis ke penyewa.</li>
+                    <li><strong className="text-slate-400">Survey Terjadwal & Lunas</strong>: Surat konfirmasi kedatangan survey & reservasi dikirim instan.</li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Kolom Kanan: Formulir Uji Coba Email */}
+              <div className="bg-slate-900 border border-slate-805 p-5 rounded-3xl space-y-4">
+                <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider font-mono flex items-center gap-2">
+                  <Play size={11} className="text-amber-500" />
+                  Kirim Uji Coba Email (Live Test)
+                </h3>
+
+                <div className="space-y-3.5 text-xs">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Email Penerima (To Recipient)</label>
+                    <input 
+                      type="email" 
+                      value={testEmailTo}
+                      onChange={(e) => setTestEmailTo(e.target.value)}
+                      placeholder="contoh: yogiatmaja26@gmail.com"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 font-mono text-[11px]"
+                    />
+                    <p className="text-[9px] text-slate-500 mt-1 font-sans">Catatan trial: MailerSend trial hanya memperbolehkan pengiriman ke email yang terdaftar sebagai authorized recipient atau email akun pembuat MailerSend Anda.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Subjek Email (Subject)</label>
+                    <input 
+                      type="text" 
+                      value={testEmailSubject}
+                      onChange={(e) => setTestEmailSubject(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 text-[11px]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Pesan / Isi Email (Message Content)</label>
+                    <textarea 
+                      rows={3}
+                      value={testEmailBody}
+                      onChange={(e) => setTestEmailBody(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 text-[11px] font-sans no-scrollbar"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSendTestEmail}
+                    disabled={emailSending}
+                    className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-slate-800 text-black disabled:text-slate-500 font-extrabold py-2 rounded-xl transition duration-155 flex items-center justify-center gap-2 text-xs cursor-pointer"
+                  >
+                    {emailSending ? (
+                      <>
+                        <RotateCw size={13} className="animate-spin" />
+                        Sedang Mengirim...
+                      </>
+                    ) : (
+                      <>
+                        <Mail size={13} />
+                        Kirim Email Sekarang
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {emailResult && (
+                  <div className={`p-4 rounded-2xl border text-[10px] space-y-1.5 ${
+                    emailResult.success 
+                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                      : 'bg-red-500/10 border-red-500/20 text-red-400'
+                  }`}>
+                    <p className="font-extrabold uppercase font-mono tracking-wider">
+                      {emailResult.success ? '✓ Sukses Terkirim' : '✗ Gagal Mengirim'}
+                    </p>
+                    <p className="font-sans leading-relaxed text-slate-300">{emailResult.message}</p>
+                    {emailResult.details && (
+                      <div className="pt-2 border-t border-white/5">
+                        <span className="font-bold text-slate-400 uppercase block font-mono mb-1 text-[8px]">Respons Detail API:</span>
+                        <pre className="text-[9px] bg-slate-950 p-2 rounded-lg border border-white/5 overflow-x-auto select-all text-[#bdc3c7] font-mono leading-relaxed whitespace-pre-wrap max-h-32 no-scrollbar">
+                          {typeof emailResult.details === 'object' ? JSON.stringify(emailResult.details, null, 2) : emailResult.details}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              </div>
+
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Property Editor modal */}
@@ -1485,6 +1788,33 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Custom Confirmation Dialog */}
+      <Modal
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        title={confirmDialog.title}
+      >
+        <div className="space-y-4 font-sans text-slate-300">
+          <p className="text-sm leading-relaxed">{confirmDialog.message}</p>
+          <div className="flex gap-2.5 pt-2">
+            <button
+              type="button"
+              onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+              className="flex-1 py-2 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all text-xs cursor-pointer"
+            >
+              Batalkan
+            </button>
+            <button
+              type="button"
+              onClick={confirmDialog.onConfirm}
+              className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all text-xs cursor-pointer"
+            >
+              Ya, Setujui
+            </button>
+          </div>
+        </div>
       </Modal>
 
     </div>

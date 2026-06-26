@@ -2,13 +2,15 @@ import React from 'react';
 import { Coupon } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
 import CouponBadge from './CouponBadge';
+import { Trash2 } from 'lucide-react';
 
 interface CouponListProps {
   coupons: Coupon[];
   onSelectCoupon?: (coupon: Coupon) => void;
+  onDeleteCoupon?: (id: number) => void;
 }
 
-export const CouponList: React.FC<CouponListProps> = ({ coupons, onSelectCoupon }) => {
+export const CouponList: React.FC<CouponListProps> = ({ coupons, onSelectCoupon, onDeleteCoupon }) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {coupons.map(c => (
@@ -20,13 +22,25 @@ export const CouponList: React.FC<CouponListProps> = ({ coupons, onSelectCoupon 
         >
           <div className="flex justify-between items-start">
             <CouponBadge code={c.code} />
-            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
-              c.is_active 
-                ? 'bg-emerald-500/10 text-emerald-450 border-emerald-500/20' 
-                : 'bg-slate-800 text-slate-500 border-slate-750'
-            }`}>
-              {c.is_active ? 'AKTIF' : 'NON-AKTIF'}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
+                c.is_active 
+                  ? 'bg-emerald-500/10 text-emerald-450 border-emerald-500/20' 
+                  : 'bg-slate-800 text-slate-500 border-slate-750'
+              }`}>
+                {c.is_active ? 'AKTIF' : 'NON-AKTIF'}
+              </span>
+              {onDeleteCoupon && (
+                <button
+                  type="button"
+                  onClick={() => onDeleteCoupon(c.id)}
+                  className="p-1 hover:bg-rose-500/10 text-rose-500 rounded-lg transition-colors cursor-pointer border border-rose-500/10"
+                  title="Hapus Kupon"
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="space-y-1 font-sans">

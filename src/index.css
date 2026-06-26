@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 @theme {
   --color-brand-green: #f59e0b;
@@ -38,6 +39,31 @@ body {
 /* Custom interactive classes */
 .emerald-glow {
   box-shadow: 0 4px 20px -2px rgba(13, 92, 52, 0.15);
+}
+
+/* 3D and Perspective utilities */
+.perspective-1000 {
+  perspective: 1000px;
+}
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
+/* 3D tilt effect for cards with dynamic depth */
+.tilt-card-3d {
+  transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-style: preserve-3d;
+}
+.tilt-card-3d:hover {
+  transform: translateY(-10px) rotateX(4deg) rotateY(-4deg);
+  box-shadow: 0 30px 60px -15px rgba(45, 58, 68, 0.22);
+}
+
+.tilt-inner-depth {
+  transform: translateZ(40px);
 }
 
 .premium-card-hover {

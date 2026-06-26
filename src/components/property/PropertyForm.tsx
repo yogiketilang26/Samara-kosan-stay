@@ -3,6 +3,7 @@ import { Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
 import { Button } from '../common/Button';
 import { UploadCloud, Trash2, Image } from 'lucide-react';
+import { PRESETS } from '../../utils/imagePresets';
 
 interface PropertyFormProps {
   property?: Property | null;
@@ -22,8 +23,14 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     type: 'campur' as 'putra' | 'putri' | 'campur',
     facilitiesInput: '',
     image_url: '',
+    images: [] as string[],
     lat: -6.2,
-    lng: 106.8
+    lng: 106.8,
+    description: '',
+    additional_rules: '',
+    policies: '',
+    terms: '',
+    regulations: ''
   });
 
   useEffect(() => {
@@ -35,13 +42,20 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         type: property.type,
         facilitiesInput: property.facilities.join(', '),
         image_url: property.image_url,
+        images: property.images || [],
         lat: property.lat || -6.2,
-        lng: property.lng || 106.8
+        lng: property.lng || 106.8,
+        description: property.description || '',
+        additional_rules: property.additional_rules || '',
+        policies: property.policies || '',
+        terms: property.terms || '',
+        regulations: property.regulations || ''
       });
     }
   }, [property]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -76,6 +90,42 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     }
   };
 
+  const handleGalleryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const newImages = [...formData.images];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.size > 10 * 1024 * 1024) {
+          alert("Ukuran gambar maksimal adalah 10MB!");
+          continue;
+        }
+        try {
+          const compressedBase64 = await compressImage(file, 640, 480, 0.5);
+          newImages.push(compressedBase64);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      setFormData(prev => ({
+        ...prev,
+        images: newImages.slice(0, 4) // max 4 images
+      }));
+      if (galleryInputRef.current) {
+        galleryInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleRemoveGalleryImage = (index: number) => {
+    if (confirm("Apakah Anda yakin ingin menghapus foto galeri ini?")) {
+      setFormData(prev => ({
+        ...prev,
+        images: prev.images.filter((_, idx) => idx !== index)
+      }));
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const facilitiesList = formData.facilitiesInput
@@ -91,8 +141,14 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       type: formData.type,
       facilities: facilitiesList,
       image_url: formData.image_url,
+      images: formData.images,
       lat: Number(formData.lat),
-      lng: Number(formData.lng)
+      lng: Number(formData.lng),
+      description: formData.description,
+      additional_rules: formData.additional_rules,
+      policies: formData.policies,
+      terms: formData.terms,
+      regulations: formData.regulations
     });
   };
 
@@ -206,6 +262,102 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           accept="image/*"
           className="hidden"
         />
+
+        {/* Preset Selector */}
+        <div className="mt-3 bg-slate-900 border border-slate-805 p-3 rounded-2xl space-y-2">
+          <span className="text-[9px] font-bold text-slate-400 font-mono block uppercase">Gunakan Preset Hunian Premium (Offline & Cepat)</span>
+          <div className="grid grid-cols-3 gap-2">
+            {PRESETS.filter(p => p.category === 'property').map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setFormData({ ...formData, image_url: p.dataUrl })}
+                className={`group relative rounded-xl overflow-hidden border transition-all text-left bg-slate-950 p-1 cursor-pointer outline-none ${
+                  formData.image_url === p.dataUrl ? 'border-amber-500 ring-1 ring-amber-500/30' : 'border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="relative h-14 rounded-lg overflow-hidden bg-slate-900">
+                  <img src={p.dataUrl} alt={p.name} className="w-full h-full object-cover" />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <span className="text-[8px] font-bold font-mono text-white bg-slate-950/80 px-1.5 py-0.5 rounded border border-slate-800">PILIH</span>
+                  </div>
+                </div>
+                <span className="text-[8px] font-medium font-sans text-slate-350 block mt-1 truncate px-0.5 leading-none">{p.name.replace('Preset Samara ', '')}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-1.5 font-sans">
+        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono block">Foto Galeri Pendukung / Foto Konten (Maksimal 4 Gambar)</label>
+        
+        {/* Existing gallery images grid */}
+        <div className="grid grid-cols-4 gap-2">
+          {formData.images.map((img, idx) => (
+            <div key={idx} className="relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950 aspect-video group">
+              <img 
+                src={img} 
+                alt={`Galeri ${idx + 1}`} 
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <button
+                  type="button"
+                  onClick={() => handleRemoveGalleryImage(idx)}
+                  className="p-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-colors cursor-pointer"
+                  title="Hapus Foto"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {formData.images.length < 4 && (
+            <div 
+              onClick={() => galleryInputRef.current?.click()}
+              className="border border-dashed border-slate-800 hover:border-amber-500/50 bg-slate-950 rounded-xl aspect-video flex flex-col items-center justify-center cursor-pointer transition group"
+            >
+              <UploadCloud size={16} className="text-slate-500 group-hover:text-amber-500 transition-colors animate-pulse" />
+              <span className="text-[9px] text-slate-400 mt-1 font-bold group-hover:text-amber-500 transition-colors">Tambah Foto</span>
+            </div>
+          )}
+        </div>
+        
+        {formData.images.length < 4 && (
+          <div className="mt-2 bg-slate-900 border border-slate-805 p-2 rounded-xl space-y-1.5">
+            <span className="text-[8px] font-bold text-slate-400 font-mono block uppercase">Gunakan Preset untuk Galeri:</span>
+            <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
+              {PRESETS.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => {
+                    if (formData.images.length < 4) {
+                      setFormData({ ...formData, images: [...formData.images, p.dataUrl] });
+                    }
+                  }}
+                  className="shrink-0 relative w-16 h-10 rounded-lg overflow-hidden border border-slate-800 hover:border-slate-650 bg-slate-950 cursor-pointer p-0.5 group outline-none"
+                >
+                  <img src={p.dataUrl} alt={p.name} className="w-full h-full object-cover rounded" />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <span className="text-[7px] font-bold text-white bg-slate-950/80 px-1 py-0.5 rounded">+ ADD</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        <input 
+          type="file"
+          ref={galleryInputRef}
+          onChange={handleGalleryFileChange}
+          accept="image/*"
+          multiple
+          className="hidden"
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -229,6 +381,69 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
             onChange={(e) => setFormData({ ...formData, lng: Number(e.target.value) })}
             className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
           />
+        </div>
+      </div>
+
+      <div className="space-y-2 border-t border-slate-800/60 pt-4">
+        <h3 className="text-slate-300 font-bold font-display text-[11px] uppercase tracking-wider text-amber-500">Metadata Tambahan & Informasi Detail</h3>
+        
+        <div className="space-y-1">
+          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Deskripsi Properti</label>
+          <textarea
+            value={formData.description}
+            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            placeholder="Deskripsi detail properti..."
+            rows={3}
+            className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 resize-none"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Aturan Tambahan Penghuni</label>
+            <textarea
+              value={formData.additional_rules}
+              onChange={(e) => setFormData({ ...formData, additional_rules: e.target.value })}
+              placeholder="1. Aturan satu..."
+              rows={3}
+              className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 text-[10px] leading-relaxed resize-none"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Kebijakan Hunian</label>
+            <textarea
+              value={formData.policies}
+              onChange={(e) => setFormData({ ...formData, policies: e.target.value })}
+              placeholder="Kebijakan pembatalan, pembayaran..."
+              rows={3}
+              className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 text-[10px] leading-relaxed resize-none"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Ketentuan Sewa</label>
+            <textarea
+              value={formData.terms}
+              onChange={(e) => setFormData({ ...formData, terms: e.target.value })}
+              placeholder="Ketentuan deposit, denda..."
+              rows={3}
+              className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 text-[10px] leading-relaxed resize-none"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Tata Tertib Hunian</label>
+            <textarea
+              value={formData.regulations}
+              onChange={(e) => setFormData({ ...formData, regulations: e.target.value })}
+              placeholder="Tata tertib jam malam, fasilitas..."
+              rows={3}
+              className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 text-[10px] leading-relaxed resize-none"
+            />
+          </div>
         </div>
       </div>
 

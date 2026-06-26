@@ -79,7 +79,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
     const netRent = Math.max(0, rentBase - discount);
     const tax = Math.round(netRent * 0.1);
-    const deposit = 500000; // standard commitment or deposit
+    const deposit = checkoutFlow === 'daily' ? 0 : 500000; // standard commitment or deposit
     const grandTotal = netRent + tax + (checkoutFlow === 'survey' ? 0 : deposit);
 
     return {
@@ -324,10 +324,12 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               <span className="font-mono text-slate-300">{formatRupiah(calcs.tax)}</span>
             </div>
 
-            <div className="flex justify-between items-center text-slate-400">
-              <span>Deposit Jaminan Kerusakan (Refundable)</span>
-              <span className="font-mono text-slate-300">{formatRupiah(calcs.deposit)}</span>
-            </div>
+            {calcs.deposit > 0 && (
+              <div className="flex justify-between items-center text-slate-400">
+                <span>Deposit Jaminan Kerusakan (Refundable)</span>
+                <span className="font-mono text-slate-300">{formatRupiah(calcs.deposit)}</span>
+              </div>
+            )}
           </div>
         )}
 
