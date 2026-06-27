@@ -237,6 +237,54 @@ async function startServer() {
     }
   }
 
+  // Helper function to dynamically discover the verified domain from MailerSend if possible
+  async function resolveVerifiedFromEmail(apiKey: string, fallbackEmail: string): Promise<string> {
+    try {
+      console.log('[MAILERSEND DISCOVERY] Querying verified domains list...');
+      const res = await fetch('https://api.mailersend.com/v1/domains', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`
+        }
+      });
+      if (res.status === 200) {
+        const json = await res.json();
+        if (json && Array.isArray(json.data) && json.data.length > 0) {
+          const domains = json.data;
+          console.log('[MAILERSEND DISCOVERY] Available domains raw data:', JSON.stringify(domains, null, 2));
+          
+          // Filter to only select active / verified domains where possible
+          const verifiedDomains = domains.filter((d: any) => d.is_verified === true || d.is_verified === 'true' || d.is_verified === 1 || d.is_verified === undefined);
+          console.log('[MAILERSEND DISCOVERY] Filtered verified domains:', verifiedDomains.map((d: any) => d.name));
+          
+          const activeDomainsList = verifiedDomains.length > 0 ? verifiedDomains : domains;
+          const fallbackDomain = fallbackEmail.split('@')[1];
+          
+          // Try to find the domain matching our fallback in the active list
+          const match = activeDomainsList.find((d: any) => d.name === fallbackDomain);
+          if (match) {
+            console.log(`[MAILERSEND DISCOVERY] Verified match found for fallback domain: ${fallbackDomain}`);
+            return fallbackEmail;
+          }
+          
+          // Otherwise, select the first verified / active domain from MailerSend
+          const selectedDomain = activeDomainsList[0].name;
+          const userPrefix = fallbackEmail.split('@')[0] || 'info';
+          const resolved = `${userPrefix}@${selectedDomain}`;
+          console.log(`[MAILERSEND DISCOVERY] Selected domain: ${selectedDomain}. Resolved email: ${resolved}`);
+          return resolved;
+        } else {
+          console.warn('[MAILERSEND DISCOVERY] No domains found in MailerSend account response.');
+        }
+      } else {
+        console.warn(`[MAILERSEND DISCOVERY] Domains API returned status ${res.status}: ${await res.text()}`);
+      }
+    } catch (err) {
+      console.error('[MAILERSEND DISCOVERY ERROR] Failed to fetch domains:', err);
+    }
+    return fallbackEmail;
+  }
+
   // Helper function to send email via MailerSend API
   async function sendServerEmail(to: string, subject: string, text: string, html: string) {
     try {
@@ -246,7 +294,8 @@ async function startServer() {
       else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
       apiKey = apiKey.trim();
 
-      const fromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+      const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+      const fromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
       const fromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
       const payload = {
@@ -257,7 +306,7 @@ async function startServer() {
         html
       };
 
-      console.log('[SERVER EMAIL TRIGGER] Sending:', subject, 'to:', to);
+      console.log('[SERVER EMAIL TRIGGER] Sending:', subject, 'to:', to, 'from:', fromEmail);
       const res = await fetch('https://api.mailersend.com/v1/email', {
         method: 'POST',
         headers: {
@@ -395,33 +444,117 @@ async function startServer() {
               const { error: payErr } = await supabase.from('payments').insert(paymentPayload);
               if (payErr) console.error('[SUPABASE WEBHOOK ERROR] Create payment invoice error:', payErr);
 
+              // Fetch property info for high fidelity invoice details
+              let property = null;
+              if (booking.property_id) {
+                const { data: prop } = await supabase
+                  .from('properties')
+                  .select('*')
+                  .eq('id', booking.property_id)
+                  .maybeSingle();
+                property = prop;
+              }
+              const propertyName = property?.name || 'Samara Stay Premium Residence';
+              const propertyAddress = property?.address || 'Premium Boarding Area';
+              const paymentMethodName = paymentType || 'Midtrans Snap Gateway';
+              const formattedPrice = 'Rp ' + (booking.total_price || 0).toLocaleString('id-ID');
+
               // Send premium email notification via MailerSend
               if (booking.email) {
-                const subject = `[Samara Stay] Pembayaran Sewa Kamar Berhasil - Unit ${booking.room_number}`;
-                const text = `Halo ${booking.tenant_name}, pembayaran sewa Anda untuk kamar Unit ${booking.room_number} di Samara Stay senilai Rp ${booking.total_price?.toLocaleString('id-ID')} telah disetujui.`;
+                const subject = `[Samara Stay] Invoice Pelunasan Sewa Kamar - Unit ${booking.room_number}`;
+                const text = `Halo ${booking.tenant_name}, pemesanan sewa kamar Anda di ${propertyName} (Unit ${booking.room_number}) telah berhasil dikonfirmasi dan dilunasi!`;
                 const html = `
-                  <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff; color: #1e293b;">
-                    <div style="text-align: center; border-bottom: 2px solid #f59e0b; padding-bottom: 15px; margin-bottom: 20px;">
-                      <h1 style="color: #2D3A44; margin: 0; font-size: 24px;">SAMARA STAY</h1>
-                      <p style="color: #64748b; font-size: 12px; margin: 5px 0 0 0; text-transform: uppercase; font-family: monospace;">Premium Boarding Residence</p>
+                  <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
+                    <!-- Brand Header with Logo -->
+                    <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
+                      <!-- Logo SVG (Combination of House Icon + "SAMARA" Wordmark) -->
+                      <svg width="60" height="60" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style="display: block; margin: 0 auto 10px auto;">
+                        <!-- Upper roof chevron (Dark Slate) -->
+                        <path d="M50 22 L14 50 C14 50 39 39 50 39 C61 39 86 50 86 50 L50 22 Z" fill="#334155" />
+                        <!-- Lower arch/pillars (Dark Slate) -->
+                        <path d="M23 54 L23 72 C23 72 32 64 50 54 C68 64 77 72 77 72 L77 54 C77 54 66 46 50 46 C34 46 23 54 23 54 Z" fill="#334155" />
+                      </svg>
+                      <h1 style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 10px 0 2px 0;">SAMARA</h1>
+                      <p style="font-family: 'Courier New', Courier, monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 0;">S T A Y</p>
                     </div>
-                    <h2 style="color: #10b981; margin-top: 0;">Pembayaran Sewa Disetujui!</h2>
-                    <p>Halo <strong>${booking.tenant_name}</strong>,</p>
-                    <p>Terima kasih. Pembayaran sewa kamar Anda telah berhasil diverifikasi oleh sistem kami secara otomatis.</p>
-                    
-                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 15px; margin: 20px 0;">
-                      <h3 style="color: #2D3A44; margin-top: 0; margin-bottom: 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Rincian Transaksi</h3>
-                      <table style="width: 100%; font-size: 13px; line-height: 2;">
-                        <tr><td style="color: #64748b; width: 40%;">Nomor Invoice:</td><td><strong>${invoiceId}</strong></td></tr>
-                        <tr><td style="color: #64748b;">Unit Kamar:</td><td><strong>Unit ${booking.room_number}</strong></td></tr>
-                        <tr><td style="color: #64748b;">Jumlah Bayar:</td><td><strong style="color: #f59e0b; font-size: 15px;">Rp ${booking.total_price?.toLocaleString('id-ID')}</strong></td></tr>
-                        <tr><td style="color: #64748b;">Mulai Masuk:</td><td><strong>${booking.check_in_date}</strong></td></tr>
-                        <tr><td style="color: #64748b;">Metode Bayar:</td><td><strong>${paymentType || 'Midtrans Snap Gateway'}</strong></td></tr>
+
+                    <!-- Receipt Badge & Title -->
+                    <div style="text-align: center; margin-bottom: 30px;">
+                      <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">LUNAS / PAID</span>
+                      <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">INVOICE PEMBAYARAN</h2>
+                      <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">No: ${invoiceId}</p>
+                    </div>
+
+                    <!-- Greeting -->
+                    <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
+                      <p>Halo <strong>${booking.tenant_name}</strong>,</p>
+                      <p>Terima kasih atas pembayaran Anda! Transaksi pemesanan kamar sewa Anda telah berhasil diverifikasi oleh sistem kami secara otomatis. Berikut adalah rincian tagihan lunas Anda:</p>
+                    </div>
+
+                    <!-- Detail Table Card -->
+                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
+                      <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Transaksi Hunian</h3>
+                      
+                      <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
+                        <tr>
+                          <td style="color: #64748b; width: 45%; font-weight: 500;">Nama Kos / Unit:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${propertyName}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b; font-weight: 500;">Nomor Kamar:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right; font-size: 14px; color: #334155;">Unit ${booking.room_number}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b; font-weight: 500;">Tipe Kontrak:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: capitalize;">${booking.booking_type === 'daily' ? 'Harian (Daily)' : 'Bulanan (Monthly)'}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b; font-weight: 500;">Tanggal Check-In:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${booking.check_in_date || '-'}</td>
+                        </tr>
+                        ${booking.booking_type === 'monthly' ? `
+                        <tr>
+                          <td style="color: #64748b; font-weight: 500;">Durasi Sewa:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${booking.duration_months} Bulan</td>
+                        </tr>` : `
+                        <tr>
+                          <td style="color: #64748b; font-weight: 500;">Durasi Sewa:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${booking.duration_days || 1} Hari</td>
+                        </tr>`}
+                        <tr>
+                          <td style="color: #64748b; font-weight: 500;">Metode Pembayaran:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: uppercase;">${paymentMethodName}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b; font-weight: 500; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px;">Total Bayar:</td>
+                          <td style="color: #047857; font-weight: 900; font-size: 18px; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px; text-align: right;">
+                            ${formattedPrice}
+                          </td>
+                        </tr>
                       </table>
                     </div>
-                    <p style="font-size: 13px; color: #64748b; line-height: 1.5;">Kunci elektronik atau akses fisik ke kamar akan diserahkan oleh pengelola asrama saat Anda tiba di lokasi. Harap tunjukkan email konfirmasi ini sebagai bukti bayar sah.</p>
-                    <div style="text-align: center; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 11px; color: #94a3b8;">
-                      &copy; 2026 Samara Stay. Seluruh hak cipta dilindungi.
+
+                    <!-- Location Info -->
+                    <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #334155; background-color: #f8fafc; border-radius: 0 12px 12px 0;">
+                      <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Alamat Hunian:</strong>
+                      ${propertyAddress}
+                    </div>
+
+                    <!-- Next Steps -->
+                    <div style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 25px;">
+                      <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Petunjuk Check-In:</h4>
+                      <ol style="font-size: 13px; color: #475569; padding-left: 20px; line-height: 1.7; margin: 0;">
+                        <li style="margin-bottom: 8px;">Simpan invoice digital ini sebagai bukti pelunasan yang sah saat serah terima unit.</li>
+                        <li style="margin-bottom: 8px;">Akses smart lock (kunci digital pin) atau kunci fisik kamar beserta kartu akses akan diberikan oleh asisten hunian kami saat Anda tiba di lokasi.</li>
+                        <li>Harap membawa kartu identitas diri asli (KTP / Passport) yang sesuai dengan nama penyewa saat check-in.</li>
+                      </ol>
+                    </div>
+
+                    <!-- Footer -->
+                    <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
+                      <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
+                      <p style="margin: 4px 0 0 0;">Email: info@samarastay.com | Whatsapp Pengelola Hunian</p>
+                      <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi Undang-Undang.</p>
                     </div>
                   </div>
                 `;
@@ -593,7 +726,8 @@ async function startServer() {
       else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
       apiKey = apiKey.trim();
 
-      const resolvedFromEmail = fromEmail || process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+      const baseFromEmail = fromEmail || process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+      const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
       const resolvedFromName = fromName || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
       const payload = {

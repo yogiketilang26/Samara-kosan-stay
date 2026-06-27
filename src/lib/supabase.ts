@@ -10,6 +10,7 @@ import {
   JournalEntry, LedgerEntry, SystemSettings, Coupon 
 } from '../types';
 import { PRESETS } from '../utils/imagePresets';
+import { mailersendService } from '../services/mailersendService';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
 let activeSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || (import.meta as any).env?.SUPABASE_URL || '';
@@ -799,6 +800,8 @@ export const database = {
     const list = sandboxState.getBookings();
     let updated: Booking;
     const existing = booking.midtrans_order_id ? list.find(b => b.midtrans_order_id === booking.midtrans_order_id) : undefined;
+    const previousBooking = booking.id ? list.find(b => b.id === booking.id) : existing;
+    const previousStatus = previousBooking ? previousBooking.status : undefined;
     
     if (booking.id) {
       updated = { ...list.find(b => b.id === booking.id)!, ...booking } as Booking;
@@ -869,6 +872,14 @@ export const database = {
         updated.total_price, 
         `Penerimaan Sewa ${updated.booking_type === 'daily' ? 'Harian' : 'Bulanan'} - Kamar ${updated.room_number}`
       );
+
+      // Trigger automated email confirmation via MailerSend on status transition to 'approved'
+      if (previousStatus !== 'approved' && updated.email) {
+        const property = sandboxState.getProperties().find(p => p.id === updated.property_id);
+        mailersendService.sendBookingConfirmationEmail(updated, property).catch(err => {
+          console.error('[SUPABASE TRIGGER] MailerSend automated email confirmation trigger failed:', err);
+        });
+      }
     }
 
     // Release room and update invoice on reject / cancel / overdue
