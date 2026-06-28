@@ -505,6 +505,15 @@ const SEED_FINANCIAL_TRANSACTIONS: FinancialTransaction[] = [
   }
 ];
 
+const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
+  { id: 1, journal_no: "JRN-20260601-00001", transaction_id: 1, account_id: 1010, debit: 1800000, credit: 0 },
+  { id: 2, journal_no: "JRN-20260601-00001", transaction_id: 1, account_id: 4000, debit: 0, credit: 1800000 },
+  { id: 3, journal_no: "JRN-20260610-00002", transaction_id: 2, account_id: 1010, debit: 2600000, credit: 0 },
+  { id: 4, journal_no: "JRN-20260610-00002", transaction_id: 2, account_id: 4000, debit: 0, credit: 2600000 },
+  { id: 5, journal_no: "JRN-20260615-00003", transaction_id: 3, account_id: 5000, debit: 50000, credit: 0 },
+  { id: 6, journal_no: "JRN-20260615-00003", transaction_id: 3, account_id: 1010, debit: 0, credit: 50000 }
+];
+
 const SEED_SETTINGS: SystemSettings = {
   id: 1,
   booking_rules: "1. Tamu dilarang membawa lawan jenis masuk ke dalam kamar (kecuali pasangan sah atau keluarga kandung).\n2. Menjaga ketenangan dan kebersihan lingkungan bersama setelah pukul 22:00 WIB.\n3. Pembayaran uang sewa bulanan wajib diselesaikan paling lambat 3 hari sebelum jatuh tempo.\n4. Menjaga kebersihan fasilitas bersama dan dilarang merusak inventaris kost.\n5. Uang jaminan deposit (Rp 500.000 untuk bulanan atau Rp 100.000 untuk harian) akan dikembalikan utuh pada saat check-out jika unit ditinggalkan dalam kondisi bersih, utuh, dan tanpa tunggakan.",
@@ -605,6 +614,9 @@ export const sandboxState = {
 
   getFinancialTransactions: () => getLocalState<FinancialTransaction[]>('samara_fin_transactions', SEED_FINANCIAL_TRANSACTIONS),
   setFinancialTransactions: (data: FinancialTransaction[]) => setLocalState('samara_fin_transactions', data),
+
+  getJournalEntries: () => getLocalState<JournalEntry[]>('samara_journal_entries', SEED_JOURNAL_ENTRIES),
+  setJournalEntries: (data: JournalEntry[]) => setLocalState('samara_journal_entries', data),
 
   getActivityLogs: () => getLocalState<ActivityLog[]>('samara_activity_logs', SEED_ACTIVITY_LOGS),
   setActivityLogs: (data: ActivityLog[]) => setLocalState('samara_activity_logs', data),
@@ -1188,136 +1200,264 @@ export const database = {
     return sandboxState.getFinancialTransactions();
   },
 
-  async recordFinancialRevenue(invoiceId: string, creditAccountId: number, amount: number, description: string) {
-    const accounts = sandboxState.getAccounts();
-    const transactions = sandboxState.getFinancialTransactions();
+  async fetchJournalEntries(): Promise<JournalEntry[]> {
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase.from('journal_entries').select('*').order('id', { ascending: false });
+      if (!error && data) return data as JournalEntry[];
+    }
+    return sandboxState.getJournalEntries();
+  },
 
-    // Debit Cash Bank (1010)
-    // Credit Revenue Account (4000/4100) or DP Liability Account (1300)
-    const newTrxId = transactions.length ? Math.max(...transactions.map(t => t.id)) + 1 : 1;
-    const newTrx: FinancialTransaction = {
-      id: newTrxId,
-      transaction_no: `TRX-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100+Math.random()*900)}`,
-      transaction_date: new Date().toISOString().split('T')[0],
-      category: "Penerimaan Sewa",
-      description: description,
-      amount: amount,
-      type: creditAccountId === 1300 ? "dp_booking" : "income",
-      reference_type: "payment",
-      reference_id: invoiceId,
-      created_by: "System Webhook"
-    };
+  async postFinancialTransaction(payload: {
+    category: string;
+    description: string;
+    amount: number;
+    type: 'income' | 'expense' | 'dp_booking' | 'reclassification';
+    reference_type?: string | null;
+    reference_id?: string | null;
+    created_by: string;
+    debit_account_id: number;
+    credit_account_id: number;
+  }) {
+    const {
+      category,
+      description,
+      amount,
+      type,
+      reference_type,
+      reference_id,
+      created_by,
+      debit_account_id,
+      credit_account_id
+    } = payload;
 
-    sandboxState.setFinancialTransactions([...transactions, newTrx]);
+    const trxDate = new Date().toISOString().split('T')[0];
 
-    // Update Ledger Balances
-    const updatedAccounts = accounts.map(acc => {
-      // Debit Cash Bank increases balances
-      if (acc.id === 1010) {
-        return { ...acc, balance: Number(acc.balance) + amount };
-      }
-      // Credit increases income or liabilities
-      if (acc.id === creditAccountId) {
-        return { ...acc, balance: Number(acc.balance) + amount };
-      }
-      return acc;
-    });
-    sandboxState.setAccounts(updatedAccounts);
+    // ----------------------------------------------------
+    // A. OFFLINE / SANDBOX LOCAL STORAGE POSTING ENGINE
+    // ----------------------------------------------------
+    const prevAccounts = sandboxState.getAccounts();
+    const prevTransactions = sandboxState.getFinancialTransactions();
+    const prevJournals = sandboxState.getJournalEntries();
 
+    try {
+      const nextTrxId = prevTransactions.length ? Math.max(...prevTransactions.map(t => t.id)) + 1 : 1;
+      const nextJournalId = prevJournals.length ? Math.max(...prevJournals.map(j => j.id)) + 1 : 1;
+
+      const trxNo = `TRX-${trxDate.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
+      const journalNo = `JRN-${trxDate.replace(/-/g, '')}-${String(nextTrxId).padStart(5, '0')}`;
+
+      const newTrx: FinancialTransaction = {
+        id: nextTrxId,
+        transaction_no: trxNo,
+        transaction_date: trxDate,
+        category,
+        description,
+        amount,
+        type,
+        reference_type: reference_type || null,
+        reference_id: reference_id || null,
+        created_by
+      };
+
+      const debitEntry: JournalEntry = {
+        id: nextJournalId,
+        journal_no: journalNo,
+        transaction_id: nextTrxId,
+        account_id: debit_account_id,
+        debit: amount,
+        credit: 0
+      };
+
+      const creditEntry: JournalEntry = {
+        id: nextJournalId + 1,
+        journal_no: journalNo,
+        transaction_id: nextTrxId,
+        account_id: credit_account_id,
+        debit: 0,
+        credit: amount
+      };
+
+      const updatedAccounts = prevAccounts.map(acc => {
+        if (acc.id === debit_account_id) {
+          const isAssetOrExpense = acc.type === 'asset' || acc.type === 'expense';
+          const newBalance = isAssetOrExpense 
+            ? Number(acc.balance) + amount 
+            : Math.max(0, Number(acc.balance) - amount);
+          return { ...acc, balance: newBalance };
+        }
+        if (acc.id === credit_account_id) {
+          const isLiabilityOrEquityOrRevenue = acc.type === 'liability' || acc.type === 'equity' || acc.type === 'revenue';
+          const newBalance = isLiabilityOrEquityOrRevenue 
+            ? Number(acc.balance) + amount 
+            : Math.max(0, Number(acc.balance) - amount);
+          return { ...acc, balance: newBalance };
+        }
+        return acc;
+      });
+
+      sandboxState.setFinancialTransactions([...prevTransactions, newTrx]);
+      sandboxState.setJournalEntries([...prevJournals, debitEntry, creditEntry]);
+      sandboxState.setAccounts(updatedAccounts);
+
+    } catch (err) {
+      sandboxState.setAccounts(prevAccounts);
+      sandboxState.setFinancialTransactions(prevTransactions);
+      sandboxState.setJournalEntries(prevJournals);
+      console.error("[Sandbox Posting Engine] Rollback triggered due to sandbox error:", err);
+      throw err;
+    }
+
+    // ----------------------------------------------------
+    // B. PRODUCTION SUPABASE POSTGRES TRANSACTION ENGINE
+    // ----------------------------------------------------
     if (isSupabaseConfigured && supabase) {
       try {
-        await safeSupabaseUpsert('financial_transactions', {
-          transaction_no: newTrx.transaction_no,
-          transaction_date: newTrx.transaction_date,
-          category: newTrx.category,
-          description: newTrx.description,
-          amount: newTrx.amount,
-          type: newTrx.type,
-          reference_type: newTrx.reference_type,
-          reference_id: newTrx.reference_id,
-          created_by: newTrx.created_by
+        const trxNoSupabase = `TRX-${trxDate.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
+
+        const { data: rpcResult, error: rpcError } = await supabase.rpc('post_financial_transaction', {
+          p_transaction_no: trxNoSupabase,
+          p_transaction_date: trxDate,
+          p_category: category,
+          p_description: description,
+          p_amount: amount,
+          p_type: type,
+          p_reference_type: reference_type || null,
+          p_reference_id: reference_id || null,
+          p_created_by: created_by,
+          p_debit_account_id: debit_account_id,
+          p_credit_account_id: credit_account_id
         });
 
-        // 1. Update Cash Bank (1010) on Supabase
-        const { data: cashAcc } = await supabase.from('accounts').select('balance').eq('id', 1010).single();
-        if (cashAcc) {
-          const newCashBalance = Number(cashAcc.balance || 0) + amount;
-          await safeSupabaseUpsert('accounts', { balance: newCashBalance }, 1010);
-        }
+        if (rpcError) {
+          console.warn("[Posting Engine] RPC failed or is not installed. Falling back to client-driven database transaction.", rpcError);
 
-        // 2. Update Credit Account on Supabase
-        const { data: creditAcc } = await supabase.from('accounts').select('balance').eq('id', creditAccountId).single();
-        if (creditAcc) {
-          const newCreditBalance = Number(creditAcc.balance || 0) + amount;
-          await safeSupabaseUpsert('accounts', { balance: newCreditBalance }, creditAccountId);
+          let insertedTrx: any = null;
+          let insertedDebJrn: any = null;
+          let insertedCredJrn: any = null;
+          let oldDebitBalance: number | null = null;
+          let oldCreditBalance: number | null = null;
+
+          try {
+            const { data: debAcc } = await supabase.from('accounts').select('balance, type').eq('id', debit_account_id).single();
+            const { data: credAcc } = await supabase.from('accounts').select('balance, type').eq('id', credit_account_id).single();
+            
+            if (!debAcc || !credAcc) throw new Error("Account validation failed during transaction.");
+            oldDebitBalance = Number(debAcc.balance || 0);
+            oldCreditBalance = Number(credAcc.balance || 0);
+
+            const trxPayload = {
+              transaction_no: trxNoSupabase,
+              transaction_date: trxDate,
+              category,
+              description,
+              amount,
+              type,
+              reference_type: reference_type || null,
+              reference_id: reference_id || null,
+              created_by
+            };
+            const { data: trxData, error: trxErr } = await supabase.from('financial_transactions').insert(trxPayload).select().single();
+            if (trxErr) throw trxErr;
+            insertedTrx = trxData;
+
+            const jrnNoSupabase = `JRN-${trxDate.replace(/-/g, '')}-${String(insertedTrx.id).padStart(5, '0')}`;
+
+            const debPayload = {
+              journal_no: jrnNoSupabase,
+              transaction_id: insertedTrx.id,
+              account_id: debit_account_id,
+              debit: amount,
+              credit: 0
+            };
+            const { data: debJrn, error: debErr } = await supabase.from('journal_entries').insert(debPayload).select().single();
+            if (debErr) throw debErr;
+            insertedDebJrn = debJrn;
+
+            const credPayload = {
+              journal_no: jrnNoSupabase,
+              transaction_id: insertedTrx.id,
+              account_id: credit_account_id,
+              debit: 0,
+              credit: amount
+            };
+            const { data: credJrn, error: credErr } = await supabase.from('journal_entries').insert(credPayload).select().single();
+            if (credErr) throw credErr;
+            insertedCredJrn = credJrn;
+
+            const isAssetOrExpense = debAcc.type === 'asset' || debAcc.type === 'expense';
+            const newDebitBalance = isAssetOrExpense 
+              ? oldDebitBalance + amount 
+              : Math.max(0, oldDebitBalance - amount);
+            await safeSupabaseUpsert('accounts', { balance: newDebitBalance }, debit_account_id);
+
+            const isLiabilityOrEquityOrRevenue = credAcc.type === 'liability' || credAcc.type === 'equity' || credAcc.type === 'revenue';
+            const newCreditBalance = isLiabilityOrEquityOrRevenue 
+              ? oldCreditBalance + amount 
+              : Math.max(0, oldCreditBalance - amount);
+            await safeSupabaseUpsert('accounts', { balance: newCreditBalance }, credit_account_id);
+
+            console.log("[Posting Engine] DB transactions completed and committed successfully.");
+
+          } catch (dbErr) {
+            console.error("[Posting Engine] DB transaction error. Initiating Rollback...", dbErr);
+            if (insertedCredJrn) await supabase.from('journal_entries').delete().eq('id', insertedCredJrn.id);
+            if (insertedDebJrn) await supabase.from('journal_entries').delete().eq('id', insertedDebJrn.id);
+            if (insertedTrx) await supabase.from('financial_transactions').delete().eq('id', insertedTrx.id);
+            if (oldDebitBalance !== null) await safeSupabaseUpsert('accounts', { balance: oldDebitBalance }, debit_account_id);
+            if (oldCreditBalance !== null) await safeSupabaseUpsert('accounts', { balance: oldCreditBalance }, credit_account_id);
+            throw dbErr;
+          }
+        } else {
+          console.log("[Posting Engine] Stored procedure post_financial_transaction executed successfully on Supabase:", rpcResult);
         }
       } catch (err) {
-        console.error('Supabase double-ledger auto write fail:', err);
+        console.error("[Posting Engine] Database posting transaction failed:", err);
+        throw err;
       }
     }
   },
 
-  async recordFinancialReclassification(debitAccountId: number, creditAccountId: number, amount: number, description: string) {
-    const accounts = sandboxState.getAccounts();
-    const transactions = sandboxState.getFinancialTransactions();
- 
-    // Reclassify liability down (debit) and earnings up (credit)
-    const newTrxId = transactions.length ? Math.max(...transactions.map(t => t.id)) + 1 : 1;
-    const newTrx: FinancialTransaction = {
-      id: newTrxId,
-      transaction_no: `TRX-RECLAS-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100+Math.random()*900)}`,
-      transaction_date: new Date().toISOString().split('T')[0],
-      category: "Reklasifikasi Akun",
-      description: description,
-      amount: amount,
-      type: "reclassification",
-      created_by: "System Finance"
-    };
-
-    sandboxState.setFinancialTransactions([...transactions, newTrx]);
-
-    const updatedAccounts = accounts.map(acc => {
-      // Debit liability (releasing/reducing it)
-      if (acc.id === debitAccountId) {
-        return { ...acc, balance: Math.max(0, Number(acc.balance) - amount) };
-      }
-      // Credit forfeited income (increasing it)
-      if (acc.id === creditAccountId) {
-        return { ...acc, balance: Number(acc.balance) + amount };
-      }
-      return acc;
+  async recordFinancialRevenue(invoiceId: string, creditAccountId: number, amount: number, description: string) {
+    await this.postFinancialTransaction({
+      category: "Penerimaan Sewa",
+      description,
+      amount,
+      type: creditAccountId === 1300 ? "dp_booking" : "income",
+      reference_type: "payment",
+      reference_id: invoiceId,
+      created_by: "System Webhook",
+      debit_account_id: 1010, // Kas dan Bank Mandiri
+      credit_account_id: creditAccountId
     });
-    sandboxState.setAccounts(updatedAccounts);
+  },
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        await safeSupabaseUpsert('financial_transactions', {
-          transaction_no: newTrx.transaction_no,
-          transaction_date: newTrx.transaction_date,
-          category: newTrx.category,
-          description: newTrx.description,
-          amount: newTrx.amount,
-          type: newTrx.type,
-          created_by: newTrx.created_by
-        });
+  async recordFinancialReclassification(debitAccountId: number, creditAccountId: number, amount: number, description: string) {
+    await this.postFinancialTransaction({
+      category: "Reklasifikasi Akun",
+      description,
+      amount,
+      type: "reclassification",
+      reference_type: "reclassification",
+      reference_id: null,
+      created_by: "System Finance",
+      debit_account_id: debitAccountId,
+      credit_account_id: creditAccountId
+    });
+  },
 
-        // 1. Update Debit Account on Supabase
-        const { data: debitAcc } = await supabase.from('accounts').select('balance').eq('id', debitAccountId).single();
-        if (debitAcc) {
-          const newDebitBalance = Math.max(0, Number(debitAcc.balance || 0) - amount);
-          await safeSupabaseUpsert('accounts', { balance: newDebitBalance }, debitAccountId);
-        }
-
-        // 2. Update Credit Account on Supabase
-        const { data: creditAcc } = await supabase.from('accounts').select('balance').eq('id', creditAccountId).single();
-        if (creditAcc) {
-          const newCreditBalance = Number(creditAcc.balance || 0) + amount;
-          await safeSupabaseUpsert('accounts', { balance: newCreditBalance }, creditAccountId);
-        }
-      } catch (err) {
-        console.error('Supabase double-ledger reclassification write fail:', err);
-      }
-    }
+  async recordFinancialExpense(debitAccountId: number, creditAccountId: number, amount: number, description: string, category: string = "Biaya Operasional") {
+    await this.postFinancialTransaction({
+      category,
+      description,
+      amount,
+      type: "expense",
+      reference_type: "expense",
+      reference_id: null,
+      created_by: "System Finance",
+      debit_account_id: debitAccountId,
+      credit_account_id: creditAccountId
+    });
   },
 
   // --- RULES SETTINGS ---
