@@ -44,7 +44,7 @@ async function startServer() {
   const app = express();
   app.use(express.json());
 
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
   // =========================================================================
   // 1. MIDTRANS API INTEGRATION (REAL & SIMULATED CO-EXISTENCE)
