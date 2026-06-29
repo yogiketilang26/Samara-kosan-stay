@@ -82,3 +82,11 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Fix visibility of browser select options in white-background selects */
+select.bg-white,
+select.bg-white option {
+  color: #0f172a !important; /* text-slate-900 */
+  background-color: #ffffff !important;
+}
+

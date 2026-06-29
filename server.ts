@@ -6,11 +6,39 @@
 import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 
 // Load environment variables from .env
 dotenv.config();
+
+// Simple in-memory rate limiting store for endpoints
+const rateLimits: Record<string, { count: number; resetTime: number }> = {};
+function apiRateLimiter(windowMs: number, maxRequests: number) {
+  return (req: any, res: any, next: any) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    const now = Date.now();
+    if (!rateLimits[ip]) {
+      rateLimits[ip] = { count: 1, resetTime: now + windowMs };
+      return next();
+    }
+    const limit = rateLimits[ip];
+    if (now > limit.resetTime) {
+      limit.count = 1;
+      limit.resetTime = now + windowMs;
+      return next();
+    }
+    limit.count++;
+    if (limit.count > maxRequests) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests, please try again later.'
+      });
+    }
+    next();
+  };
+}
 
 async function startServer() {
   const app = express();
@@ -81,7 +109,7 @@ async function startServer() {
     return res.json({ status: 'OK' });
   });
 
-  app.post('/api/midtrans/charge', async (req, res) => {
+  app.post('/api/midtrans/charge', apiRateLimiter(60000, 30), async (req, res) => {
     try {
       const { order_id, gross_amount, customer_details, item_details } = req.body;
 
@@ -288,11 +316,16 @@ async function startServer() {
   // Helper function to send email via MailerSend API
   async function sendServerEmail(to: string, subject: string, text: string, html: string) {
     try {
-      let apiKey = process.env.MAILERSEND_API_KEY || 'mlsn.654e012b23f2049e7d07dee9ec00ce04e52c6c21c418ed3e46133b2c69f79b22';
+      let apiKey = process.env.MAILERSEND_API_KEY || '';
       apiKey = apiKey.trim();
       if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
       else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
       apiKey = apiKey.trim();
+
+      if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
+        console.warn('[SERVER EMAIL TRIGGER WARNING] MAILERSEND_API_KEY is not configured. Email skipped.');
+        return;
+      }
 
       const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
       const fromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
@@ -322,17 +355,59 @@ async function startServer() {
     }
   }
 
-  // 2. Midtrans Webhook Receiver
+  // 2. Midtrans Webhook Receiver (With Signature Key Verification)
   app.post('/api/midtrans/webhook', async (req, res) => {
     try {
       const notification = req.body;
-      console.log('[MIDTRANS WEBHOOK RECEIVED]', JSON.stringify(notification, null, 2));
+      console.log('[MIDTRANS WEBHOOK RECEIVED] Order ID:', notification.order_id, 'Status:', notification.transaction_status);
 
       const orderId = notification.order_id;
       const transactionStatus = notification.transaction_status;
       const fraudStatus = notification.fraud_status;
       const paymentType = notification.payment_type;
       const grossAmount = notification.gross_amount;
+      const statusCode = notification.status_code;
+      const incomingSignature = notification.signature_key;
+
+      // ---------------------------------------------------------
+      // Webhook Signature Verification Logic
+      // ---------------------------------------------------------
+      let rawServerKey = process.env.MIDTRANS_SERVER_KEY || '';
+      let serverKey = rawServerKey.trim();
+      if (serverKey.startsWith('"') && serverKey.endsWith('"')) {
+        serverKey = serverKey.slice(1, -1);
+      } else if (serverKey.startsWith("'") && serverKey.endsWith("'")) {
+        serverKey = serverKey.slice(1, -1);
+      }
+      serverKey = serverKey.trim();
+
+      // Enforce strict check if MIDTRANS_SERVER_KEY is configured
+      if (serverKey && serverKey !== 'YOUR_MIDTRANS_SERVER_KEY_HERE' && serverKey !== '') {
+        if (!incomingSignature) {
+          console.warn('[MIDTRANS WEBHOOK SECURITY WARNING] Webhook received without signature key.');
+          return res.status(401).json({ error: 'Unauthorized: Missing signature key' });
+        }
+
+        const computedSignature = crypto
+          .createHash('sha512')
+          .update(orderId + statusCode + grossAmount + serverKey)
+          .digest('hex');
+
+        if (computedSignature !== incomingSignature) {
+          console.warn('[MIDTRANS WEBHOOK SECURITY WARNING] Signature mismatch computed:', computedSignature, 'received:', incomingSignature);
+          addMidtransLog({
+            orderId: orderId || 'unknown',
+            type: 'error',
+            status: 'failed',
+            message: 'Webhook signature verification failed: invalid credentials or signature mismatch.',
+            details: { incomingSignature }
+          });
+          return res.status(401).json({ error: 'Unauthorized: Invalid signature key' });
+        }
+        console.log('[MIDTRANS WEBHOOK SECURITY] Signature verified successfully!');
+      } else {
+        console.log('[MIDTRANS WEBHOOK WARNING] Skipping signature verification: server key not configured.');
+      }
 
       let paymentStatus: 'paid' | 'pending' | 'overdue' = 'pending';
 
@@ -715,16 +790,23 @@ async function startServer() {
     }
   });
 
-  // MailerSend Send Email API endpoint
-  app.post('/api/email/send', async (req, res) => {
+  // MailerSend Send Email API endpoint (rate-limited for security)
+  app.post('/api/email/send', apiRateLimiter(60000, 15), async (req, res) => {
     try {
       const { to, subject, text, html, fromEmail, fromName } = req.body;
 
-      let apiKey = process.env.MAILERSEND_API_KEY || 'mlsn.654e012b23f2049e7d07dee9ec00ce04e52c6c21c418ed3e46133b2c69f79b22';
+      let apiKey = process.env.MAILERSEND_API_KEY || '';
       apiKey = apiKey.trim();
       if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
       else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
       apiKey = apiKey.trim();
+
+      if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
+        return res.status(500).json({
+          success: false,
+          message: 'Gagal mengirim email. MAILERSEND_API_KEY belum dikonfigurasi.'
+        });
+      }
 
       const baseFromEmail = fromEmail || process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
@@ -781,8 +863,8 @@ async function startServer() {
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      midtrans_configured: Boolean(process.env.MIDTRANS_SERVER_KEY),
-      mailersend_configured: Boolean(process.env.MAILERSEND_API_KEY || 'mlsn.654e012b23f2049e7d07dee9ec00ce04e52c6c21c418ed3e46133b2c69f79b22')
+      midtrans_configured: Boolean(process.env.MIDTRANS_SERVER_KEY && process.env.MIDTRANS_SERVER_KEY !== 'YOUR_MIDTRANS_SERVER_KEY_HERE'),
+      mailersend_configured: Boolean(process.env.MAILERSEND_API_KEY && process.env.MAILERSEND_API_KEY !== 'YOUR_MAILERSEND_API_KEY_HERE')
     });
   });
 

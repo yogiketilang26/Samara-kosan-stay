@@ -8,7 +8,8 @@ import {
   BarChart3, Layers, UserCheck, CalendarCheck, Landmark, Tag, Settings, CreditCard,
   Plus, Edit2, Trash2, Check, X, ShieldAlert, FileSpreadsheet, Eye, Printer, Shield, Activity,
   CheckCircle, FileText, BadgeCheck, Search, Coins, TrendingUp, TrendingDown, Wallet, Percent, 
-  ArrowRightLeft, AlertTriangle, Sparkles, BookOpen, ShoppingBag, Wrench, Calculator, Clock, HelpCircle
+  ArrowRightLeft, AlertTriangle, Sparkles, BookOpen, ShoppingBag, Wrench, Calculator, Clock, HelpCircle,
+  Download
 } from 'lucide-react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend
@@ -49,6 +50,126 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
   // ERP Finance states
   const [activeFinanceSubTab, setActiveFinanceSubTab] = useState<'overview' | 'ledger' | 'ar' | 'ap' | 'assets' | 'petty' | 'tax' | 'audit'>('overview');
   const [journalViewMode, setJournalViewMode] = useState<'transactions' | 'double_entry'>('transactions');
+  const [ledgerSearch, setLedgerSearch] = useState('');
+  const [ledgerAccountFilter, setLedgerAccountFilter] = useState('all');
+
+  const exportToCSV = (headers, rows, filename) => {
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(e => e.map(val => {
+        const cleanVal = val === null || val === undefined ? '' : String(val).replace(/"/g, '""');
+        return (cleanVal.includes(',') || cleanVal.includes('\n') || cleanVal.includes('"')) ? `"${cleanVal}"` : cleanVal;
+      }).join(','))
+    ].join('\n');
+    
+    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportLedgerCSV = () => {
+    const headers = [
+      "Nomor Jurnal",
+      "Tanggal Transaksi",
+      "Deskripsi Transaksi",
+      "Kategori",
+      "Kode Akun",
+      "Nama Akun",
+      "Debit (Rp)",
+      "Kredit (Rp)"
+    ];
+    
+    const sortedEntries = [...journalEntries].sort((a, b) => {
+      const parentA = transactions.find(t => t.id === a.transaction_id);
+      const parentB = transactions.find(t => t.id === b.transaction_id);
+      const dateA = parentA?.transaction_date || a.created_at || '';
+      const dateB = parentB?.transaction_date || b.created_at || '';
+      return dateA.localeCompare(dateB) || a.id - b.id;
+    });
+
+    const rows = sortedEntries.map((jrn) => {
+      const parentTrx = transactions.find(t => t.id === jrn.transaction_id);
+      const acc = accounts.find(a => a.id === jrn.account_id);
+      return [
+        jrn.journal_no,
+        parentTrx?.transaction_date || jrn.created_at?.split('T')[0] || '-',
+        parentTrx?.description || 'Manual Adjustments',
+        parentTrx?.category || 'General',
+        jrn.account_id,
+        acc?.name || `Akun ${jrn.account_id}`,
+        jrn.debit,
+        jrn.credit
+      ];
+    });
+    
+    exportToCSV(headers, rows, `samara_general_ledger_${new Date().toISOString().split('T')[0]}.csv`);
+    database.logActivity("System Finance", "EXPORT_REPORT", "Ekspor General Ledger ke Excel CSV");
+  };
+
+  const handleExportCOACSV = () => {
+    const headers = ["Nomor Akun", "Nama Akun", "Tipe Akun", "Saldo Akhir (Rp)"];
+    const rows = accounts.map(acc => [
+      acc.id,
+      acc.name,
+      acc.type.toUpperCase(),
+      acc.balance
+    ]);
+    exportToCSV(headers, rows, `samara_chart_of_accounts_${new Date().toISOString().split('T')[0]}.csv`);
+    database.logActivity("System Finance", "EXPORT_REPORT", "Ekspor Chart of Accounts ke Excel CSV");
+  };
+
+  const handleExportLedgerJSON = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ accounts, journalEntries, transactions }, null, 2));
+    const link = document.createElement("a");
+    link.setAttribute("href", dataStr);
+    link.setAttribute("download", `samara_financial_ledger_${new Date().toISOString().split('T')[0]}.json`);
+    link.click();
+    database.logActivity("System Finance", "EXPORT_REPORT", "Ekspor General Ledger ke JSON");
+  };
+
+  const getFilteredLedgerRows = () => {
+    const sortedEntries = [...journalEntries].sort((a, b) => {
+      const parentA = transactions.find(t => t.id === a.transaction_id);
+      const parentB = transactions.find(t => t.id === b.transaction_id);
+      const dateA = parentA?.transaction_date || a.created_at || '';
+      const dateB = parentB?.transaction_date || b.created_at || '';
+      return dateA.localeCompare(dateB) || a.id - b.id;
+    });
+
+    let cumulative = 0;
+    const rowsWithBalance = sortedEntries.map(jrn => {
+      const parentTrx = transactions.find(t => t.id === jrn.transaction_id);
+      const acc = accounts.find(a => a.id === jrn.account_id);
+      cumulative += jrn.debit - jrn.credit;
+      return {
+        ...jrn,
+        parentTrx,
+        acc,
+        runningBalance: cumulative
+      };
+    });
+
+    const filtered = rowsWithBalance.filter(row => {
+      const matchesSearch = !ledgerSearch || 
+        row.journal_no.toLowerCase().includes(ledgerSearch.toLowerCase()) ||
+        (row.parentTrx?.description || '').toLowerCase().includes(ledgerSearch.toLowerCase()) ||
+        (row.acc?.name || '').toLowerCase().includes(ledgerSearch.toLowerCase()) ||
+        String(row.account_id).includes(ledgerSearch);
+        
+      const matchesAccount = ledgerAccountFilter === 'all' || 
+        row.account_id === Number(ledgerAccountFilter);
+        
+      return matchesSearch && matchesAccount;
+    });
+
+    return [...filtered].reverse();
+  };
   
   // Custom manual journal entry form
   const [showJournalModal, setShowJournalModal] = useState(false);
@@ -1488,236 +1609,305 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
                    </div>
                  )}
  
-                 {/* SUBTAB 2: BOOKKEEPER DOUBLE-ENTRY GENERAL LEDGER & COA */}
-                 {activeFinanceSubTab === 'ledger' && (
-                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
-                     
-                     {/* Left & Middle panels: COA and manual posting */}
-                     <div className="lg:col-span-2 space-y-6">
-                       
-                       {/* COA Timbangan Saldo */}
-                       <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
-                         <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                           <div>
-                             <span className="text-[10px] text-gray-400 font-bold uppercase font-mono tracking-wider block">Chart of Accounts (COA)</span>
-                             <h3 className="text-sm font-bold text-slate-800 font-display">Timbangan Saldo Buku Besar Utama</h3>
-                           </div>
-                           <span className="bg-emerald-50 text-brand-green border border-emerald-200 font-bold text-[10px] px-2.5 py-1 rounded-full font-mono uppercase">
-                             Balanced (Debit = Kredit)
-                           </span>
-                         </div>
- 
-                         <div className="space-y-2 max-h-[350px] overflow-y-auto no-scrollbar pr-1">
-                           {accounts.map((acc) => (
-                             <div key={acc.id} className="flex justify-between items-center text-xs py-2.5 px-3.5 bg-slate-50 hover:bg-slate-100/60 rounded-2xl transition-colors border border-slate-100 font-medium font-sans">
-                               <div>
-                                 <span className="font-mono text-gray-400 text-[10px] mr-2">[{acc.id}]</span>
-                                 <span className="text-slate-800">{acc.name}</span>
-                                 <span className="text-[9px] text-slate-400 font-normal uppercase ml-2 px-1 bg-slate-200/50 rounded">{acc.type}</span>
-                               </div>
-                               <span className="font-bold text-slate-800 font-mono">
-                                 {formatRupiah(acc.balance)}
-                               </span>
-                             </div>
-                           ))}
-                         </div>
-                       </div>
- 
-                       {/* Manual Journal Entry Posting Form */}
-                       <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
-                         <h4 className="text-sm font-bold text-slate-800 font-display flex items-center gap-1.5">
-                           <Calculator size={15} className="text-indigo-600" />
-                           Posting Jurnal Umum Manual (Double Entry Ledger)
-                         </h4>
-                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                           <div>
-                             <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Pilih Akun Debit (Penambahan Aset/Beban)</label>
-                             <select 
-                               value={journalForm.debitAccount}
-                               onChange={(e) => setJournalForm({...journalForm, debitAccount: Number(e.target.value)})}
-                               className="w-full text-xs p-2 rounded-xl border border-gray-200 font-medium bg-white"
-                             >
-                               {accounts.map(a => <option key={a.id} value={a.id}>[{a.id}] - {a.name}</option>)}
-                             </select>
-                           </div>
-                           <div>
-                             <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Pilih Akun Kredit (Pengurangan Aset / Penambahan Revenue/Liability)</label>
-                             <select 
-                               value={journalForm.creditAccount}
-                               onChange={(e) => setJournalForm({...journalForm, creditAccount: Number(e.target.value)})}
-                               className="w-full text-xs p-2 rounded-xl border border-gray-200 font-medium bg-white"
-                             >
-                               {accounts.map(a => <option key={a.id} value={a.id}>[{a.id}] - {a.name}</option>)}
-                             </select>
-                           </div>
-                           <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                             <div className="sm:col-span-1">
-                               <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Nominal (Rupiah)</label>
-                               <input 
-                                 type="number"
-                                 placeholder="Nominal"
-                                 value={journalForm.amount || ''}
-                                 onChange={(e) => setJournalForm({...journalForm, amount: Number(e.target.value)})}
-                                 className="w-full text-xs p-2 rounded-xl border border-gray-200 outline-none font-medium font-mono"
-                               />
-                             </div>
-                             <div className="sm:col-span-2">
-                               <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Keterangan / Deskripsi Transaksi</label>
-                               <input 
-                                 type="text"
-                                 placeholder="Keterangan transaksi lengkap..."
-                                 value={journalForm.description}
-                                 onChange={(e) => setJournalForm({...journalForm, description: e.target.value})}
-                                 className="w-full text-xs p-2 rounded-xl border border-gray-200 outline-none font-medium"
-                               />
-                             </div>
-                           </div>
-                         </div>
-                         <div className="flex justify-end pt-2">
-                           <button
-                             onClick={async () => {
-                               if (journalForm.amount <= 0 || !journalForm.description.trim()) {
-                                 alert("Harap isi nominal transaksi dan deskripsi dengan valid.");
-                                 return;
-                               }
-                               if (journalForm.debitAccount === journalForm.creditAccount) {
-                                 alert("Akun debit dan kredit tidak boleh sama dalam asas double-entry accounting!");
-                                 return;
-                               }
-                               
-                               try {
-                                 await database.recordFinancialExpense(
-                                   journalForm.debitAccount,
-                                   journalForm.creditAccount,
-                                   journalForm.amount,
-                                   `[MANUAL JURNAL] ${journalForm.description}`,
-                                   "Jurnal Umum Manual"
-                                 );
-                                 database.logActivity("System Finance", "POST_JOURNAL_MANUAL", `Debit ${journalForm.debitAccount} Kredit ${journalForm.creditAccount} Nominal Rp ${journalForm.amount}`);
-                                 alert("Jurnal double-entry manual berhasil di-posting ke Ledger!");
-                                 setJournalForm({ debitAccount: 1010, creditAccount: 4000, amount: 0, description: '' });
-                                 triggerAppRefresh();
-                               } catch(err: any) {
-                                 alert("Gagal mem-posting jurnal: " + err.message);
-                               }
-                             }}
-                             className="bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2.5 rounded-2xl shadow-xs transition-all cursor-pointer"
-                           >
-                             Post Journal Entry
-                           </button>
-                         </div>
-                       </div>
-                     </div>
- 
-                     {/* Right Panel: Immutable General Journal Records list */}
-                     <div className="space-y-6">
-                       <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
-                         <div>
-                           <div className="flex justify-between items-center w-full mb-2">
-                             <div>
-                               <span className="text-[10px] text-gray-400 font-bold uppercase font-mono tracking-wider block">Buku Jurnal Umum</span>
-                             </div>
-                             <div className="flex bg-slate-100 p-0.5 rounded-xl">
-                               <button
-                                 onClick={() => setJournalViewMode('transactions')}
-                                 className={`text-[9px] font-bold px-2.5 py-1.5 rounded-lg cursor-pointer transition-all ${journalViewMode === 'transactions' ? 'bg-white text-slate-800 shadow-3xs' : 'text-slate-500 hover:text-slate-750'}`}
-                               >
-                                 Transaksi
-                               </button>
-                               <button
-                                 onClick={() => setJournalViewMode('double_entry')}
-                                 className={`text-[9px] font-bold px-2.5 py-1.5 rounded-lg cursor-pointer transition-all ${journalViewMode === 'double_entry' ? 'bg-white text-slate-800 shadow-3xs' : 'text-slate-500 hover:text-slate-750'}`}
-                               >
-                                 Dr/Cr
-                               </button>
-                             </div>
-                           </div>
-                           <h3 className="text-sm font-bold text-slate-800 font-display">Arsip Transaksi Finansial</h3>
-                         </div>
- 
-                         <div className="space-y-3 max-h-[500px] overflow-y-auto no-scrollbar pr-1">
-                           {journalViewMode === 'transactions' ? (
-                             transactions.map((trx) => (
-                               <div key={trx.id} className="p-3.5 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col justify-between gap-1.5 font-medium shadow-2xs">
-                                 <div className="flex justify-between items-start gap-4">
-                                   <div className="space-y-0.5">
-                                     <span className="font-mono text-[9px] text-gray-400 block">[{trx.transaction_no}]</span>
-                                     <p className="text-xs text-slate-800 font-bold font-sans">{trx.description}</p>
-                                   </div>
-                                   <span className={`font-mono text-xs font-bold text-slate-800 shrink-0`}>
-                                     {formatRupiah(trx.amount)}
-                                   </span>
-                                 </div>
-                                 <div className="flex items-center justify-between border-t border-slate-100 pt-1.5 text-[9px] text-slate-400">
-                                   <span className="uppercase font-mono font-bold bg-slate-200/50 text-slate-600 px-1 py-0.5 rounded">
-                                     {trx.category || "Umum"}
-                                   </span>
-                                   <span>{trx.transaction_date} | Ops: {trx.created_by}</span>
-                                 </div>
-                               </div>
-                             ))
-                           ) : (
-                             (() => {
-                               const grouped = journalEntries.reduce((acc: Record<string, JournalEntry[]>, jrn) => {
-                                 if (!acc[jrn.journal_no]) {
-                                   acc[jrn.journal_no] = [];
-                                 }
-                                 acc[jrn.journal_no].push(jrn);
-                                 return acc;
-                               }, {});
+                                   {/* SUBTAB 2: BOOKKEEPER DOUBLE-ENTRY GENERAL LEDGER & COA */}
+                  {activeFinanceSubTab === 'ledger' && (
+                    <div className="space-y-6 animate-fade-in text-slate-850">
+                      
+                      {/* STATS ROW */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="bg-slate-900 text-white p-5 rounded-3xl border border-slate-800 shadow-lg flex flex-col justify-between">
+                          <span className="text-[9px] text-amber-400 font-bold uppercase font-mono tracking-wider">Status Timbangan COA</span>
+                          <div className="text-sm font-black mt-1 font-sans flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                            DEBIT = KREDIT (Balanced)
+                          </div>
+                          <span className="text-[9px] text-slate-400 mt-1">Asas double-entry terjaga otomatis</span>
+                        </div>
+                        
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
+                          <span className="text-[9px] text-slate-400 font-bold uppercase font-mono tracking-wider">Total Entri Buku Jurnal</span>
+                          <div className="text-xl font-black text-slate-800 font-mono mt-1">{journalEntries.length} Baris</div>
+                          <span className="text-[9px] text-slate-400 mt-1">Arsip transaksi tercatat permanen</span>
+                        </div>
 
-                               return Object.keys(grouped).sort().reverse().map((jNo) => {
-                                 const entries = grouped[jNo];
-                                 const firstEntry = entries[0];
-                                 const parentTrx = transactions.find(t => t.id === firstEntry.transaction_id);
-                                 return (
-                                   <div key={jNo} className="p-3 bg-white border border-slate-200 rounded-2xl space-y-2 font-sans text-xs shadow-2xs hover:border-slate-300 transition-all">
-                                     <div className="flex justify-between items-start border-b border-gray-150 pb-1">
-                                       <div>
-                                         <span className="font-mono text-[9px] font-extrabold text-indigo-600 block">{jNo}</span>
-                                         <span className="text-[10px] text-gray-400 font-medium">{parentTrx?.transaction_date || firstEntry.created_at?.split('T')[0] || ''}</span>
-                                       </div>
-                                       <span className="uppercase font-mono text-[8px] font-bold bg-indigo-50/50 text-indigo-600 px-1.5 py-0.5 rounded">
-                                         {parentTrx?.category || 'General'}
-                                       </span>
-                                     </div>
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
+                          <span className="text-[9px] text-slate-400 font-bold uppercase font-mono tracking-wider">Rekening Akun Aktif (COA)</span>
+                          <div className="text-xl font-black text-slate-800 font-mono mt-1">{accounts.length} Akun</div>
+                          <span className="text-[9px] text-slate-400 mt-1">Aset, Liabilitas, Ekuitas, Pendapatan, Beban</span>
+                        </div>
 
-                                     <p className="text-[11px] text-slate-850 font-bold leading-tight">
-                                       {parentTrx?.description || "Manual Adjustments"}
-                                     </p>
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
+                          <span className="text-[9px] text-slate-400 font-bold uppercase font-mono tracking-wider">Ekspor Arsip Keuangan</span>
+                          <div className="flex gap-1.5 mt-2">
+                            <button
+                              onClick={handleExportLedgerCSV}
+                              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer"
+                              title="Ekspor Ledger ke CSV/Excel"
+                            >
+                              <FileSpreadsheet size={12} />
+                              Ledger Excel
+                            </button>
+                            <button
+                              onClick={handleExportCOACSV}
+                              className="flex-1 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-[10px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer"
+                              title="Ekspor COA ke CSV/Excel"
+                            >
+                              <Download size={12} />
+                              COA Excel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
 
-                                     <div className="space-y-1.5 border-t border-dashed border-slate-200 pt-2 font-mono text-[10px]">
-                                       {entries.map((jrn) => {
-                                         const acc = accounts.find(a => a.id === jrn.account_id);
-                                         const isDebit = jrn.debit > 0;
-                                         return (
-                                            <div key={jrn.id} className={`flex justify-between items-center ${isDebit ? 'text-slate-800 pl-0' : 'text-slate-500 pl-3'}`}>
-                                              <div className="flex items-center gap-1.5 overflow-hidden">
-                                                <span className="text-slate-400 font-semibold">{isDebit ? 'Dr.' : 'Cr.'}</span>
-                                                <span className="text-[8px] text-gray-400">[{jrn.account_id}]</span>
-                                                <span className={`truncate ${isDebit ? 'font-bold text-slate-850' : 'italic text-slate-650'}`}>
-                                                  {acc?.name || `Akun ${jrn.account_id}`}
-                                                </span>
-                                              </div>
-                                              <span className={`shrink-0 ${isDebit ? 'font-bold text-slate-900' : 'font-medium text-slate-600'}`}>
-                                                {isDebit ? formatRupiah(jrn.debit) : `(${formatRupiah(jrn.credit)})`}
-                                              </span>
-                                            </div>
-                                         );
-                                       })}
-                                     </div>
-                                   </div>
-                                 );
-                               });
-                             })()
-                           )}
-                         </div>
-                       </div>
-                     </div>
-                   </div>
-                 )}
- 
-                 {/* SUBTAB 3: REVENUE & ACCOUNTS RECEIVABLE (AR) */}
+                      {/* MIDDLE PANEL: THE IMMUTABLE GENERAL LEDGER EXPLORER */}
+                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-gray-100 pb-4">
+                          <div>
+                            <span className="text-[10px] text-indigo-600 font-bold uppercase font-mono tracking-wider block">Buku Jurnal Umum Utama (General Ledger Book)</span>
+                            <h3 className="text-base font-bold text-slate-800 font-display">Eksplorasi Transaksi Terpembukuan</h3>
+                          </div>
+                          
+                          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                            {/* Search */}
+                            <div className="relative flex-1 md:flex-none">
+                              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                              <input 
+                                type="text"
+                                placeholder="Cari jurnal, deskripsi, kode..."
+                                value={ledgerSearch}
+                                onChange={(e) => setLedgerSearch(e.target.value)}
+                                className="pl-9 pr-3 py-2 w-full md:w-56 text-xs rounded-xl border border-gray-200 outline-none bg-slate-50 focus:border-amber-500 focus:bg-white transition-all font-medium"
+                              />
+                            </div>
+
+                            {/* Filter Account */}
+                            <select
+                              value={ledgerAccountFilter}
+                              onChange={(e) => setLedgerAccountFilter(e.target.value)}
+                              className="text-xs p-2 rounded-xl border border-gray-200 bg-white text-slate-900 font-semibold outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all max-w-[200px]"
+                            >
+                              <option value="all">Semua Rekening COA</option>
+                              {accounts.map(a => <option key={a.id} value={a.id}>[{a.id}] {a.name}</option>)}
+                            </select>
+
+                            {/* Reset filter */}
+                            {(ledgerSearch || ledgerAccountFilter !== 'all') && (
+                              <button
+                                onClick={() => { setLedgerSearch(''); setLedgerAccountFilter('all'); }}
+                                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 px-2.5 py-2 rounded-xl transition-all cursor-pointer"
+                              >
+                                Reset
+                              </button>
+                            )}
+
+                            {/* Print / JSON */}
+                            <button
+                              onClick={() => {
+                                window.print();
+                              }}
+                              className="p-2 text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-all cursor-pointer flex items-center justify-center"
+                              title="Cetak Buku Besar / Jurnal"
+                            >
+                              <Printer size={14} />
+                            </button>
+                            <button
+                              onClick={handleExportLedgerJSON}
+                              className="p-2 text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-all cursor-pointer flex items-center justify-center"
+                              title="Unduh Data Mentah JSON"
+                            >
+                              <FileText size={14} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Interactive Table */}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-gray-100 text-[10px] text-gray-400 font-bold font-mono uppercase bg-slate-50">
+                                <th className="py-3 px-3">NO JURNAL</th>
+                                <th className="py-3 px-3">TANGGAL</th>
+                                <th className="py-3 px-3">DESKRIPSI / KETERANGAN</th>
+                                <th className="py-3 px-3">REKENING AKUN (COA)</th>
+                                <th className="py-3 px-3 text-right">DEBIT</th>
+                                <th className="py-3 px-3 text-right">KREDIT</th>
+                                <th className="py-3 px-3 text-right">Running Balance</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 font-medium text-slate-700">
+                              {getFilteredLedgerRows().map((row) => {
+                                const isDebit = row.debit > 0;
+                                return (
+                                  <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
+                                    <td className="py-3.5 px-3 font-mono text-[10px] text-indigo-600 font-bold">{row.journal_no}</td>
+                                    <td className="py-3.5 px-3 text-slate-500 text-[10px] whitespace-nowrap">
+                                      {row.parentTrx?.transaction_date || row.created_at?.split('T')[0] || '-'}
+                                    </td>
+                                    <td className="py-3.5 px-3">
+                                      <p className="font-bold text-slate-800 leading-tight">{row.parentTrx?.description || 'Manual Adjustment'}</p>
+                                      <span className="text-[8px] uppercase font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded mt-1 inline-block">
+                                        {row.parentTrx?.category || 'General'}
+                                      </span>
+                                    </td>
+                                    <td className="py-3.5 px-3">
+                                      <div className="flex flex-col">
+                                        <span className="font-mono text-[9px] text-gray-400">[{row.account_id}]</span>
+                                        <span className={isDebit ? 'text-xs font-bold text-slate-850' : 'text-xs italic text-slate-600'}>
+                                          {row.acc?.name || "Akun " + row.account_id}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="py-3.5 px-3 text-right font-mono text-emerald-600 font-bold">
+                                      {row.debit > 0 ? formatRupiah(row.debit) : '-'}
+                                    </td>
+                                    <td className="py-3.5 px-3 text-right font-mono text-slate-400">
+                                      {row.credit > 0 ? "(" + formatRupiah(row.credit) + ")" : '-'}
+                                    </td>
+                                    <td className={"py-3.5 px-3 text-right font-mono font-semibold " + (row.runningBalance < 0 ? 'text-red-500' : 'text-slate-850')}>
+                                      {formatRupiah(row.runningBalance)}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+
+                              {getFilteredLedgerRows().length === 0 && (
+                                <tr>
+                                  <td colSpan={7} className="py-10 text-center text-slate-400 font-semibold">
+                                    Tidak ada entri jurnal umum yang sesuai dengan pencarian Anda.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* BOTTOM ROW: COA & MANUAL JOURNAL ENTRY */}
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        
+                        {/* COA Timbangan Saldo */}
+                        <div className="lg:col-span-1 bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4 flex flex-col h-[460px]">
+                          <div className="border-b border-gray-100 pb-3">
+                            <span className="text-[10px] text-gray-400 font-bold uppercase font-mono tracking-wider block">Chart of Accounts (COA)</span>
+                            <h3 className="text-sm font-bold text-slate-800 font-display">Timbangan Saldo Buku Besar Utama</h3>
+                          </div>
+
+                          <div className="space-y-2 overflow-y-auto no-scrollbar pr-1 flex-1">
+                            {accounts.map((acc) => (
+                              <div key={acc.id} className="flex justify-between items-center text-xs py-2.5 px-3.5 bg-slate-50 hover:bg-slate-100/60 rounded-2xl transition-colors border border-slate-100 font-medium font-sans">
+                                <div>
+                                  <span className="font-mono text-gray-400 text-[10px] mr-2">[{acc.id}]</span>
+                                  <span className="text-slate-850 text-[11px] font-bold">{acc.name}</span>
+                                  <span className="text-[8px] text-slate-400 font-normal uppercase ml-1 px-1 bg-slate-200/50 rounded">{acc.type}</span>
+                                </div>
+                                <span className="font-bold text-slate-800 font-mono text-[11px]">
+                                  {formatRupiah(acc.balance)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Manual Journal Entry Posting Form */}
+                        <div className="lg:col-span-2 bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4 h-[460px] flex flex-col justify-between text-slate-850">
+                          <div className="space-y-4">
+                            <div className="border-b border-gray-100 pb-3">
+                              <span className="text-[10px] text-indigo-600 font-bold uppercase font-mono tracking-wider block">Posting Jurnal Manual</span>
+                              <h3 className="text-sm font-bold text-slate-800 font-display flex items-center gap-1.5 mt-0.5">
+                                <Calculator size={15} className="text-indigo-600" />
+                                Posting Jurnal Umum Baru (Double Entry System)
+                              </h3>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Pilih Akun Debit (Penambahan Aset/Beban)</label>
+                                <select 
+                                  value={journalForm.debitAccount}
+                                  onChange={(e) => setJournalForm({...journalForm, debitAccount: Number(e.target.value)})}
+                                  className="w-full text-xs p-2.5 rounded-xl border border-gray-200 font-semibold bg-white text-slate-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all font-sans"
+                                >
+                                  {accounts.map(a => <option key={a.id} value={a.id}>[{a.id}] - {a.name}</option>)}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Pilih Akun Kredit (Pengurangan Aset / Penambahan Revenue/Liability)</label>
+                                <select 
+                                  value={journalForm.creditAccount}
+                                  onChange={(e) => setJournalForm({...journalForm, creditAccount: Number(e.target.value)})}
+                                  className="w-full text-xs p-2.5 rounded-xl border border-gray-200 font-semibold bg-white text-slate-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all font-sans"
+                                >
+                                  {accounts.map(a => <option key={a.id} value={a.id}>[{a.id}] - {a.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div className="sm:col-span-1">
+                                  <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Nominal (Rupiah)</label>
+                                  <input 
+                                    type="number"
+                                    placeholder="Nominal"
+                                    value={journalForm.amount || ''}
+                                    onChange={(e) => setJournalForm({...journalForm, amount: Number(e.target.value)})}
+                                    className="w-full text-xs p-2.5 rounded-xl border border-gray-200 outline-none font-semibold font-mono text-slate-900 bg-white"
+                                  />
+                                </div>
+                                <div className="sm:col-span-2">
+                                  <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Keterangan / Deskripsi Transaksi</label>
+                                  <input 
+                                    type="text"
+                                    placeholder="Keterangan transaksi lengkap..."
+                                    value={journalForm.description}
+                                    onChange={(e) => setJournalForm({...journalForm, description: e.target.value})}
+                                    className="w-full text-xs p-2.5 rounded-xl border border-gray-200 outline-none font-semibold text-slate-900 bg-white font-sans"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex justify-between items-center border-t border-gray-100 pt-3">
+                            <span className="text-[10px] text-slate-400 font-sans italic flex items-center gap-1">
+                              <ShieldAlert size={12} className="text-amber-500" />
+                              Mendukung penyesuaian timbangan COA secara instan
+                            </span>
+                            <button
+                              onClick={async () => {
+                                if (journalForm.amount <= 0 || !journalForm.description.trim()) {
+                                  alert("Harap isi nominal transaksi dan deskripsi dengan valid.");
+                                  return;
+                                }
+                                if (journalForm.debitAccount === journalForm.creditAccount) {
+                                  alert("Akun debit dan kredit tidak boleh sama dalam asas double-entry accounting!");
+                                  return;
+                                }
+                                
+                                try {
+                                  await database.recordFinancialExpense(
+                                    journalForm.debitAccount,
+                                    journalForm.creditAccount,
+                                    journalForm.amount,
+                                    "[MANUAL JURNAL] " + journalForm.description,
+                                    "Jurnal Umum Manual"
+                                  );
+                                  database.logActivity("System Finance", "POST_JOURNAL_MANUAL", "Debit " + journalForm.debitAccount + " Kredit " + journalForm.creditAccount + " Nominal Rp " + journalForm.amount);
+                                  alert("Jurnal double-entry manual berhasil di-posting ke Ledger!");
+                                  setJournalForm({ debitAccount: 1010, creditAccount: 4000, amount: 0, description: '' });
+                                  triggerAppRefresh();
+                                } catch(err) {
+                                  alert("Gagal mem-posting jurnal: " + err.message);
+                                }
+                              }}
+                              className="bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-2.5 rounded-2xl shadow-sm transition-all cursor-pointer font-sans"
+                            >
+                              Post Jurnal double-entry
+                            </button>
+                          </div>
+                        </div>
+
+                      </div>
+
+                    </div>
+                  )}{/* SUBTAB 3: REVENUE & ACCOUNTS RECEIVABLE (AR) */}
                  {activeFinanceSubTab === 'ar' && (
                    <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4 animate-fade-in">
                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-3">
@@ -1838,7 +2028,7 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
                              <select 
                                value={expenseForm.category}
                                onChange={(e) => setExpenseForm({...expenseForm, category: e.target.value})}
-                               className="w-full text-xs p-2 rounded-xl border border-gray-200 font-medium bg-white outline-none"
+                               className="w-full text-xs p-2.5 rounded-xl border border-gray-200 font-semibold bg-white text-slate-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
                              >
                                <option value="Biaya Operasional">Biaya Operasional & Rumah Tangga Kos</option>
                                <option value="Pemeliharaan Gedung">Pemeliharaan & Perbaikan Gedung</option>
@@ -1851,7 +2041,7 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
                              <select
                                value={expenseForm.vendor}
                                onChange={(e) => setExpenseForm({...expenseForm, vendor: e.target.value})}
-                               className="w-full text-xs p-2 rounded-xl border border-gray-200 font-medium bg-white outline-none"
+                               className="w-full text-xs p-2.5 rounded-xl border border-gray-200 font-semibold bg-white text-slate-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
                              >
                                <option value="">-- Pilih Supplier --</option>
                                {vendors.map(v => <option key={v.id} value={v.name}>{v.name} ({v.category})</option>)}

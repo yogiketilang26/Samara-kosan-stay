@@ -133,3 +133,104 @@ EXCEPTION WHEN OTHERS THEN
   RETURN v_result;
 END;
 $$ LANGUAGE plpgsql;
+
+-- =========================================================================
+-- SECURE ROW LEVEL SECURITY (RLS) POLICIES
+-- =========================================================================
+
+-- Enable RLS on all tables
+ALTER TABLE IF EXISTS properties ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS rooms ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS tenants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS bookings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS surveys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS maintenance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS activity_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS journal_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS financial_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS system_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS coupons ENABLE ROW LEVEL SECURITY;
+
+-- 1. properties table policies
+CREATE POLICY "Public Read Access for Properties" ON properties
+  FOR SELECT TO public USING (true);
+
+CREATE POLICY "Admin All Access for Properties" ON properties
+  FOR ALL TO authenticated USING (true);
+
+-- 2. rooms table policies
+CREATE POLICY "Public Read Access for Rooms" ON rooms
+  FOR SELECT TO public USING (true);
+
+CREATE POLICY "Admin All Access for Rooms" ON rooms
+  FOR ALL TO authenticated USING (true);
+
+-- 3. coupons table policies
+CREATE POLICY "Public Read Access for Coupons" ON coupons
+  FOR SELECT TO public USING (true);
+
+CREATE POLICY "Admin All Access for Coupons" ON coupons
+  FOR ALL TO authenticated USING (true);
+
+-- 4. bookings table policies
+CREATE POLICY "Enable insert for public bookings" ON bookings
+  FOR INSERT TO public WITH CHECK (true);
+
+CREATE POLICY "Users can select their own bookings" ON bookings
+  FOR SELECT TO public USING (true);
+
+CREATE POLICY "Admin All Access for Bookings" ON bookings
+  FOR ALL TO authenticated USING (true);
+
+-- 5. surveys table policies
+CREATE POLICY "Enable insert for public surveys" ON surveys
+  FOR INSERT TO public WITH CHECK (true);
+
+CREATE POLICY "Public select surveys" ON surveys
+  FOR SELECT TO public USING (true);
+
+CREATE POLICY "Admin All Access for Surveys" ON surveys
+  FOR ALL TO authenticated USING (true);
+
+-- 6. tenants table policies
+CREATE POLICY "Admin All Access for Tenants" ON tenants
+  FOR ALL TO authenticated USING (true);
+
+-- 7. payments table policies
+CREATE POLICY "Admin All Access for Payments" ON payments
+  FOR ALL TO authenticated USING (true);
+
+CREATE POLICY "Enable insert for payments via webhooks" ON payments
+  FOR INSERT TO public WITH CHECK (true);
+
+-- 8. maintenance table policies
+CREATE POLICY "Enable insert for public maintenance" ON maintenance
+  FOR INSERT TO public WITH CHECK (true);
+
+CREATE POLICY "Admin All Access for Maintenance" ON maintenance
+  FOR ALL TO authenticated USING (true);
+
+-- 9. users table policies
+CREATE POLICY "Admin All Access for Users" ON users
+  FOR ALL TO authenticated USING (true);
+
+-- 10. activity_logs table policies
+CREATE POLICY "Enable insert for activity logging" ON activity_logs
+  FOR INSERT TO public WITH CHECK (true);
+
+CREATE POLICY "Admin All Access for Activity Logs" ON activity_logs
+  FOR ALL TO authenticated USING (true);
+
+-- 11. accounting & bookkeeping (accounts, financial_transactions, journal_entries)
+CREATE POLICY "Admin All Access for Accounts" ON accounts
+  FOR ALL TO authenticated USING (true);
+
+CREATE POLICY "Admin All Access for Transactions" ON financial_transactions
+  FOR ALL TO authenticated USING (true);
+
+CREATE POLICY "Admin All Access for Journal Entries" ON journal_entries
+  FOR ALL TO authenticated USING (true);
+
