@@ -22,8 +22,13 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
         
         {/* Brand identity */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#2E6F40] flex items-center justify-center text-white font-extrabold text-lg font-display select-none shadow-md">
-            SS
+          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-[#2E6F40] select-none shadow-md border border-white/10">
+            <svg viewBox="0 0 100 100" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
+              {/* Top roof chevron */}
+              <path d="M 15 52 Q 50 25 85 52 Q 50 34 15 52 Z" fill="currentColor" />
+              {/* Bottom arch support */}
+              <path d="M 21 78 C 21 68 34 50 50 50 C 66 50 79 68 79 78 C 65 72 50 59 50 59 C 50 59 35 72 21 78 Z" fill="currentColor" />
+            </svg>
           </div>
           <div>
             <div className="flex items-center gap-2">

@@ -1003,11 +1003,11 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               </div>
 
               <h1 className="text-4xl md:text-6xl font-black font-display tracking-tight leading-tight max-w-4xl mx-auto text-white">
-                Hunian Modern, <span className="text-brand-beige">Bebas Ribet</span>
+                Standar Baru Hunian Modern yang Praktis.
               </h1>
               
               <p className="text-slate-200 text-sm md:text-base max-w-2xl mx-auto font-light leading-relaxed">
-                Platform sewa kos eksklusif dengan sistem all-inclusive. Lengkap dengan Wi-Fi, listrik gratis, laundry, housekeeping berkala, tanpa biaya tambahan admin.
+                Di mana pun cabangnya, nikmati kenyamanan kos eksklusif dengan sistem all-inclusive. Lengkap dengan Wi-Fi, token listrik, laundry, dan housekeeping berkala tanpa biaya tambahan.
               </p>
 
               {/* Large Interactive Search Bar with full 3D interactive tilt */}
@@ -1117,13 +1117,13 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                 const tagLine = p.id === 1 
                   ? "Hunian Tenang di Jantung Jakarta Pusat" 
                   : p.id === 2 
-                    ? "Urban Living dengan Sentuhan Industrial Modern" 
+                    ? "Hunian Minimalis Modern di Pusat Kota" 
                     : p.description?.split('.')[0] || "Hunian Nyaman, Strategis & Aman";
 
                 const detailedDesc = p.id === 1
                   ? "Terletak di kawasan residensial yang asri dan tenang, Samara Stay Cempaka Putih menawarkan pengalaman tinggal premium dengan sentuhan alam yang menenangkan."
                   : p.id === 2
-                    ? "Berlokasi strategis di pusat kota Cirebon, La Asiana menghadirkan konsep hunian industrial-modern yang dinamis untuk profesional muda dan mahasiswa."
+                    ? "Berlokasi sangat strategis di Kemayoran Jakarta, menghadirkan konsep hunian minimalis modern yang nyaman, tenang, dan fungsional untuk profesional muda dan mahasiswa."
                     : p.description?.split('.').slice(1).join('.').trim() || p.address;
 
                 return (
@@ -1149,7 +1149,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                     <div className="p-6 md:p-8 flex-1 flex flex-col justify-between space-y-6 text-left">
                       <div className="space-y-3.5">
                         <h3 className="font-extrabold text-brand-primary text-xl md:text-2xl tracking-tight">
-                          {p.name.replace("Kosan Ciputra", "Cempaka Putih").replace("Exclusive Putri", "La Asiana Cirebon")}
+                          {p.name.replace("Kosan Ciputra", "Cempaka Putih").replace("Exclusive Putri", "Kemayoran Jakarta")}
                         </h3>
                         
                         <div className="flex items-start gap-1.5 text-brand-steel text-xs">

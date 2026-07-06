@@ -20,7 +20,7 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
         
         {/* Brand identity */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-brand-primary flex items-center justify-center text-brand-beige select-none shadow-md border border-white/5">
+          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-[#2E6F40] select-none shadow-md border border-white/10">
             <svg viewBox="0 0 100 100" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
               {/* Top roof chevron */}
               <path d="M 15 52 Q 50 25 85 52 Q 50 34 15 52 Z" fill="currentColor" />
