@@ -14,7 +14,7 @@ import {
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend
 } from 'recharts';
-import { Property, Room, Booking, Tenant, Survey, PaymentInvoice, AccountCOA, FinancialTransaction, SystemSettings, Coupon, ActivityLog, JournalEntry } from '../types';
+import { Property, Room, Booking, Tenant, Survey, PaymentInvoice, AccountCOA, FinancialTransaction, SystemSettings, Coupon, ActivityLog, JournalEntry, StandardFacility, FAQItem } from '../types';
 import { database, isSupabaseConfigured } from '../lib/supabase';
 
 interface AdminDashboardProps {
@@ -305,6 +305,9 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
   // System Settings local view states
   const [editedBookingRules, setEditedBookingRules] = useState('');
   const [editedSurveyRules, setEditedSurveyRules] = useState('');
+  const [editedStandardFacilities, setEditedStandardFacilities] = useState<StandardFacility[]>([]);
+  const [editedWhyChooseUs, setEditedWhyChooseUs] = useState<string[]>([]);
+  const [editedFaqs, setEditedFaqs] = useState<FAQItem[]>([]);
 
   // Initial Sync
   useEffect(() => {
@@ -340,6 +343,49 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
       if (rul) {
         setEditedBookingRules(rul.booking_rules);
         setEditedSurveyRules(rul.survey_rules);
+        try {
+          setEditedStandardFacilities(rul.standard_facilities ? JSON.parse(rul.standard_facilities) : [
+            { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
+            { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
+            { icon: "Shield", title: "Security", subtitle: "24 Jam" },
+            { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
+            { icon: "Zap", title: "Listrik", subtitle: "Token/Include" },
+            { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
+            { icon: "Car", title: "Parkir", subtitle: "Motor & Mobil" },
+            { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
+            { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
+          ]);
+        } catch (e) { console.error(e); }
+        try {
+          setEditedWhyChooseUs(rul.why_choose_us ? JSON.parse(rul.why_choose_us) : [
+            "Standar Kebersihan Terjaga",
+            "CCTV 24 Jam di Area Umum",
+            "Maintenance Cepat < 24 Jam",
+            "Admin Responsif via WhatsApp",
+            "Pembayaran Digital Aman",
+            "Kontrak Transparan Tanpa Biaya Tersembunyi"
+          ]);
+        } catch (e) { console.error(e); }
+        try {
+          setEditedFaqs(rul.faqs ? JSON.parse(rul.faqs) : [
+            {
+              question: "Bagaimana cara booking kamar di Samara Stay?",
+              answer: "Anda dapat memilih gedung dan kamar kost di aplikasi kami, tentukan tanggal mulai sewa, dan selesaikan pembayaran DP atau sewa bulan pertama secara instan menggunakan sistem pembayaran digital terintegrasi."
+            },
+            {
+              question: "Apa saja fasilitas yang tersedia di setiap kamar?",
+              answer: "Setiap kamar dilengkapi dengan AC, tempat tidur (kasur queen), kamar mandi dalam dengan water heater, meja kerja, lemari pakaian, dan akses Wi-Fi berkecepatan tinggi."
+            },
+            {
+              question: "Berapa biaya administrasi dan deposit yang harus dibayar?",
+              answer: "Di Samara Stay bebas dari biaya administrasi tersembunyi. Kami menerapkan deposit komitmen sewa yang transparan dan akan dikembalikan utuh pada saat masa sewa Anda selesai."
+            },
+            {
+              question: "Apakah ada kontrak jangka panjang?",
+              answer: "Kami menyediakan kontrak sewa bulanan yang sangat fleksibel tanpa kewajiban komitmen tahunan yang memberatkan, sehingga sangat ideal untuk mahasiswa dan pekerja aktif."
+            }
+          ]);
+        } catch (e) { console.error(e); }
       }
       setLoading(false);
     }
@@ -632,9 +678,12 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
     await database.saveSettings({
       id: 1,
       booking_rules: editedBookingRules,
-      survey_rules: editedSurveyRules
+      survey_rules: editedSurveyRules,
+      standard_facilities: JSON.stringify(editedStandardFacilities),
+      why_choose_us: JSON.stringify(editedWhyChooseUs),
+      faqs: JSON.stringify(editedFaqs)
     });
-    alert("Setelan tata tertib survey & sewa berhasil diperbarui.");
+    alert("Setelan tata tertib, fasilitas standar, why-choose-us, dan FAQ berhasil diperbarui.");
     triggerAppRefresh();
   };
 
@@ -2734,40 +2783,243 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
 
             {/* TAB 7: SYSTEM RULES CONFIG AGREEMENTS */}
             {activeTab === 'settings' && (
-              <div className="bg-white rounded-3xl p-5 md:p-6 shadow-xs border border-gray-100 space-y-6 animate-fade-in font-medium">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800 font-display">Teks Tata Tertib & Peraturan Kontrak</h2>
-                  <p className="text-xs text-gray-400">Atur syarat ketentuan hukum, denda, draf kovenan survey, dan tata tertib sewa hunian kosan.</p>
+              <div className="space-y-6 animate-fade-in font-medium text-xs">
+                
+                {/* 1. Aturan Hukum & Tata Tertib */}
+                <div className="bg-white rounded-3xl p-5 md:p-6 shadow-xs border border-gray-100 space-y-6">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800 font-display">Teks Tata Tertib & Peraturan Kontrak</h2>
+                    <p className="text-xs text-gray-400">Atur syarat ketentuan hukum, denda, draf kovenan survey, dan tata tertib sewa hunian kosan.</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 font-bold uppercase font-mono tracking-wider mb-1.5">KONTRAK SURAT SEWA BULANAN (SYARAT & KETENTUAN)</label>
+                      <textarea
+                        rows={6}
+                        value={editedBookingRules}
+                        onChange={(e) => setEditedBookingRules(e.target.value)}
+                        className="w-full p-3 border border-gray-200 rounded-2xl bg-white text-slate-800 focus:outline-hidden font-sans text-xs leading-relaxed"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 font-bold uppercase font-mono tracking-wider mb-1.5">KOVENAN SURVEY DP JAMINAN (PEMBATALAN & NO-SHOW)</label>
+                      <textarea
+                        rows={6}
+                        value={editedSurveyRules}
+                        onChange={(e) => setEditedSurveyRules(e.target.value)}
+                        className="w-full p-3 border border-gray-200 rounded-2xl bg-white text-slate-800 focus:outline-hidden font-sans text-xs leading-relaxed"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-4">
+                {/* 2. Kelola Fasilitas Standar Setiap Cabang */}
+                <div className="bg-white rounded-3xl p-5 md:p-6 shadow-xs border border-gray-100 space-y-6">
                   <div>
-                    <label className="block text-[10px] text-slate-400 font-bold uppercase font-mono tracking-wider mb-1.5">KONTRAK SURAT SEWA BULANAN (SYARAT & KETENTUAN)</label>
-                    <textarea
-                      rows={6}
-                      value={editedBookingRules}
-                      onChange={(e) => setEditedBookingRules(e.target.value)}
-                      className="w-full p-3 border border-gray-200 rounded-2xl bg-white text-slate-800 focus:outline-hidden font-sans text-xs leading-relaxed"
-                    />
+                    <h2 className="text-lg font-bold text-slate-800 font-display">Kelola Fasilitas Standar Setiap Cabang</h2>
+                    <p className="text-xs text-gray-400">Atur 9 kartu fasilitas standar yang tampil horizontal di halaman utama end-user.</p>
                   </div>
 
-                  <div>
-                    <label className="block text-[10px] text-slate-400 font-bold uppercase font-mono tracking-wider mb-1.5">KOVENAN SURVEY DP JAMINAN (PEMBATALAN & NO-SHOW)</label>
-                    <textarea
-                      rows={6}
-                      value={editedSurveyRules}
-                      onChange={(e) => setEditedSurveyRules(e.target.value)}
-                      className="w-full p-3 border border-gray-200 rounded-2xl bg-white text-slate-800 focus:outline-hidden font-sans text-xs leading-relaxed"
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {editedStandardFacilities.map((fac, idx) => (
+                      <div key={idx} className="border border-gray-100 rounded-2xl p-4 bg-gray-50/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] bg-[#EEF7F0] text-[#2E6F40] px-2 py-0.5 rounded-md font-bold font-mono">Fasilitas #{idx + 1}</span>
+                          <span className="text-slate-400 font-mono text-[10px]">{fac.icon}</span>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <div>
+                            <label className="block text-[9px] text-gray-400 font-bold uppercase mb-1">Ikon Lucide</label>
+                            <select
+                              value={fac.icon}
+                              onChange={(e) => {
+                                const copy = [...editedStandardFacilities];
+                                copy[idx].icon = e.target.value;
+                                setEditedStandardFacilities(copy);
+                              }}
+                              className="w-full p-2 rounded-xl border border-gray-200 bg-white font-mono text-[11px]"
+                            >
+                              <option value="Clock">Clock (Jam Operasional)</option>
+                              <option value="LogIn">LogIn (Check In)</option>
+                              <option value="Shield">Shield (Security)</option>
+                              <option value="Wifi">Wifi (Internet)</option>
+                              <option value="Zap">Zap (Listrik)</option>
+                              <option value="Droplet">Droplet (Air Bersih)</option>
+                              <option value="Car">Car (Parkir Kendaraan)</option>
+                              <option value="Shirt">Shirt (Laundry)</option>
+                              <option value="Sparkles">Sparkles (Pembersihan)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[9px] text-gray-400 font-bold uppercase mb-1">Nama Fasilitas / Judul</label>
+                            <input
+                              type="text"
+                              value={fac.title}
+                              onChange={(e) => {
+                                const copy = [...editedStandardFacilities];
+                                copy[idx].title = e.target.value;
+                                setEditedStandardFacilities(copy);
+                              }}
+                              className="w-full p-2 rounded-xl border border-gray-200 bg-white font-bold text-slate-800"
+                              placeholder="e.g. WiFi"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[9px] text-gray-400 font-bold uppercase mb-1">Keterangan / Sub-judul</label>
+                            <input
+                              type="text"
+                              value={fac.subtitle}
+                              onChange={(e) => {
+                                const copy = [...editedStandardFacilities];
+                                copy[idx].subtitle = e.target.value;
+                                setEditedStandardFacilities(copy);
+                              }}
+                              className="w-full p-2 rounded-xl border border-gray-200 bg-white font-medium text-slate-500"
+                              placeholder="e.g. 100 Mbps"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Kelola Mengapa Memilih Samara */}
+                <div className="bg-white rounded-3xl p-5 md:p-6 shadow-xs border border-gray-100 space-y-6">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800 font-display">Kelola Mengapa Memilih Samara</h2>
+                      <p className="text-xs text-gray-400">Atur alasan-alasan keunggulan kompetitif yang meyakinkan calon penghuni.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditedWhyChooseUs([...editedWhyChooseUs, ""])}
+                      className="text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#EEF7F0]/80 transition-colors font-bold px-3 py-1.5 rounded-xl cursor-pointer text-[10px]"
+                    >
+                      + Tambah Alasan
+                    </button>
                   </div>
 
+                  <div className="space-y-3">
+                    {editedWhyChooseUs.map((reason, idx) => (
+                      <div key={idx} className="flex items-center gap-3">
+                        <span className="w-6 h-6 rounded-full bg-[#EEF7F0] text-[#2E6F40] flex items-center justify-center font-bold font-mono shrink-0">{idx + 1}</span>
+                        <input
+                          type="text"
+                          value={reason}
+                          onChange={(e) => {
+                            const copy = [...editedWhyChooseUs];
+                            copy[idx] = e.target.value;
+                            setEditedWhyChooseUs(copy);
+                          }}
+                          className="flex-1 p-2.5 rounded-xl border border-gray-200 bg-white font-bold text-slate-800"
+                          placeholder="Masukkan alasan / poin keunggulan..."
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const copy = editedWhyChooseUs.filter((_, i) => i !== idx);
+                            setEditedWhyChooseUs(copy);
+                          }}
+                          className="text-red-500 hover:text-red-600 p-2 rounded-xl hover:bg-red-50 cursor-pointer"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                    {editedWhyChooseUs.length === 0 && (
+                      <p className="text-gray-400 italic text-center py-4">Belum ada poin alasan. Silakan klik "+ Tambah Alasan".</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* 4. Kelola FAQ */}
+                <div className="bg-white rounded-3xl p-5 md:p-6 shadow-xs border border-gray-100 space-y-6">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800 font-display">Kelola Pertanyaan yang Sering Diajukan (FAQ)</h2>
+                      <p className="text-xs text-gray-400">Atur draf pertanyaan & jawaban yang sering diajukan di bagian terbawah landing page.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditedFaqs([...editedFaqs, { question: "", answer: "" }])}
+                      className="text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#EEF7F0]/80 transition-colors font-bold px-3 py-1.5 rounded-xl cursor-pointer text-[10px]"
+                    >
+                      + Tambah FAQ Baru
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {editedFaqs.map((faq, idx) => (
+                      <div key={idx} className="border border-gray-100 rounded-2xl p-4 space-y-3 bg-gray-50/50 relative">
+                        <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                          <span className="font-bold text-slate-800 font-mono text-[10px]">FAQ Item #{idx + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const copy = editedFaqs.filter((_, i) => i !== idx);
+                              setEditedFaqs(copy);
+                            }}
+                            className="text-red-500 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 cursor-pointer"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[9px] text-gray-400 font-bold uppercase mb-1">Pertanyaan</label>
+                            <input
+                              type="text"
+                              value={faq.question}
+                              onChange={(e) => {
+                                const copy = [...editedFaqs];
+                                copy[idx].question = e.target.value;
+                                setEditedFaqs(copy);
+                              }}
+                              className="w-full p-2.5 rounded-xl border border-gray-200 bg-white font-bold text-slate-800"
+                              placeholder="e.g. Bagaimana cara booking?"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[9px] text-gray-400 font-bold uppercase mb-1">Jawaban</label>
+                            <textarea
+                              rows={3}
+                              value={faq.answer}
+                              onChange={(e) => {
+                                const copy = [...editedFaqs];
+                                copy[idx].answer = e.target.value;
+                                setEditedFaqs(copy);
+                              }}
+                              className="w-full p-2.5 rounded-xl border border-gray-200 bg-white font-light text-slate-600 leading-relaxed"
+                              placeholder="Tulis jawaban lengkap di sini..."
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {editedFaqs.length === 0 && (
+                      <p className="text-gray-400 italic text-center py-4">Belum ada FAQ. Silakan klik "+ Tambah FAQ Baru".</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* 5. Aksi Simpan Semua Perubahan */}
+                <div className="flex justify-end bg-gray-50 p-4 rounded-2xl border border-gray-100">
                   <button
                     onClick={handleSaveSystemSettings}
-                    className="bg-brand-green hover:bg-brand-green-hover text-white transition-colors py-3 px-6 rounded-2xl text-xs font-bold shadow-xs cursor-pointer"
+                    className="bg-brand-green hover:bg-brand-green-hover text-white transition-colors py-3 px-8 rounded-2xl text-xs font-bold shadow-md cursor-pointer"
                   >
-                    Simpan Perubahan Aturan
+                    Simpan Seluruh Setelan & Homepage Content
                   </button>
                 </div>
+
               </div>
             )}
 

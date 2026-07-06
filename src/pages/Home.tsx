@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { database } from '../lib/supabase';
-import { Property, Room, Booking, Survey, Coupon } from '../types';
+import { Property, Room, Booking, Survey, Coupon, SystemSettings, StandardFacility, FAQItem } from '../types';
 import BookingForm from '../components/transaction/BookingForm';
 import InvoiceCard from '../components/transaction/InvoiceCard';
 import Loader from '../components/common/Loader';
@@ -12,7 +12,7 @@ import {
   MapPin, Wifi, Zap, ChevronLeft, Building2, Search, Calendar, Map, 
   User, CheckCircle, Heart, Tv, Utensils, Car, Info, X, Bed, RotateCw, 
   Play, Volume2, ArrowRight, Star, AlertCircle, ChevronRight, MapPinned,
-  Shirt, Sparkle, Compass, Grid, MapIcon, CompassIcon, InfoIcon
+  Shirt, Sparkle, Compass, Grid, MapIcon, CompassIcon, InfoIcon, LogIn, Droplet, Check
 } from 'lucide-react';
 
 interface HomeProps {
@@ -24,6 +24,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Core Page Navigation State
@@ -108,14 +109,16 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
     async function loadData() {
       try {
         setLoading(true);
-        const [propsData, roomsData, couponsData] = await Promise.all([
+        const [propsData, roomsData, couponsData, settingsData] = await Promise.all([
           database.fetchProperties(),
           database.fetchRooms(),
-          database.fetchCoupons()
+          database.fetchCoupons(),
+          database.fetchSettings()
         ]);
         setProperties(propsData);
         setRooms(roomsData);
         setCoupons(couponsData);
+        setSettings(settingsData);
         if (propsData && propsData.length > 0) {
           const maxPriceVal = Math.max(...propsData.map(p => p.price));
           setPriceRange(Math.max(5000000, maxPriceVal));
@@ -138,6 +141,140 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
       window.removeEventListener('samara_state_changed', handleStateChange);
     };
   }, [triggerAppRefresh]);
+
+  const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+  const [activeTestimonialIdx, setActiveTestimonialIdx] = useState<number>(0);
+
+  const testimonials = [
+    {
+      initials: "AP",
+      bgClass: "bg-brand-primary",
+      name: "Aditya Pratama",
+      role: "Mahasiswa UI - Depok",
+      text: "Sangat puas tinggal di Samara Stay! WiFi ngebut sekali buat main game dan kerja remote, layanan laundry gratis mingguan sangat meringankan beban pas lagi sibuk kuliah."
+    },
+    {
+      initials: "SD",
+      bgClass: "bg-brand-steel",
+      name: "Sarah Devina",
+      role: "Content Creator - Jakarta",
+      text: "Kamar kostnya estetik dan super bersih, persis dengan yang ada di foto. Semua urusan air, kebersihan, listrik beres semua. CS ramah dan proses payment otomatis lewat Midtrans."
+    },
+    {
+      initials: "RH",
+      bgClass: "bg-brand-taupe",
+      name: "Rian Hidayat",
+      role: "System Analyst - Jaksel",
+      text: "Keamanan CCTV dan kunci elektronik terjamin banget. Layanan perbaikan AC gratis dikerjakan dengan sigap pas saya lapor kendala via sistem admin. Recommended kos eksklusif!"
+    },
+    {
+      initials: "JA",
+      bgClass: "bg-[#2E6F40]",
+      name: "Jessica Amanda",
+      role: "Product Manager - Jakbar",
+      text: "Lingkungan sangat kondusif untuk istirahat setelah seharian kerja di kantor SCBD. Parkiran luas dan aman, serta staf housekeeping-nya jujur dan ramah banget."
+    },
+    {
+      initials: "FA",
+      bgClass: "bg-amber-600",
+      name: "Farhan Alamsyah",
+      role: "Tech Professional - BSD",
+      text: "Proses booking kamar super gampang dan bisa langsung dapet kovenan sewa digital. Manajemen transparan dan gak ribet kalau mau perpanjang kontrak bulanan."
+    }
+  ];
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActiveTestimonialIdx(prev => (prev + 1) % testimonials.length);
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [testimonials.length]);
+
+  // Helper to render lucide icon from settings
+  const renderSettingIcon = (iconName: string) => {
+    switch (iconName) {
+      case 'Clock': return <Clock size={24} className="text-[#2E6F40]" />;
+      case 'LogIn': return <LogIn size={24} className="text-[#2E6F40]" />;
+      case 'Shield': return <Shield size={24} className="text-[#2E6F40]" />;
+      case 'Wifi': return <Wifi size={24} className="text-[#2E6F40]" />;
+      case 'Zap': return <Zap size={24} className="text-[#2E6F40]" />;
+      case 'Droplet': return <Droplet size={24} className="text-[#2E6F40]" />;
+      case 'Car': return <Car size={24} className="text-[#2E6F40]" />;
+      case 'Shirt': return <Shirt size={24} className="text-[#2E6F40]" />;
+      case 'Sparkles': return <Sparkles size={24} className="text-[#2E6F40]" />;
+      default: return <Info size={24} className="text-[#2E6F40]" />;
+    }
+  };
+
+  // Parse Standard Facilities
+  const standardFacilities: StandardFacility[] = (() => {
+    try {
+      if (settings?.standard_facilities) {
+        return JSON.parse(settings.standard_facilities);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return [
+      { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
+      { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
+      { icon: "Shield", title: "Security", subtitle: "24 Jam" },
+      { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
+      { icon: "Zap", title: "Listrik", subtitle: "Token/Include" },
+      { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
+      { icon: "Car", title: "Parkir", subtitle: "Motor & Mobil" },
+      { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
+      { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
+    ];
+  })();
+
+  // Parse Why Choose Us
+  const whyChooseUs: string[] = (() => {
+    try {
+      if (settings?.why_choose_us) {
+        return JSON.parse(settings.why_choose_us);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return [
+      "Standar Kebersihan Terjaga",
+      "CCTV 24 Jam di Area Umum",
+      "Maintenance Cepat < 24 Jam",
+      "Admin Responsif via WhatsApp",
+      "Pembayaran Digital Aman",
+      "Kontrak Transparan Tanpa Biaya Tersembunyi"
+    ];
+  })();
+
+  // Parse FAQs
+  const faqs: FAQItem[] = (() => {
+    try {
+      if (settings?.faqs) {
+        return JSON.parse(settings.faqs);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return [
+      {
+        question: "Bagaimana cara booking kamar di Samara Stay?",
+        answer: "Anda dapat memilih gedung dan kamar kost di aplikasi kami, tentukan tanggal mulai sewa, dan selesaikan pembayaran DP atau sewa bulan pertama secara instan menggunakan sistem pembayaran digital terintegrasi."
+      },
+      {
+        question: "Apa saja fasilitas yang tersedia di setiap kamar?",
+        answer: "Setiap kamar dilengkapi dengan AC, tempat tidur (kasur queen), kamar mandi dalam dengan water heater, meja kerja, lemari pakaian, dan akses Wi-Fi berkecepatan tinggi."
+      },
+      {
+        question: "Berapa biaya administrasi dan deposit yang harus dibayar?",
+        answer: "Di Samara Stay bebas dari biaya administrasi tersembunyi. Kami menerapkan deposit komitmen sewa yang transparan dan akan dikembalikan utuh pada saat masa sewa Anda selesai."
+      },
+      {
+        question: "Apakah ada kontrak jangka panjang?",
+        answer: "Kami menyediakan kontrak sewa bulanan yang sangat fleksibel tanpa kewajiban komitmen tahunan yang memberatkan, sehingga sangat ideal untuk mahasiswa dan pekerja aktif."
+      }
+    ];
+  })();
 
   const handleApplyCoupon = () => {
     setCouponError('');
@@ -648,7 +785,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               <div class="px-2 py-0.5 rounded-md text-[9px] font-black font-mono shadow-md border whitespace-nowrap transition-all ${
                 isSelected 
                   ? 'bg-amber-500 text-black border-amber-600 font-extrabold scale-110 z-50' 
-                  : 'bg-white text-[#2D3A44] border-[#DACFBE] hover:bg-[#FAF8F5]'
+                  : 'bg-white text-[#2D3A44] border-[#DACFBE] hover:bg-[#F8F9FA]'
               }">
                 Rp ${(p.price / 1000000).toFixed(1)}Jt
               </div>
@@ -755,10 +892,10 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
   }
 
   return (
-    <div className="bg-[#FAF8F5] min-h-screen text-brand-primary font-sans pb-16">
+    <div className="bg-[#F8F9FA] min-h-screen text-brand-primary font-sans pb-16">
       
       {/* Dynamic Sub-header Navigation Bar */}
-      <div className="bg-brand-primary border-b border-brand-steel/30 sticky top-[65px] z-40 px-4 md:px-8 py-3.5 shadow-sm flex justify-between items-center text-xs text-[#FAF8F5]">
+      <div className="bg-brand-primary border-b border-brand-steel/30 sticky top-[65px] z-40 px-4 md:px-8 py-3.5 shadow-sm flex justify-between items-center text-xs text-[#F8F9FA]">
         <div className="flex items-center gap-1.5 md:gap-3">
           <button 
             onClick={() => {
@@ -809,7 +946,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
             onMouseLeave={() => {
               setHeroMouse({ x: 0, y: 0 });
             }}
-            className="relative py-28 px-4 md:px-8 bg-gradient-to-br from-brand-primary via-brand-darker to-brand-primary border-b border-brand-steel/30 overflow-hidden text-[#FAF8F5] perspective-1000 preserve-3d"
+            className="relative py-28 px-4 md:px-8 bg-gradient-to-br from-brand-primary via-brand-darker to-brand-primary border-b border-brand-steel/30 overflow-hidden text-[#F8F9FA] perspective-1000 preserve-3d"
           >
             {/* Background Image Layer - slow opposite movement for classic parallax */}
             <div 
@@ -843,7 +980,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                 transform: `translate3d(${heroMouse.x * -45}px, ${heroMouse.y * -45}px, 80px) rotate(${heroMouse.y * -12}deg)`
               }}
             >
-              <div className="w-9 h-9 rounded-full bg-[#FAF8F5] flex items-center justify-center text-brand-primary shadow">
+              <div className="w-9 h-9 rounded-full bg-[#F8F9FA] flex items-center justify-center text-brand-primary shadow">
                 <Sparkles size={14} className="text-amber-500 animate-bounce" />
               </div>
               <div className="text-left">
@@ -876,7 +1013,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               {/* Large Interactive Search Bar with full 3D interactive tilt */}
               <form 
                 onSubmit={handleSearchTrigger} 
-                className="bg-white/95 backdrop-blur-md rounded-3xl p-5 md:p-6 border border-brand-beige/65 w-full max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-4 text-left shadow-2xl mt-12 text-brand-primary transition-all duration-300 ease-out"
+                className="bg-white/95 backdrop-blur-md rounded-3xl p-5 md:p-6 border border-brand-beige/65 w-full max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4 text-left shadow-2xl mt-12 text-brand-primary transition-all duration-300 ease-out"
                 style={{
                   transform: `perspective(1000px) rotateX(${heroMouse.y * -8}deg) rotateY(${heroMouse.x * 8}deg) translate3d(${heroMouse.x * 15}px, ${heroMouse.y * 15}px, 35px)`,
                   transformStyle: 'preserve-3d'
@@ -884,19 +1021,18 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               >
                 
                 <div className="transition-all duration-300 hover:translate-z-6">
-                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">PILIH LOKASI / KOTA</label>
+                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">CABANG YANG TERSEDIA</label>
                   <div className="relative">
                     <MapPin className="absolute left-3 top-3 text-brand-taupe" size={16} />
                     <select
                       value={searchLocation}
                       onChange={(e) => setSearchLocation(e.target.value)}
-                      className="w-full bg-[#FAF8F5] border border-brand-beige rounded-xl pl-9 pr-3 py-2.5 text-xs font-medium text-brand-primary focus:outline-none focus:border-brand-primary cursor-pointer"
+                      className="w-full bg-[#F8F9FA] border border-brand-beige rounded-xl pl-9 pr-3 py-2.5 text-xs font-medium text-brand-primary focus:outline-none focus:border-brand-primary cursor-pointer"
                     >
-                      <option value="">Semua Lokasi / Kota</option>
-                      <option value="Jakarta Selatan">Jakarta Selatan</option>
-                      <option value="Jakarta Barat">Jakarta Barat</option>
-                      <option value="Depok">Depok</option>
-                      <option value="Jakarta">DKI Jakarta</option>
+                      <option value="">Semua Cabang</option>
+                      {properties.map(p => (
+                        <option key={p.id} value={p.name}>{p.name}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -910,30 +1046,15 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                       value={searchCheckInDate}
                       onChange={(e) => setSearchCheckInDate(e.target.value)}
                       min={new Date().toISOString().split('T')[0]}
-                      className="w-full bg-[#FAF8F5] border border-brand-beige rounded-xl pl-9 pr-3 py-2.5 text-xs font-mono text-brand-primary focus:outline-none focus:border-brand-primary"
+                      className="w-full bg-[#F8F9FA] border border-brand-beige rounded-xl pl-9 pr-3 py-2.5 text-xs font-mono text-brand-primary focus:outline-none focus:border-brand-primary"
                     />
-                  </div>
-                </div>
-
-                <div className="transition-all duration-300 hover:translate-z-6">
-                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">DURASI & TIPE SEWA</label>
-                  <div className="relative">
-                    <Clock className="absolute left-3 top-3 text-brand-taupe" size={16} />
-                    <select
-                      value={searchDurationType}
-                      onChange={(e) => setSearchDurationType(e.target.value as any)}
-                      className="w-full bg-[#FAF8F5] border border-brand-beige rounded-xl pl-9 pr-3 py-2.5 text-xs font-medium text-brand-primary focus:outline-none focus:border-brand-primary cursor-pointer"
-                    >
-                      <option value="monthly">Bulanan (Kontrak Fleksibel)</option>
-                      <option value="daily">Harian (Transit & Liburan)</option>
-                    </select>
                   </div>
                 </div>
 
                 <div className="flex items-end transition-all duration-300 hover:translate-z-8">
                   <button
                     type="submit"
-                    className="w-full bg-brand-primary hover:bg-brand-steel text-white font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer"
+                    className="w-full bg-brand-primary hover:bg-brand-steel text-white font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer h-[42px]"
                   >
                     <Search size={15} />
                     CARI KOS SEKARANG
@@ -945,145 +1066,133 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
             </div>
           </div>
 
-          {/* Keunggulan Utama (Value Proposition) */}
-          <div className="max-w-6xl mx-auto px-4 text-center space-y-10">
-            <div className="space-y-3">
-              <span className="text-[10px] font-extrabold text-brand-primary tracking-widest uppercase font-mono bg-brand-beige/35 px-3 py-1 rounded-md border border-brand-beige/70">Value Proposition</span>
-              <h2 className="text-2xl md:text-3xl font-black text-brand-primary">Semua Kebutuhan Sudah All-Inclusive</h2>
-              <p className="text-brand-steel text-xs md:text-sm max-w-xl mx-auto font-light">
-                Tinggal bawa koper. Anda tidak akan pernah ditagih biaya admin siluman atau pusing dengan urusan tagihan utilitas terpisah.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 perspective-1000">
-              
-              <div className="bg-white border border-brand-beige rounded-2xl p-6 space-y-3 flex flex-col items-center shadow-sm tilt-card-3d cursor-pointer group">
-                <div className="w-12 h-12 rounded-xl bg-brand-beige/25 border border-brand-beige flex items-center justify-center text-brand-primary tilt-inner-depth transition-transform duration-300 group-hover:scale-110">
-                  <Wifi size={20} />
+          {/* Fasilitas Standar Setiap Cabang */}
+          <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-8">
+            <h2 className="text-2xl md:text-3xl font-black text-brand-primary font-display tracking-tight text-left">
+              Fasilitas Standar Setiap Cabang
+            </h2>
+            
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-4">
+              {standardFacilities.map((fac, idx) => (
+                <div 
+                  key={idx} 
+                  className="bg-white border border-brand-beige/85 rounded-3xl p-5 text-center flex flex-col items-center justify-center space-y-3 shadow-sm hover:shadow-md hover:border-emerald-600/30 transition-all duration-300"
+                >
+                  <div className="w-12 h-12 rounded-full bg-[#EEF7F0] flex items-center justify-center shadow-inner">
+                    {renderSettingIcon(fac.icon)}
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="font-extrabold text-brand-primary text-xs leading-tight tracking-tight">{fac.title}</h4>
+                    <p className="text-[11px] text-brand-steel font-medium">{fac.subtitle}</p>
+                  </div>
                 </div>
-                <h4 className="font-extrabold text-brand-primary text-xs tilt-inner-depth">Free Wi-Fi</h4>
-                <p className="text-[11px] text-brand-steel leading-relaxed font-light">Koneksi berkecepatan tinggi di setiap sudut gedung.</p>
-              </div>
-
-              <div className="bg-white border border-brand-beige rounded-2xl p-6 space-y-3 flex flex-col items-center shadow-sm tilt-card-3d cursor-pointer group">
-                <div className="w-12 h-12 rounded-xl bg-brand-beige/25 border border-brand-beige flex items-center justify-center text-brand-primary tilt-inner-depth transition-transform duration-300 group-hover:scale-110">
-                  <Zap size={20} />
-                </div>
-                <h4 className="font-extrabold text-brand-primary text-xs tilt-inner-depth">Termasuk Listrik</h4>
-                <p className="text-[11px] text-brand-steel leading-relaxed font-light">Bebas AC seharian tanpa takut tagihan bulanan membengkak.</p>
-              </div>
-
-              <div className="bg-white border border-brand-beige rounded-2xl p-6 space-y-3 flex flex-col items-center shadow-sm tilt-card-3d cursor-pointer group">
-                <div className="w-12 h-12 rounded-xl bg-brand-beige/25 border border-brand-beige flex items-center justify-center text-brand-primary tilt-inner-depth transition-transform duration-300 group-hover:scale-110">
-                  <Shirt size={20} />
-                </div>
-                <h4 className="font-extrabold text-brand-primary text-xs tilt-inner-depth">Gratis Laundry</h4>
-                <p className="text-[11px] text-brand-steel leading-relaxed font-light">Layanan cuci gosok pakaian mingguan tanpa repot.</p>
-              </div>
-
-              <div className="bg-white border border-brand-beige rounded-2xl p-6 space-y-3 flex flex-col items-center shadow-sm tilt-card-3d cursor-pointer group">
-                <div className="w-12 h-12 rounded-xl bg-brand-beige/25 border border-brand-beige flex items-center justify-center text-brand-primary tilt-inner-depth transition-transform duration-300 group-hover:scale-110">
-                  <Sparkles size={20} />
-                </div>
-                <h4 className="font-extrabold text-brand-primary text-xs tilt-inner-depth">Housecleaning</h4>
-                <p className="text-[11px] text-brand-steel leading-relaxed font-light">Pembersihan kamar berkala oleh tim housekeeping profesional.</p>
-              </div>
-
-              <div className="bg-white border border-brand-beige rounded-2xl p-6 space-y-3 flex flex-col items-center shadow-sm col-span-2 md:col-span-1 tilt-card-3d cursor-pointer group">
-                <div className="w-12 h-12 rounded-xl bg-brand-beige/25 border border-brand-beige flex items-center justify-center text-brand-primary tilt-inner-depth transition-transform duration-300 group-hover:scale-110">
-                  <CheckCircle size={20} />
-                </div>
-                <h4 className="font-extrabold text-brand-primary text-xs tilt-inner-depth">Bebas Biaya Admin</h4>
-                <p className="text-[11px] text-brand-steel leading-relaxed font-light">Pembayaran transparan jujur sesuai nominal tertera.</p>
-              </div>
-
+              ))}
             </div>
           </div>
 
           {/* Rekomendasi Properti Terpopuler */}
-          <div className="max-w-6xl mx-auto px-4 space-y-10">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-brand-beige pb-5">
-              <div className="space-y-1.5">
-                <span className="text-[10px] font-extrabold text-brand-primary tracking-widest uppercase font-mono bg-brand-beige/35 px-2.5 py-1 rounded-md border border-brand-beige/70">Rekomendasi Populer</span>
-                <h2 className="text-2xl font-black text-brand-primary">Gedung Estetis Samara Stay</h2>
-                <p className="text-brand-steel text-xs font-light">Koleksi kos eksklusif dengan fasilitas terlengkap yang paling diminati penghuni.</p>
-              </div>
-              <button
-                onClick={() => setUserPage('search')}
-                className="text-xs text-brand-primary font-extrabold flex items-center gap-1 hover:underline cursor-pointer font-mono"
-              >
-                LIHAT SEMUA PROPERTI <ArrowRight size={14} />
-              </button>
+          <div id="cabang-samara-stay-section" className="max-w-6xl mx-auto px-4 space-y-12 py-12">
+            <div className="text-center space-y-2">
+              <span className="text-[10px] md:text-xs font-bold text-[#1D603A] tracking-[0.2em] uppercase font-mono">
+                LOKASI KAMI
+              </span>
+              <h2 className="text-3xl md:text-4xl font-bold text-brand-primary tracking-tight font-serif">
+                Pilih Cabang Samara Stay
+              </h2>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 perspective-1000">
-              {properties.slice(0, 3).map(p => {
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-10">
+              {properties.slice(0, 4).map((p, idx) => {
                 const pRooms = rooms.filter(r => r.property_id === p.id);
                 const availableCount = pRooms.filter(r => r.status === 'available').length;
+                
+                // Color themes alternating between green and navy precisely as requested
+                const isGreen = idx % 2 === 0;
+                const themeBadgeClass = isGreen ? 'bg-[#1D603A]' : 'bg-[#2E3545]';
+                const themeBtnClass = isGreen 
+                  ? 'bg-[#205D41] hover:bg-[#164731] text-white' 
+                  : 'bg-[#374457] hover:bg-[#273241] text-white';
+
+                // Determine beautiful taglines & descriptions based on actual data
+                const tagLine = p.id === 1 
+                  ? "Hunian Tenang di Jantung Jakarta Pusat" 
+                  : p.id === 2 
+                    ? "Urban Living dengan Sentuhan Industrial Modern" 
+                    : p.description?.split('.')[0] || "Hunian Nyaman, Strategis & Aman";
+
+                const detailedDesc = p.id === 1
+                  ? "Terletak di kawasan residensial yang asri dan tenang, Samara Stay Cempaka Putih menawarkan pengalaman tinggal premium dengan sentuhan alam yang menenangkan."
+                  : p.id === 2
+                    ? "Berlokasi strategis di pusat kota Cirebon, La Asiana menghadirkan konsep hunian industrial-modern yang dinamis untuk profesional muda dan mahasiswa."
+                    : p.description?.split('.').slice(1).join('.').trim() || p.address;
+
                 return (
                   <div 
                     key={p.id}
-                    onClick={() => {
-                      setActiveProperty(p);
-                      setUserPage('detail');
-                    }}
-                    className="bg-white border border-brand-beige rounded-3xl overflow-hidden shadow-sm tilt-card-3d flex flex-col group cursor-pointer"
+                    id={`cabang-card-${p.id}`}
+                    className="bg-white border border-brand-beige rounded-[24px] overflow-hidden shadow-sm flex flex-col group transition-all duration-300 hover:shadow-md"
                   >
-                    <div className="relative h-56 bg-slate-900 overflow-hidden select-none">
+                    <div className="relative h-[280px] sm:h-[340px] bg-slate-100 overflow-hidden select-none">
                       <img 
                         src={p.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=600&q=80"} 
                         alt={p.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-500"
                         referrerPolicy="no-referrer"
                       />
-                      <div className="absolute top-4 left-4">
-                        <span className={`px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase font-mono shadow-md ${
-                          p.type === 'putri' 
-                            ? 'bg-brand-taupe text-[#FAF8F5] border border-brand-taupe/30' 
-                            : p.type === 'putra' 
-                              ? 'bg-brand-steel text-[#FAF8F5] border border-brand-steel/30' 
-                              : 'bg-brand-primary text-[#FAF8F5] border border-brand-primary/30'
-                        }`}>
-                          KOS {p.type}
+                      <div className="absolute top-4 right-4">
+                        <span className={`px-4 py-1 rounded-md text-[10px] font-bold text-white uppercase tracking-wider ${themeBadgeClass}`}>
+                          Tersedia
                         </span>
-                      </div>
-                      
-                      <div className="absolute bottom-4 right-4 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl text-[10px] font-bold text-brand-primary border border-brand-beige shadow-sm flex items-center gap-1.5 tilt-inner-depth">
-                        <CheckCircle size={11} className="text-brand-steel" />
-                        <span>{availableCount} Unit Tersedia</span>
                       </div>
                     </div>
 
-                    <div className="p-5 flex-1 flex flex-col justify-between space-y-4 text-brand-primary">
-                      <div className="space-y-1.5">
-                        <h3 className="font-extrabold text-brand-primary text-base font-display group-hover:text-brand-steel transition-colors tilt-inner-depth">{p.name}</h3>
-                        <div className="flex items-center gap-1.5 text-brand-steel text-xs">
-                          <MapPin size={13} className="text-brand-taupe shrink-0" />
-                          <span className="truncate">{p.address}</span>
+                    <div className="p-6 md:p-8 flex-1 flex flex-col justify-between space-y-6 text-left">
+                      <div className="space-y-3.5">
+                        <h3 className="font-extrabold text-brand-primary text-xl md:text-2xl tracking-tight">
+                          {p.name.replace("Kosan Ciputra", "Cempaka Putih").replace("Exclusive Putri", "La Asiana Cirebon")}
+                        </h3>
+                        
+                        <div className="flex items-start gap-1.5 text-brand-steel text-xs">
+                          <MapPin size={15} className="text-brand-taupe shrink-0 mt-0.5" />
+                          <span className="font-medium text-slate-500">{tagLine}</span>
                         </div>
+                        
+                        <p className="text-brand-steel text-xs font-light leading-relaxed">
+                          {detailedDesc}
+                        </p>
                       </div>
 
-                      <div className="flex flex-wrap gap-1">
-                        {p.facilities.slice(0, 3).map((f) => (
-                          <span key={f} className="text-[10px] bg-[#FAF8F5] border border-brand-beige/80 text-brand-steel font-semibold px-2 py-1 rounded-md">
-                            {f}
-                          </span>
-                        ))}
-                        {p.facilities.length > 3 && (
-                          <span className="text-[10px] bg-[#FAF8F5] border border-brand-beige/80 text-brand-taupe font-bold px-2 py-1 rounded-md">
-                            +{p.facilities.length - 3}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="border-t border-brand-beige pt-4 flex items-center justify-between">
-                        <div>
-                          <span className="text-[10px] text-brand-steel block uppercase font-mono font-bold leading-none mb-1">Mulai Dari</span>
-                          <span className="text-sm font-black text-brand-primary font-mono">{formatRupiah(p.price)}<span className="text-[10px] text-brand-steel font-sans font-light">/bln</span></span>
+                      <div className="space-y-5 pt-5 border-t border-brand-beige/50">
+                        <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                          <div className="flex items-center gap-3 text-brand-steel">
+                            <span className="flex items-center gap-1 font-bold text-brand-primary">
+                              <Star size={14} className="text-amber-500 fill-amber-500" />
+                              4.9
+                            </span>
+                            <span className="w-1.5 h-1.5 rounded-full bg-brand-beige" />
+                            <span className="font-medium">60+ penghuni</span>
+                          </div>
+                          
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-brand-steel text-[10px] font-medium uppercase font-mono tracking-wider">Mulai Rp</span>
+                            <span className="text-base font-extrabold text-brand-primary">
+                              {p.price === 1800000 ? "3.200.000" : p.price === 2200000 ? "2.800.000" : formatRupiah(p.price).replace("Rp", "").trim()}
+                            </span>
+                          </div>
                         </div>
-                        <span className="text-xs bg-brand-primary text-white px-3 py-1.5 rounded-xl font-extrabold flex items-center gap-1 transition-all group-hover:bg-brand-steel tilt-inner-depth">
-                          Pesan <ChevronRight size={12} />
-                        </span>
+
+                        <button
+                          type="button"
+                          id={`btn-detail-cabang-${p.id}`}
+                          onClick={() => {
+                            setActiveProperty(p);
+                            setUserPage('detail');
+                          }}
+                          className={`w-fit inline-flex items-center gap-2 px-6 py-2.5 rounded-full font-bold text-xs cursor-pointer transition-all ${themeBtnClass}`}
+                        >
+                          Lihat Detail Cabang
+                          <ArrowRight size={14} />
+                        </button>
                       </div>
                     </div>
 
@@ -1093,8 +1202,41 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
             </div>
           </div>
 
+          {/* Mengapa Memilih Samara */}
+          <div className="bg-[#EEF7F0]/30 py-16 border-y border-brand-beige/50">
+            <div className="max-w-6xl mx-auto px-4 grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
+              <div className="md:col-span-5 space-y-4 text-left">
+                <span className="text-[10px] font-extrabold text-[#2E6F40] tracking-widest uppercase font-mono bg-[#EEF7F0] px-3 py-1 rounded-md border border-[#2E6F40]/25">
+                  Kenapa Samara Stay?
+                </span>
+                <h2 className="text-3xl font-black text-brand-primary font-display tracking-tight leading-tight">
+                  Mengapa Memilih Samara Stay
+                </h2>
+                <p className="text-brand-steel text-sm font-light leading-relaxed">
+                  Kami berkomitmen menyediakan standar hunian kost terbaik dengan kenyamanan ekstra, kepastian layanan, dan transparansi penuh tanpa ribet untuk kelancaran masa depan Anda.
+                </p>
+              </div>
+              
+              <div className="md:col-span-7 space-y-3">
+                {whyChooseUs.map((item, idx) => (
+                  <div 
+                    key={idx} 
+                    className="flex items-center gap-4 bg-white border border-brand-beige/60 p-4 rounded-2xl shadow-sm hover:shadow transition-all duration-250"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-[#2E6F40] text-white flex items-center justify-center shrink-0 shadow-sm shadow-[#2E6F40]/15">
+                      <Check size={14} className="stroke-[3]" />
+                    </div>
+                    <span className="font-extrabold text-brand-primary text-xs md:text-sm tracking-tight text-left">
+                      {item}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* Testimoni Penghuni */}
-          <div className="bg-[#FAF8F5] py-16 border-y border-brand-beige">
+          <div className="bg-[#F8F9FA] py-16 border-y border-brand-beige">
             <div className="max-w-6xl mx-auto px-4 space-y-10">
               <div className="text-center space-y-3">
                 <span className="text-[10px] font-extrabold text-brand-primary tracking-widest uppercase font-mono bg-brand-beige/35 px-2.5 py-1 rounded-md border border-brand-beige/70">Testimoni Penghuni</span>
@@ -1102,48 +1244,106 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                 <p className="text-brand-steel text-xs max-w-lg mx-auto font-light">Simak ulasan tulus dari rekan mahasiswa dan pekerja muda yang telah menetap nyaman bersama kami.</p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 perspective-1000">
-                
-                <div className="bg-white border border-brand-beige p-6 rounded-2xl space-y-4 flex flex-col justify-between shadow-sm tilt-card-3d cursor-pointer group">
-                  <p className="text-xs text-brand-primary italic font-light leading-relaxed">
-                    "Sangat puas tinggal di Samara Stay! WiFi ngebut sekali buat main game dan kerja remote, layanan laundry gratis mingguan sangat meringankan beban pas lagi sibuk kuliah."
-                  </p>
-                  <div className="flex items-center gap-3 pt-3 border-t border-brand-beige">
-                    <div className="w-10 h-10 rounded-full bg-brand-primary text-white flex items-center justify-center font-extrabold font-mono text-xs shadow-md tilt-inner-depth">AP</div>
-                    <div>
-                      <h4 className="text-xs font-bold text-brand-primary">Aditya Pratama</h4>
-                      <p className="text-[10px] text-brand-steel font-mono">Mahasiswa UI - Depok</p>
+              {/* Interactive Testimonial Slider */}
+              <div className="relative max-w-2xl mx-auto">
+                <div className="overflow-hidden bg-white border border-brand-beige p-8 md:p-10 rounded-2xl shadow-sm relative group">
+                  {/* Big quotation mark */}
+                  <div className="absolute top-4 right-6 text-brand-beige/30 font-serif text-8xl pointer-events-none select-none leading-none">“</div>
+                  
+                  {/* Sliding quote text */}
+                  <div className="space-y-6 min-h-[140px] flex flex-col justify-between relative z-10">
+                    <p className="text-xs md:text-sm text-brand-primary italic font-light leading-relaxed">
+                      "{testimonials[activeTestimonialIdx].text}"
+                    </p>
+                    <div className="flex items-center gap-3 pt-4 border-t border-brand-beige">
+                      <div className={`w-10 h-10 rounded-full ${testimonials[activeTestimonialIdx].bgClass} text-white flex items-center justify-center font-extrabold font-mono text-xs shadow-md`}>
+                        {testimonials[activeTestimonialIdx].initials}
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-brand-primary">{testimonials[activeTestimonialIdx].name}</h4>
+                        <p className="text-[10px] text-brand-steel font-mono">{testimonials[activeTestimonialIdx].role}</p>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white border border-brand-beige p-6 rounded-2xl space-y-4 flex flex-col justify-between shadow-sm tilt-card-3d cursor-pointer group">
-                  <p className="text-xs text-brand-primary italic font-light leading-relaxed">
-                    "Kamar kostnya estetik dan super bersih, persis dengan yang ada di foto. Semua urusan air, kebersihan, listrik beres semua. CS ramah dan proses payment otomatis lewat Midtrans."
-                  </p>
-                  <div className="flex items-center gap-3 pt-3 border-t border-brand-beige">
-                    <div className="w-10 h-10 rounded-full bg-brand-steel text-white flex items-center justify-center font-extrabold font-mono text-xs shadow-md tilt-inner-depth">SD</div>
-                    <div>
-                      <h4 className="text-xs font-bold text-brand-primary">Sarah Devina</h4>
-                      <p className="text-[10px] text-brand-steel font-mono">Content Creator - Jakarta</p>
-                    </div>
+                {/* Left/Right Arrows */}
+                <div className="flex justify-center items-center gap-4 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTestimonialIdx(prev => (prev - 1 + testimonials.length) % testimonials.length)}
+                    className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
+                    title="Sebelumnya"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  
+                  {/* Indicator Dots */}
+                  <div className="flex gap-1.5">
+                    {testimonials.map((_, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setActiveTestimonialIdx(idx)}
+                        className={`h-1.5 rounded-full transition-all cursor-pointer ${
+                          activeTestimonialIdx === idx ? 'w-5 bg-brand-primary' : 'w-1.5 bg-brand-beige hover:bg-brand-steel'
+                        }`}
+                        title={`Slide ${idx + 1}`}
+                      />
+                    ))}
                   </div>
-                </div>
 
-                <div className="bg-white border border-brand-beige p-6 rounded-2xl space-y-4 flex flex-col justify-between shadow-sm tilt-card-3d cursor-pointer group">
-                  <p className="text-xs text-brand-primary italic font-light leading-relaxed">
-                    "Keamanan CCTV dan kunci elektronik terjamin banget. Layanan perbaikan AC gratis dikerjakan dengan sigap pas saya lapor kendala via sistem admin. Recommended kos eksklusif!"
-                  </p>
-                  <div className="flex items-center gap-3 pt-3 border-t border-brand-beige">
-                    <div className="w-10 h-10 rounded-full bg-brand-taupe text-white flex items-center justify-center font-extrabold font-mono text-xs shadow-md tilt-inner-depth">RH</div>
-                    <div>
-                      <h4 className="text-xs font-bold text-brand-primary">Rian Hidayat</h4>
-                      <p className="text-[10px] text-brand-steel font-mono">System Analyst - Jaksel</p>
-                    </div>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTestimonialIdx(prev => (prev + 1) % testimonials.length)}
+                    className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
+                    title="Selanjutnya"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
                 </div>
-
               </div>
+            </div>
+          </div>
+
+          {/* Pertanyaan yang Sering Diajukan (FAQ) */}
+          <div className="max-w-4xl mx-auto px-4 py-16 space-y-8">
+            <div className="text-center space-y-3">
+              <h2 className="text-3xl font-black text-brand-primary font-display tracking-tight">
+                Pertanyaan yang Sering Diajukan
+              </h2>
+              <p className="text-brand-steel text-sm font-light">
+                Temukan jawaban untuk pertanyaan umum tentang Samara Stay
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {faqs.map((faq, idx) => {
+                const isOpen = expandedFaq === idx;
+                return (
+                  <div 
+                    key={idx} 
+                    className="bg-white border border-brand-beige rounded-2xl overflow-hidden transition-all duration-300 shadow-sm"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setExpandedFaq(isOpen ? null : idx)}
+                      className="w-full px-6 py-5 flex items-center justify-between gap-4 text-left font-extrabold text-xs md:text-sm text-brand-primary cursor-pointer hover:bg-[#F8F9FA]/50 transition-colors"
+                    >
+                      <span className="tracking-tight">{faq.question}</span>
+                      <ChevronRight 
+                        size={18} 
+                        className={`text-brand-steel shrink-0 transition-transform duration-300 ${isOpen ? 'rotate-90' : ''}`} 
+                      />
+                    </button>
+                    {isOpen && (
+                      <div className="px-6 pb-5 text-xs md:text-sm text-brand-steel font-light leading-relaxed border-t border-brand-beige/50 pt-4 bg-[#F8F9FA]/30 animate-fade-in text-left">
+                        {faq.answer}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -1169,7 +1369,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               </div>
 
               {/* Search Mode Toggle Selector */}
-              <div className="flex bg-[#FAF8F5] border border-brand-beige p-0.5 rounded-xl text-[10px] font-bold">
+              <div className="flex bg-[#F8F9FA] border border-brand-beige p-0.5 rounded-xl text-[10px] font-bold">
                 <button
                   type="button"
                   onClick={() => setSearchMode('building')}
@@ -1194,7 +1394,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                   placeholder={searchMode === 'building' ? "Cari jalan, area, atau kota..." : "Cari nomor kamar, nama kos, atau kota..."}
                   value={searchLocation}
                   onChange={(e) => setSearchLocation(e.target.value)}
-                  className="w-full bg-[#FAF8F5] border border-brand-beige rounded-xl pl-9 pr-3 py-2 text-xs text-brand-primary placeholder-brand-steel/50 focus:outline-none focus:border-brand-primary font-medium"
+                  className="w-full bg-[#F8F9FA] border border-brand-beige rounded-xl pl-9 pr-3 py-2 text-xs text-brand-primary placeholder-brand-steel/50 focus:outline-none focus:border-brand-primary font-medium"
                 />
               </div>
             </div>
@@ -1205,7 +1405,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               {/* Filter 1: Kebijakan/Gender */}
               <div className="space-y-2">
                 <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest font-mono">Kebijakan Hunian</label>
-                <div className="flex bg-[#FAF8F5] border border-brand-beige p-0.5 rounded-xl">
+                <div className="flex bg-[#F8F9FA] border border-brand-beige p-0.5 rounded-xl">
                   {['all', 'putra', 'putri', 'campur'].map((t) => (
                     <button
                       key={t}
@@ -1232,7 +1432,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                   step={200000}
                   value={priceRange}
                   onChange={(e) => setPriceRange(Number(e.target.value))}
-                  className="w-full accent-brand-primary bg-[#FAF8F5] h-1 rounded-lg cursor-pointer border border-brand-beige"
+                  className="w-full accent-brand-primary bg-[#F8F9FA] h-1 rounded-lg cursor-pointer border border-brand-beige"
                 />
               </div>
 
@@ -1253,7 +1453,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                             setSelectedRoomFacilities([...selectedRoomFacilities, f]);
                           }
                         }}
-                        className={`px-2.5 py-1 rounded-lg text-[9px] font-bold uppercase border transition-all ${isChecked ? 'bg-brand-primary text-white border-brand-primary shadow-sm' : 'bg-[#FAF8F5] border-brand-beige text-brand-steel hover:text-brand-primary'}`}
+                        className={`px-2.5 py-1 rounded-lg text-[9px] font-bold uppercase border transition-all ${isChecked ? 'bg-brand-primary text-white border-brand-primary shadow-sm' : 'bg-[#F8F9FA] border-brand-beige text-brand-steel hover:text-brand-primary'}`}
                       >
                         {f}
                       </button>
@@ -1279,7 +1479,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                             setSelectedSharedFacilities([...selectedSharedFacilities, f]);
                           }
                         }}
-                        className={`px-2.5 py-1 rounded-lg text-[9px] font-bold uppercase border transition-all ${isChecked ? 'bg-brand-primary text-white border-brand-primary shadow-sm' : 'bg-[#FAF8F5] border-brand-beige text-brand-steel hover:text-brand-primary'}`}
+                        className={`px-2.5 py-1 rounded-lg text-[9px] font-bold uppercase border transition-all ${isChecked ? 'bg-brand-primary text-white border-brand-primary shadow-sm' : 'bg-[#F8F9FA] border-brand-beige text-brand-steel hover:text-brand-primary'}`}
                       >
                         {f}
                       </button>
@@ -1306,7 +1506,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                         key={p.id}
                         onMouseEnter={() => setHoveredPropertyId(p.id)}
                         onMouseLeave={() => setHoveredPropertyId(null)}
-                        className={`bg-white border rounded-2xl overflow-hidden flex flex-col sm:flex-row group transition-all duration-300 ${hoveredPropertyId === p.id ? 'border-brand-primary shadow-lg bg-[#FAF8F5]' : 'border-brand-beige'}`}
+                        className={`bg-white border rounded-2xl overflow-hidden flex flex-col sm:flex-row group transition-all duration-300 ${hoveredPropertyId === p.id ? 'border-brand-primary shadow-lg bg-[#F8F9FA]' : 'border-brand-beige'}`}
                       >
                         {/* Left Thumbnail */}
                         <div className="w-full sm:w-56 h-48 bg-slate-900 shrink-0 relative overflow-hidden">
@@ -1319,10 +1519,10 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                           <div className="absolute top-3 left-3 flex flex-col gap-1.5">
                             <span className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase font-mono tracking-wider ${
                               p.type === 'putri' 
-                                ? 'bg-brand-taupe text-[#FAF8F5] border border-brand-taupe/30' 
+                                ? 'bg-brand-taupe text-[#F8F9FA] border border-brand-taupe/30' 
                                 : p.type === 'putra' 
-                                  ? 'bg-brand-steel text-[#FAF8F5] border border-brand-steel/30' 
-                                  : 'bg-brand-primary text-[#FAF8F5] border border-brand-primary/30'
+                                  ? 'bg-brand-steel text-[#F8F9FA] border border-brand-steel/30' 
+                                  : 'bg-brand-primary text-[#F8F9FA] border border-brand-primary/30'
                             }`}>
                               KOS {p.type}
                             </span>
@@ -1334,7 +1534,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                           <div className="space-y-1.5">
                             <div className="flex justify-between items-start">
                               <h3 className="font-extrabold text-brand-primary text-base font-display group-hover:text-brand-steel transition-colors">{p.name}</h3>
-                              <span className="text-[10px] text-brand-steel font-bold bg-[#FAF8F5] border border-brand-beige px-2 py-0.5 rounded-full uppercase">{availableCount} Unit Kosong</span>
+                              <span className="text-[10px] text-brand-steel font-bold bg-[#F8F9FA] border border-brand-beige px-2 py-0.5 rounded-full uppercase">{availableCount} Unit Kosong</span>
                             </div>
                             
                             <div className="flex items-center gap-1.5 text-brand-steel text-xs">
@@ -1351,7 +1551,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                           {/* Badges */}
                           <div className="flex flex-wrap gap-1">
                             {p.facilities.slice(0, 4).map(f => (
-                              <span key={f} className="text-[9px] bg-[#FAF8F5] border border-brand-beige text-brand-steel font-semibold px-2 py-0.5 rounded-md">
+                              <span key={f} className="text-[9px] bg-[#F8F9FA] border border-brand-beige text-brand-steel font-semibold px-2 py-0.5 rounded-md">
                                 {f}
                               </span>
                             ))}
@@ -1426,7 +1626,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                                 <span className="text-[8px] font-mono font-extrabold uppercase text-brand-steel bg-brand-beige/40 px-2 py-0.5 rounded-md mr-1.5">{r.room_type}</span>
                                 <h3 className="font-extrabold text-brand-primary text-base font-display inline-block font-sans">Kamar No. {r.room_number}</h3>
                               </div>
-                              <span className="text-[9px] font-mono text-brand-steel bg-[#FAF8F5] border border-brand-beige px-2 py-0.5 rounded-full uppercase shrink-0">Lantai {r.floor} ({r.size_sqm} m²)</span>
+                              <span className="text-[9px] font-mono text-brand-steel bg-[#F8F9FA] border border-brand-beige px-2 py-0.5 rounded-full uppercase shrink-0">Lantai {r.floor} ({r.size_sqm} m²)</span>
                             </div>
                             
                             <p className="text-[11px] font-bold text-brand-primary flex items-center gap-1 leading-none mt-1">
@@ -1442,7 +1642,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                           {/* Facilities */}
                           <div className="flex flex-wrap gap-1">
                             {r.facilities.slice(0, 5).map(f => (
-                              <span key={f} className="text-[8px] bg-[#FAF8F5] border border-brand-beige text-brand-steel px-1.5 py-0.5 rounded-md font-medium">
+                              <span key={f} className="text-[8px] bg-[#F8F9FA] border border-brand-beige text-brand-steel px-1.5 py-0.5 rounded-md font-medium">
                                 {f}
                               </span>
                             ))}
@@ -1472,7 +1672,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                                 onClick={() => {
                                   setActiveProperty(p);
                                   setActiveRoom(r);
-                                  setCheckoutFlow(r.is_daily_enabled ? 'daily' : 'monthly');
+                                  setCheckoutFlow('monthly');
                                 }}
                                 className={`font-extrabold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-md ${
                                   r.status === 'available' 
@@ -1501,7 +1701,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
             <div className="lg:col-span-5 bg-white border border-brand-beige rounded-3xl p-4 overflow-hidden relative flex flex-col justify-between shadow-sm min-h-[300px] h-fit lg:h-[70vh] select-none text-brand-primary">
               
               {/* Map header */}
-              <div className="bg-[#FAF8F5] border border-brand-beige p-2.5 rounded-xl flex items-center justify-between text-[10px] font-mono z-10">
+              <div className="bg-[#F8F9FA] border border-brand-beige p-2.5 rounded-xl flex items-center justify-between text-[10px] font-mono z-10">
                 <span className="text-brand-primary font-extrabold flex items-center gap-1">
                   <Map size={12} />
                   MAP INTERAKTIF COVENANT
@@ -1857,17 +2057,9 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
 
                         {/* Price sheet and transaction CTAs */}
                         <div className="border-t border-slate-850 pt-3 space-y-3">
-                          <div className="grid grid-cols-2 gap-2 text-[10px]">
-                            <div className="bg-slate-900/40 p-2 rounded-xl border border-slate-850/60">
-                              <span className="text-[8px] text-slate-500 uppercase block font-mono">Sewa Bulanan</span>
-                              <span className="font-bold text-amber-500 text-sm font-mono">{formatRupiah(r.price)}</span>
-                            </div>
-                            <div className="bg-slate-900/40 p-2 rounded-xl border border-slate-850/60">
-                              <span className="text-[8px] text-slate-500 uppercase block font-mono">Sewa Harian</span>
-                              <span className="font-bold text-slate-300 text-sm font-mono">
-                                {r.is_daily_enabled ? formatRupiah(r.daily_price) : "Tidak Tersedia"}
-                              </span>
-                            </div>
+                          <div className="bg-slate-900/40 p-2.5 rounded-xl border border-slate-850/60 text-center">
+                            <span className="text-[8px] text-slate-500 uppercase block font-mono">Sewa Bulanan</span>
+                            <span className="font-black text-amber-500 text-sm font-mono">{formatRupiah(r.price)} <span className="text-[9px] text-slate-450 font-normal">/ bulan</span></span>
                           </div>
 
                           {isAvailable ? (
@@ -1886,7 +2078,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleSelectRoom(r, r.is_daily_enabled ? 'daily' : 'monthly');
+                                  handleSelectRoom(r, 'monthly');
                                 }}
                                 className="w-full bg-amber-500 hover:bg-amber-600 text-black py-2 rounded-xl text-[9px] font-extrabold transition-all text-center uppercase font-mono cursor-pointer"
                               >
@@ -2024,55 +2216,28 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                       </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-[9px] uppercase tracking-wider font-bold font-mono text-slate-400">Metode Hunian</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setCheckoutFlow('monthly')}
-                          className={`py-2 rounded-xl text-[9px] font-bold uppercase tracking-wider border font-mono cursor-pointer ${
-                            checkoutFlow === 'monthly'
-                              ? 'bg-amber-500 text-black border-amber-500'
-                              : 'bg-slate-950 border-slate-850 text-slate-400 hover:border-slate-800'
-                          }`}
-                        >
-                          Bulanan
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!activeRoom.is_daily_enabled}
-                          onClick={() => setCheckoutFlow('daily')}
-                          className={`py-2 rounded-xl text-[9px] font-bold uppercase tracking-wider border font-mono cursor-pointer ${
-                            !activeRoom.is_daily_enabled
-                              ? 'opacity-40 cursor-not-allowed bg-slate-950 border-slate-900 text-slate-600'
-                              : checkoutFlow === 'daily'
-                                ? 'bg-amber-500 text-black border-amber-500'
-                                : 'bg-slate-950 border-slate-850 text-slate-400 hover:border-slate-800'
-                          }`}
-                        >
-                          Harian {!activeRoom.is_daily_enabled && '(Mati)'}
-                        </button>
-                      </div>
-                    </div>
-
                     {/* Quick Calculator */}
-                    <div className="bg-slate-950/60 p-3 rounded-2xl border border-slate-850 text-[11px] space-y-2 font-mono">
+                    <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-850 text-[11px] space-y-2 font-mono">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Tarif Dasar ({checkoutFlow === 'daily' ? 'Harian' : 'Bulanan'})</span>
+                        <span className="text-slate-500">Skema Sewa</span>
+                        <span className="text-amber-500 font-bold">Bulanan (Sewa Tetap)</span>
+                      </div>
+                      <div className="flex justify-between border-t border-slate-850/40 pt-1.5">
+                        <span className="text-slate-500">Tarif Dasar Bulanan</span>
                         <span className="text-slate-300">
-                          {formatRupiah(checkoutFlow === 'daily' ? activeRoom.daily_price : activeRoom.price)}
+                          {formatRupiah(activeRoom.price)}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">PBJT Tax (10%)</span>
                         <span className="text-slate-300">
-                          {formatRupiah(Math.floor((checkoutFlow === 'daily' ? activeRoom.daily_price : activeRoom.price) * 0.1))}
+                          {formatRupiah(Math.floor(activeRoom.price * 0.1))}
                         </span>
                       </div>
                       <div className="flex justify-between border-t border-slate-850/80 pt-1.5 font-bold">
                         <span className="text-amber-500">Estimasi Total</span>
                         <span className="text-amber-500">
-                          {formatRupiah(Math.floor((checkoutFlow === 'daily' ? activeRoom.daily_price : activeRoom.price) * 1.1))}
+                          {formatRupiah(Math.floor(activeRoom.price * 1.1))}
                         </span>
                       </div>
                     </div>
@@ -2180,27 +2345,16 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                     type="button" 
                     onClick={() => setCheckoutFlow('monthly')}
                     className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase ${
-                      checkoutFlow === 'monthly' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-450'
+                      checkoutFlow === 'monthly' ? 'bg-amber-500 text-black' : 'bg-slate-850 text-slate-400'
                     }`}
                   >
                     Bulanan
                   </button>
-                  {activeRoom.is_daily_enabled && (
-                    <button 
-                      type="button" 
-                      onClick={() => setCheckoutFlow('daily')}
-                      className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase ${
-                        checkoutFlow === 'daily' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-455'
-                      }`}
-                    >
-                      Harian
-                    </button>
-                  )}
                   <button 
                     type="button" 
                     onClick={() => setCheckoutFlow('survey')}
                     className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase ${
-                      checkoutFlow === 'survey' ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-460'
+                      checkoutFlow === 'survey' ? 'bg-emerald-500 text-white' : 'bg-slate-850 text-slate-400'
                     }`}
                   >
                     Janji Survey

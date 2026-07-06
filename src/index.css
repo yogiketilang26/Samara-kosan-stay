@@ -3,18 +3,36 @@
 @import "leaflet/dist/leaflet.css";
 
 @theme {
-  --color-brand-green: #f59e0b;
-  --color-brand-green-hover: #d97706;
-  --color-brand-accent: #f59e0b;
-  --color-brand-dark: #2D3A44;
-  --color-brand-slate: #18181b;
+  --color-brand-green: #2E6F40;
+  --color-brand-green-hover: #235531;
+  --color-brand-accent: #2E6F40;
+  --color-brand-dark: #3A444D;
+  --color-brand-slate: #242B30;
 
-  --color-brand-primary: #2D3A44;
+  --color-brand-primary: #3A444D;
   --color-brand-steel: #516270;
   --color-brand-taupe: #8D897F;
-  --color-brand-beige: #DACFBE;
-  --color-brand-beige-hover: #C5B9A8;
-  --color-brand-darker: #1E272F;
+  --color-brand-beige: #E4E7EB;
+  --color-brand-beige-hover: #CBD5E1;
+  --color-brand-darker: #2A3238;
+
+  /* Re-map default amber/yellow/emerald palette variables used for CTAs & badges to render as the new green accent */
+  --color-amber-50: #EEF7F0;
+  --color-amber-100: #A8D9B3;
+  --color-amber-200: #7CBF8C;
+  --color-amber-300: #4F9F62;
+  --color-amber-400: #3E8B51;
+  --color-amber-450: #2E6F40;
+  --color-amber-500: #2E6F40;
+  --color-amber-600: #235531;
+
+  --color-emerald-50: #EEF7F0;
+  --color-emerald-100: #A8D9B3;
+  --color-emerald-200: #7CBF8C;
+  --color-emerald-300: #4F9F62;
+  --color-emerald-400: #3E8B51;
+  --color-emerald-500: #2E6F40;
+  --color-emerald-600: #235531;
 
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Space Grotesk", sans-serif;
@@ -24,8 +42,8 @@
 /* Base modifications for the application design */
 body {
   font-family: var(--font-sans);
-  background-color: #0A0A0B;
-  color: #e2e8f0;
+  background-color: #F8F9FA;
+  color: #3A444D;
 }
 
 .font-display {

@@ -517,7 +517,44 @@ const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
 const SEED_SETTINGS: SystemSettings = {
   id: 1,
   booking_rules: "1. Tamu dilarang membawa lawan jenis masuk ke dalam kamar (kecuali pasangan sah atau keluarga kandung).\n2. Menjaga ketenangan dan kebersihan lingkungan bersama setelah pukul 22:00 WIB.\n3. Pembayaran uang sewa bulanan wajib diselesaikan paling lambat 3 hari sebelum jatuh tempo.\n4. Menjaga kebersihan fasilitas bersama dan dilarang merusak inventaris kost.\n5. Uang jaminan deposit (Rp 500.000 untuk bulanan atau Rp 100.000 untuk harian) akan dikembalikan utuh pada saat check-out jika unit ditinggalkan dalam kondisi bersih, utuh, dan tanpa tunggakan.",
-  survey_rules: "1. Pembayaran DP Survey senilai Rp 500.000 digunakan sebagai jaminan komitmen mengunci kamar pilihan Anda selama masa survey agar tidak ditawarkan ke pihak lain.\n2. Jadwal survey yang telah disepakati dapat dijadwalkan ulang (reschedule) maksimal 1 kali dengan konfirmasi minimal 24 jam sebelumnya.\n3. Uang jaminan DP Survey ini bersifat non-refundable (hangus) jika Anda melakukan pembatalan sepihak atau terbukti No Show (tidak hadir) pada tanggal survey terpilih.\n4. Apabila hasil survey cocok dan Anda melanjutkannya ke kontrak sewa, uang jaminan DP Survey Rp 500.000 ini akan langsung dihitung sebagai pengurang biaya pelunasan bulan pertama."
+  survey_rules: "1. Pembayaran DP Survey senilai Rp 500.000 digunakan sebagai jaminan komitmen mengunci kamar pilihan Anda selama masa survey agar tidak ditawarkan ke pihak lain.\n2. Jadwal survey yang telah disepakati dapat dijadwalkan ulang (reschedule) maksimal 1 kali dengan konfirmasi minimal 24 jam sebelumnya.\n3. Uang jaminan DP Survey ini bersifat non-refundable (hangus) jika Anda melakukan pembatalan sepihak atau terbukti No Show (tidak hadir) pada tanggal survey terpilih.\n4. Apabila hasil survey cocok dan Anda melanjutkannya ke kontrak sewa, uang jaminan DP Survey Rp 500.000 ini akan langsung dihitung sebagai pengurang biaya pelunasan bulan pertama.",
+  standard_facilities: JSON.stringify([
+    { "icon": "Clock", "title": "Jam Operasional", "subtitle": "24 Jam" },
+    { "icon": "LogIn", "title": "Check In", "subtitle": "Fleksibel" },
+    { "icon": "Shield", "title": "Security", "subtitle": "24 Jam" },
+    { "icon": "Wifi", "title": "WiFi", "subtitle": "100 Mbps" },
+    { "icon": "Zap", "title": "Listrik", "subtitle": "Token/Include" },
+    { "icon": "Droplet", "title": "Air", "subtitle": "Bersih 24 Jam" },
+    { "icon": "Car", "title": "Parkir", "subtitle": "Motor & Mobil" },
+    { "icon": "Shirt", "title": "Laundry", "subtitle": "Tersedia" },
+    { "icon": "Sparkles", "title": "Cleaning", "subtitle": "2x / Minggu" }
+  ]),
+  why_choose_us: JSON.stringify([
+    "Standar Kebersihan Terjaga",
+    "CCTV 24 Jam di Area Umum",
+    "Maintenance Cepat < 24 Jam",
+    "Admin Responsif via WhatsApp",
+    "Pembayaran Digital Aman",
+    "Kontrak Transparan Tanpa Biaya Tersembunyi"
+  ]),
+  faqs: JSON.stringify([
+    {
+      "question": "Bagaimana cara booking kamar di Samara Stay?",
+      "answer": "Anda dapat memilih gedung dan kamar kost di aplikasi kami, tentukan tanggal mulai sewa, dan selesaikan pembayaran DP atau sewa bulan pertama secara instan menggunakan sistem pembayaran digital terintegrasi."
+    },
+    {
+      "question": "Apa saja fasilitas yang tersedia di setiap kamar?",
+      "answer": "Setiap kamar dilengkapi dengan AC, tempat tidur (kasur queen), kamar mandi dalam dengan water heater, meja kerja, lemari pakaian, dan akses Wi-Fi berkecepatan tinggi."
+    },
+    {
+      "question": "Berapa biaya administrasi dan deposit yang harus dibayar?",
+      "answer": "Di Samara Stay bebas dari biaya administrasi tersembunyi. Kami menerapkan deposit komitmen sewa yang transparan dan akan dikembalikan utuh pada saat masa sewa Anda selesai."
+    },
+    {
+      "question": "Apakah ada kontrak jangka panjang?",
+      "answer": "Kami menyediakan kontrak sewa bulanan yang sangat fleksibel tanpa kewajiban komitmen tahunan yang memberatkan, sehingga sangat ideal untuk mahasiswa dan pekerja aktif."
+    }
+  ])
 };
 
 // =========================================================================
@@ -1475,13 +1512,16 @@ export const database = {
       try {
         await safeSupabaseUpsert('settings', {
           booking_rules: settings.booking_rules,
-          survey_rules: settings.survey_rules
+          survey_rules: settings.survey_rules,
+          standard_facilities: settings.standard_facilities,
+          why_choose_us: settings.why_choose_us,
+          faqs: settings.faqs
         }, 1);
       } catch(err) {
         console.error(err);
       }
     }
-    database.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey dan sewa berhasil disimpan.");
+    database.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey, sewa, fasilitas standar, why-choose-us, dan FAQ berhasil disimpan.");
     return settings;
   },
 

@@ -17,18 +17,18 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
   };
 
   return (
-    <nav className="sticky top-0 bg-[#0F0F12] border-b border-white/10 z-50 text-sm py-3 px-4 md:px-8 shadow-lg" id="parent-navbar">
+    <nav className="sticky top-0 bg-[#3A444D] border-b border-white/10 z-50 text-sm py-3 px-4 md:px-8 shadow-lg text-white" id="parent-navbar">
       <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
         
         {/* Brand identity */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center text-black font-extrabold text-lg font-display select-none shadow-md">
+          <div className="w-10 h-10 rounded-xl bg-[#2E6F40] flex items-center justify-center text-white font-extrabold text-lg font-display select-none shadow-md">
             SS
           </div>
           <div>
             <div className="flex items-center gap-2">
               <span className="font-extrabold text-white font-display text-lg tracking-tight">SAMARA</span>
-              <span className="font-extrabold text-amber-500 font-display text-lg tracking-tight">STAY</span>
+              <span className="font-extrabold text-emerald-400 font-display text-lg tracking-tight">STAY</span>
             </div>
             <p className="text-[10px] text-slate-400 font-medium font-mono uppercase tracking-wider">Premium Kosan Ecosystem</p>
           </div>
@@ -62,8 +62,8 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
             onClick={() => setView('user')}
             className={`px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
               currentView === 'user' 
-                ? 'bg-amber-500 text-black shadow-lg' 
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
+                ? 'bg-[#2E6F40] text-white shadow-lg' 
+                : 'text-slate-200 hover:text-white hover:bg-white/5'
             }`}
           >
             <Home size={14} />
@@ -73,8 +73,8 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
             onClick={() => setView('admin')}
             className={`px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
               currentView === 'admin' 
-                ? 'bg-amber-500 text-black shadow-lg' 
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
+                ? 'bg-[#2E6F40] text-white shadow-lg' 
+                : 'text-slate-200 hover:text-white hover:bg-white/5'
             }`}
           >
             <Shield size={14} />

@@ -227,10 +227,24 @@ export interface FinancialAuditLog {
   created_at?: string;
 }
 
+export interface StandardFacility {
+  icon: string;
+  title: string;
+  subtitle: string;
+}
+
+export interface FAQItem {
+  question: string;
+  answer: string;
+}
+
 export interface SystemSettings {
   id: number;
   booking_rules: string;
   survey_rules: string;
+  standard_facilities?: string;
+  why_choose_us?: string;
+  faqs?: string;
   updated_at?: string;
 }
 
