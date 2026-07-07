@@ -2,7 +2,7 @@ import React from 'react';
 import { Property, Room } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
 import { MapPin, Shield, Map, Wifi, Sparkles, ChevronLeft, Building2 } from 'lucide-react';
-import RoomCard from '../room/RoomCard';
+import PremiumRoomCard from '../premium/PremiumRoomCard';
 import EmptyState from '../common/EmptyState';
 
 interface PropertyDetailProps {
@@ -124,7 +124,7 @@ export const PropertyDetail: React.FC<PropertyDetailProps> = ({
         {propertyRooms.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {propertyRooms.map(room => (
-              <RoomCard 
+              <PremiumRoomCard 
                 key={room.id}
                 room={room}
                 onSelect={() => onSelectRoom(room)}

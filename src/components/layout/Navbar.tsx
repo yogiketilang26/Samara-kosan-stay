@@ -21,22 +21,82 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
       <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
         
         {/* Brand identity */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-[#2E6F40] select-none shadow-md border border-white/10">
-            <svg viewBox="0 0 100 100" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
-              {/* Top roof chevron */}
-              <path d="M 15 52 Q 50 25 85 52 Q 50 34 15 52 Z" fill="currentColor" />
-              {/* Bottom arch support */}
-              <path d="M 21 78 C 21 68 34 50 50 50 C 66 50 79 68 79 78 C 65 72 50 59 50 59 C 50 59 35 72 21 78 Z" fill="currentColor" />
-            </svg>
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-extrabold text-white font-display text-lg tracking-tight">SAMARA</span>
-              <span className="font-extrabold text-emerald-400 font-display text-lg tracking-tight">STAY</span>
+        <div className="flex flex-col md:flex-row md:items-center gap-4 md:gap-8 w-full md:w-auto">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-[#2E6F40] select-none shadow-md border border-white/10">
+              <svg viewBox="0 0 100 100" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
+                {/* Top roof part */}
+                <path d="M 15 48 Q 50 20 85 48 Q 50 33 15 48 Z" fill="currentColor" />
+                {/* Lower base part */}
+                <path d="M 25 50 Q 50 39 75 50 L 75 74 Q 75 78 71 75 L 58 64 Q 50 57 42 64 L 29 75 Q 25 78 25 74 Z" fill="currentColor" />
+              </svg>
             </div>
-            <p className="text-[10px] text-slate-400 font-medium font-mono uppercase tracking-wider">Premium Kosan Ecosystem</p>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-white font-display text-lg tracking-tight">SAMARA</span>
+                <span className="font-extrabold text-emerald-400 font-display text-lg tracking-tight">STAY</span>
+              </div>
+              <p className="text-[10px] text-slate-400 font-medium font-mono uppercase tracking-wider">Premium Kosan Ecosystem</p>
+            </div>
           </div>
+
+          {/* Quick Menu Links (User View Only) */}
+          {currentView === 'user' && (
+            <div className="flex items-center gap-4 md:gap-5 text-xs font-bold text-slate-200 uppercase tracking-wider pl-1 md:pl-2">
+              <button 
+                onClick={() => {
+                  const el = document.getElementById('cabang-samara-stay-section');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  } else {
+                    window.location.hash = 'cabang-samara-stay-section';
+                  }
+                }}
+                className="hover:text-emerald-400 transition-colors cursor-pointer"
+              >
+                Cabang
+              </button>
+              <button 
+                onClick={() => {
+                  const el = document.getElementById('tentang-section');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  } else {
+                    window.location.hash = 'tentang-section';
+                  }
+                }}
+                className="hover:text-emerald-400 transition-colors cursor-pointer"
+              >
+                Tentang
+              </button>
+              <button 
+                onClick={() => {
+                  const el = document.getElementById('faq-section');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  } else {
+                    window.location.hash = 'faq-section';
+                  }
+                }}
+                className="hover:text-emerald-400 transition-colors cursor-pointer"
+              >
+                FAQ
+              </button>
+              <button 
+                onClick={() => {
+                  const el = document.getElementById('kontak-section');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  } else {
+                    window.location.hash = 'kontak-section';
+                  }
+                }}
+                className="hover:text-emerald-400 transition-colors cursor-pointer"
+              >
+                Kontak
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Credentials and Sandbox status info badges */}

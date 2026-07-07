@@ -26,9 +26,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   ];
 
   return (
-    <aside className="w-full lg:w-64 bg-slate-900 border border-slate-850 rounded-3xl p-4 space-y-4 shrink-0 shadow-lg h-fit">
-      <div className="px-3 border-b border-slate-800 pb-3">
-        <h4 className="text-xs font-bold text-slate-400 font-mono uppercase tracking-wider">Navigasi Panel</h4>
+    <aside className="w-full lg:w-64 bg-white border border-[#E2E8F0] rounded-[24px] p-4 space-y-4 shrink-0 shadow-sm h-fit">
+      <div className="px-3 border-b border-[#F1F5F9] pb-3 text-left">
+        <h4 className="text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">Navigasi Panel</h4>
       </div>
       <nav className="flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible gap-1 pb-2 lg:pb-0 font-sans">
         {menuItems.map(item => {
@@ -38,10 +38,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap lg:w-full ${
+              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold cursor-pointer transition-all whitespace-nowrap lg:w-full ${
                 isActive 
-                  ? 'bg-amber-500 text-black shadow-md' 
-                  : 'text-slate-350 hover:bg-slate-800 hover:text-white'
+                  ? 'bg-[#0D9488] text-white shadow-sm font-bold' 
+                  : 'text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0D9488]'
               }`}
             >
               <Icon size={14} className="shrink-0" />

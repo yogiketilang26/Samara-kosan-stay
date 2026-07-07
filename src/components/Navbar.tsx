@@ -22,10 +22,10 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-[#2E6F40] select-none shadow-md border border-white/10">
             <svg viewBox="0 0 100 100" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
-              {/* Top roof chevron */}
-              <path d="M 15 52 Q 50 25 85 52 Q 50 34 15 52 Z" fill="currentColor" />
-              {/* Bottom arch support */}
-              <path d="M 21 78 C 21 68 34 50 50 50 C 66 50 79 68 79 78 C 65 72 50 59 50 59 C 50 59 35 72 21 78 Z" fill="currentColor" />
+              {/* Top roof part */}
+              <path d="M 15 48 Q 50 20 85 48 Q 50 33 15 48 Z" fill="currentColor" />
+              {/* Lower base part */}
+              <path d="M 25 50 Q 50 39 75 50 L 75 74 Q 75 78 71 75 L 58 64 Q 50 57 42 64 L 29 75 Q 25 78 25 74 Z" fill="currentColor" />
             </svg>
           </div>
           <div>

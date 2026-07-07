@@ -684,53 +684,53 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
 
       {/* Primary tab views switcher */}
-      <div className="flex-1 bg-slate-905 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6 min-h-[70vh]">
+      <div className="flex-1 bg-white border border-[#E2E8F0] rounded-[24px] p-6 sm:p-8 shadow-sm space-y-6 min-h-[70vh]">
         
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            <div className="border-b border-slate-800 pb-3">
-              <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Kinerja Finansial & Hunian</h2>
-              <p className="text-[11px] text-slate-400 mt-0.5">Analisis occupancy kamar dan rasio penarikan pajak PBJT 10% secara langsung.</p>
+            <div className="border-b border-[#F1F5F9] pb-3 text-left">
+              <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Kinerja Finansial & Hunian</h2>
+              <p className="text-xs text-[#64748B] mt-0.5">Analisis occupancy kamar dan rasio penarikan pajak PBJT 10% secara langsung.</p>
             </div>
 
             {/* Quick KPI stats row */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
-                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Okupansi Kamar</span>
-                <span className="text-xl font-extrabold text-amber-500 font-mono block">{occupancyRate}%</span>
-                <span className="text-[9px] text-slate-450 font-sans block">{totalOccupied} terisi dari {rooms.length} unit</span>
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Okupansi Kamar</span>
+                <span className="text-2xl font-extrabold text-[#0D9488] font-mono block">{occupancyRate}%</span>
+                <span className="text-[11px] text-[#64748B] font-sans block">{totalOccupied} terisi dari {rooms.length} unit</span>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
-                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Sewa Bulanan Aktif</span>
-                <span className="text-xl font-extrabold text-white font-mono block">{bookings.length} kontrak</span>
-                <span className="text-[9px] text-slate-455 font-sans block">Approved settlement</span>
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Sewa Bulanan Aktif</span>
+                <span className="text-2xl font-extrabold text-[#3A444D] font-mono block">{bookings.length} kontrak</span>
+                <span className="text-[11px] text-[#64748B] font-sans block">Approved settlement</span>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
-                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Estimasi Omzet</span>
-                <span className="text-xs font-extrabold text-emerald-450 font-mono block leading-loose select-all">{formatRupiah(rawRevenue)}</span>
-                <span className="text-[9px] text-slate-450 font-sans block">Sewa terakumulasi</span>
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Estimasi Omzet</span>
+                <span className="text-base sm:text-lg font-extrabold text-[#0D9488] font-mono block leading-loose select-all">{formatRupiah(rawRevenue)}</span>
+                <span className="text-[11px] text-[#64748B] font-sans block">Sewa terakumulasi</span>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
-                <span className="text-[8px] font-bold text-slate-500 font-mono uppercase block">Pemberlakuan PBJT (10%)</span>
-                <span className="text-xs font-extrabold text-[#f5a623] font-mono block leading-loose select-all">{formatRupiah(totalPBJT)}</span>
-                <span className="text-[9px] text-slate-450 font-sans block">Kewajiban pajak daerah</span>
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Pajak PBJT (10%)</span>
+                <span className="text-base sm:text-lg font-extrabold text-amber-600 font-mono block leading-loose select-all">{formatRupiah(totalPBJT)}</span>
+                <span className="text-[11px] text-[#64748B] font-sans block">Kewajiban pajak daerah</span>
               </div>
             </div>
 
             {/* Occupants Charting visuals */}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-3">
-              <h4 className="text-[10px] font-bold uppercase text-slate-450 tracking-wider font-mono">Okupansi Kamar Berdasarkan Gender</h4>
-              <div className="h-48 text-[9px] font-mono">
+            <div className="bg-[#F8FAFC] p-5 rounded-[20px] border border-[#E2E8F0] space-y-3 text-left">
+              <h4 className="text-xs font-bold uppercase text-[#3A444D] tracking-wider font-sans">Okupansi Kamar Berdasarkan Gender</h4>
+              <div className="h-48 text-[11px]">
                 <ResponsiveContainer width="100%" height={180} minWidth={0} minHeight={0}>
                   <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-                    <XAxis dataKey="name" stroke="#888" />
-                    <YAxis stroke="#888" />
-                    <Tooltip contentStyle={{ backgroundColor: '#111', borderColor: '#333' }} />
-                    <Bar dataKey="Terisi" fill="#f5a623" radius={[4, 4, 0, 0]} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="name" stroke="#64748B" />
+                    <YAxis stroke="#64748B" />
+                    <Tooltip contentStyle={{ backgroundColor: '#fff', borderColor: '#E2E8F0', borderRadius: '12px' }} />
+                    <Bar dataKey="Terisi" fill="#0D9488" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -740,46 +740,46 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
         {activeTab === 'properties' && (
           <div className="space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Katalog Kompleks Properti Kos</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">Kelola seluruh asrama kosan, lokasi GPS, dan data penunjang operasional.</p>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Katalog Kompleks Properti Kos</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Kelola seluruh asrama kosan, lokasi GPS, dan data penunjang operasional.</p>
               </div>
               <button 
                 onClick={() => {
                   setActivePropertyEdit(null);
                   setShowPropertyModal(true);
                 }}
-                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
+                className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
               >
-                <Plus size={12} />
+                <Plus size={14} />
                 Tambah Properti
               </button>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               {properties.map(p => (
-                <div key={p.id} className="bg-slate-900 border border-slate-800 p-4 rounded-3xl flex justify-between items-center text-xs">
+                <div key={p.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
                   <div>
-                    <h4 className="font-extrabold text-slate-100 uppercase font-display">{p.name}</h4>
-                    <span className="text-[9px] text-slate-450 font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln</span>
+                    <h4 className="font-extrabold text-[#3A444D] uppercase font-sans text-sm">{p.name}</h4>
+                    <span className="text-[11px] text-[#64748B] font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln</span>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 w-full sm:w-auto">
                     <button 
                       onClick={() => {
                         setActivePropertyEdit(p);
                         setShowPropertyModal(true);
                       }}
-                      className="p-1 px-2.5 bg-slate-800 hover:bg-slate-750 text-slate-205 rounded-lg border border-slate-750 transition cursor-pointer text-[10px] flex items-center gap-1"
+                      className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
                     >
-                      <Edit2 size={11} />
+                      <Edit2 size={12} />
                       Ubah
                     </button>
                     <button 
                       onClick={() => handleDeleteProperty(p.id)}
-                      className="p-1 px-2.5 bg-red-950/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition cursor-pointer text-[10px] flex items-center gap-1"
+                      className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
                     >
-                      <Trash2 size={11} />
+                      <Trash2 size={12} />
                       Hapus
                     </button>
                   </div>
@@ -791,48 +791,48 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
         {activeTab === 'rooms' && (
           <div className="space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Ketersediaan Kamar / Unit</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">Pantau tarif harian, bulanan, detail lantai, dan metrik ketersediaan kamar.</p>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Ketersediaan Kamar / Unit</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Pantau tarif harian, bulanan, detail lantai, dan metrik ketersediaan kamar.</p>
               </div>
               <button 
                 onClick={() => {
                   setActiveRoomEdit(null);
                   setShowRoomModal(true);
                 }}
-                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
+                className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
               >
-                <Plus size={12} />
+                <Plus size={14} />
                 Tambah Kamar
               </button>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               {rooms.map(r => {
                 const parentProj = properties.find(p=>p.id === r.property_id)?.name || 'Properti N/A';
                 return (
-                  <div key={r.id} className="bg-slate-900 border border-slate-800 p-4 rounded-3xl flex justify-between items-center text-xs">
+                  <div key={r.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
                     <div>
-                      <h4 className="font-extrabold text-slate-100 uppercase">KAMAR {r.room_number} ({r.room_type})</h4>
-                      <p className="text-[9px] text-slate-450 font-mono">{parentProj} | Lantai {r.floor} | Stat: {r.status}</p>
+                      <h4 className="font-extrabold text-[#3A444D] uppercase text-sm">KAMAR {r.room_number} ({r.room_type})</h4>
+                      <p className="text-[11px] text-[#64748B] font-mono mt-0.5">{parentProj} | Lantai {r.floor} | Stat: <span className="font-bold text-[#0D9488]">{r.status}</span></p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 w-full sm:w-auto">
                       <button 
                         onClick={() => {
                           setActiveRoomEdit(r);
                           setShowRoomModal(true);
                         }}
-                        className="p-1 px-2.5 bg-slate-800 hover:bg-slate-750 text-slate-205 rounded-lg border border-slate-750 transition cursor-pointer text-[10px] flex items-center gap-1"
+                        className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
                       >
-                        <Edit2 size={11} />
+                        <Edit2 size={12} />
                         Kustomisasi
                       </button>
                       <button 
                         onClick={() => handleDeleteRoom(r.id)}
-                        className="p-1 px-2.5 bg-red-950/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition cursor-pointer text-[10px] flex items-center gap-1"
+                        className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
                       >
-                        <Trash2 size={11} />
+                        <Trash2 size={12} />
                         Hapus
                       </button>
                     </div>
@@ -845,28 +845,28 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
         {activeTab === 'surveys' && (
           <div className="space-y-4">
-            <div className="border-b border-slate-800 pb-3">
-              <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Antrian Jadwal Survey Lapangan</h2>
-              <p className="text-[11px] text-slate-400 mt-0.5">Saring jadwal survey masuk dengan DP Rp 500rb komitmen.</p>
+            <div className="border-b border-[#F1F5F9] pb-4 text-left">
+              <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Antrian Jadwal Survey Lapangan</h2>
+              <p className="text-xs text-[#64748B] mt-0.5">Saring jadwal survey masuk dengan DP Rp 500rb komitmen.</p>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-4">
               {surveys.map(s => (
-                <div key={s.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl space-y-3 text-xs">
-                  <div className="flex justify-between items-start">
+                <div key={s.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] space-y-4 text-xs shadow-xs text-left">
+                  <div className="flex flex-col sm:flex-row justify-between items-start gap-3">
                     <div>
-                      <span className="text-[9px] font-mono bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-550/25 font-bold uppercase tracking-wider">{s.invoice_id}</span>
-                      <h4 className="font-extrabold text-slate-150 uppercase mt-1">Calon Penghuni: {s.client_name} ({s.phone})</h4>
-                      <p className="text-[9px] text-slate-450 font-mono">Pilihan: Kamar {s.room_number} | Jadwal: {s.survey_date} @ {s.survey_time_slot}</p>
+                      <span className="text-[10px] font-mono bg-[#E6F4F1] text-[#0D9488] px-2.5 py-1 rounded-lg border border-[#0D9488]/10 font-bold uppercase tracking-wider">{s.invoice_id}</span>
+                      <h4 className="font-extrabold text-[#3A444D] uppercase mt-2 text-sm">Calon Penghuni: {s.client_name} ({s.phone})</h4>
+                      <p className="text-[11px] text-[#64748B] font-mono mt-1">Pilihan: Kamar {s.room_number} | Jadwal: {s.survey_date} @ {s.survey_time_slot}</p>
                     </div>
-                    <span className={`text-[8px] font-mono px-2 py-0.5 rounded-full border font-bold uppercase ${
+                    <span className={`text-[9px] font-mono px-3 py-1 rounded-full border font-bold uppercase ${
                       s.status === 'survey_confirmed' 
-                        ? 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse' 
+                        ? 'bg-blue-50 text-blue-700 border-blue-200' 
                         : s.status === 'survey_completed' 
-                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/10' 
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
                           : s.status === 'pending_payment'
-                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 animate-pulse'
-                            : 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+                            ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                            : 'bg-rose-50 text-rose-700 border-rose-200'
                     }`}>
                       {s.status === 'survey_confirmed' 
                         ? 'MENUNGGU KEDATANGAN' 
@@ -881,19 +881,19 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                   </div>
 
                   {s.status === 'survey_confirmed' && (
-                    <div className="flex gap-2 border-t border-slate-850/80 pt-2.5">
+                    <div className="flex flex-wrap gap-2 border-t border-[#F1F5F9] pt-3.5">
                       <button 
                         onClick={() => handleApproveSurvey(s)}
-                        className="p-1 px-3 bg-emerald-600 hover:bg-emerald-550 text-white rounded-xl font-bold font-sans cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md shadow-emerald-600/5"
+                        className="p-2 px-4 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm"
                       >
-                        <Check size={11} />
+                        <Check size={13} />
                         Selesai Survey (Sesuai Janji)
                       </button>
                       <button 
                         onClick={() => handleNoShowSurvey(s)}
-                        className="p-1 px-3 bg-red-650 hover:bg-red-550 text-white rounded-xl font-bold font-sans cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md"
+                        className="p-2 px-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm"
                       >
-                        <X size={11} />
+                        <X size={13} />
                         No-Show (DP Hangus)
                       </button>
                     </div>
@@ -910,7 +910,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                       </button>
                       <button 
                         onClick={() => handleCancelSurvey(s)}
-                        className="p-1 px-3 bg-red-950/20 hover:bg-red-500 text-red-500 rounded-xl transition cursor-pointer text-[10px] flex items-center gap-1 border border-red-500/20"
+                        className="p-2 px-4 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl transition font-bold cursor-pointer text-xs flex items-center gap-1.5 border border-red-100 hover:border-red-500 shadow-xs"
                       >
                         <X size={11} />
                         Tolak
@@ -987,7 +987,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                          alert("Terjadi kesalahan jaringan: " + e.message);
                        }
                      }}
-                     className="bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold px-4 py-2.5 rounded-2xl shadow-xs shrink-0 transition-colors cursor-pointer flex items-center gap-1.5"
+                     className="bg-slate-900 hover:bg-[#0D9488]/10 text-[#0D9488] text-white text-[11px] font-bold px-4 py-2.5 rounded-2xl shadow-xs shrink-0 transition-colors cursor-pointer flex items-center gap-1.5"
                    >
                      <Printer size={13} />
                      Kirim Tes Invoice MailerSend
@@ -1017,7 +1017,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                              : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                          }`}
                        >
-                         <IconComponent size={14} className={activeFinanceSubTab === sub.id ? 'text-emerald-400' : 'text-slate-400'} />
+                         <IconComponent size={14} className={activeFinanceSubTab === sub.id ? 'text-emerald-400' : 'text-[#64748B]'} />
                          {sub.name}
                        </button>
                      );
@@ -1044,7 +1044,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                alert("Mengekspor laporan keuangan PDF... File samara_financial_statement.pdf berhasil diunduh.");
                                database.logActivity("System Finance", "EXPORT_REPORT", "Ekspor Financial Report ke PDF");
                              }}
-                             className="bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 text-[11px] font-bold px-3 py-2 rounded-xl transition-colors cursor-pointer flex items-center gap-1"
+                             className="bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 border border-slate-700 text-[#3A444D] text-[11px] font-bold px-3 py-2 rounded-xl transition-colors cursor-pointer flex items-center gap-1"
                            >
                              <FileText size={12} />
                              PDF
@@ -1064,7 +1064,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
  
                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-slate-400 font-bold uppercase font-mono flex items-center gap-1">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
                              <TrendingUp size={10} className="text-emerald-400" />
                              Total Pendapatan (Inflow)
                            </span>
@@ -1073,7 +1073,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                          </div>
  
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-slate-400 font-bold uppercase font-mono flex items-center gap-1">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
                              <TrendingDown size={10} className="text-red-400" />
                              Biaya Operasional (Outflow)
                            </span>
@@ -1082,16 +1082,16 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                          </div>
  
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-slate-400 font-bold uppercase font-mono flex items-center gap-1">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
                              <Coins size={10} className="text-amber-400" />
                              Net Profit Laba Bersih
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-amber-500 font-mono">{formatRupiah(netEarnings)}</div>
+                           <div className="text-base md:text-lg font-extrabold text-[#0D9488] font-bold font-mono">{formatRupiah(netEarnings)}</div>
                            <p className="text-[9px] text-slate-500 font-sans">Marjin Laba: {totalInflow ? Math.round((netEarnings / totalInflow)*100) : 0}%</p>
                          </div>
  
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-slate-400 font-bold uppercase font-mono flex items-center gap-1">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
                              <Percent size={10} className="text-sky-400" />
                              Kewajiban Pajak PBJT (10%)
                            </span>
@@ -1157,7 +1157,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                        )}
  
                        {!isGeneratingAi && !aiInsightText && (
-                         <div className="p-4 bg-slate-50 border border-dashed border-slate-200 text-center rounded-2xl text-slate-400 font-semibold text-xs py-8 font-sans">
+                         <div className="p-4 bg-slate-50 border border-dashed border-slate-200 text-center rounded-2xl text-[#64748B] font-semibold text-xs py-8 font-sans">
                            Klik tombol di atas untuk menganalisis data Chart of Accounts (COA) secara komprehensif menggunakan algoritma AI Financial Controller.
                          </div>
                        )}
@@ -1188,7 +1188,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                          <div className="flex items-center justify-between py-6">
                            <div className="space-y-1">
                              <div className="text-3xl font-black text-slate-800 font-display">85.4%</div>
-                             <p className="text-[10px] text-slate-400 font-medium font-sans">12 dari 14 Kamar Terisi Aktif</p>
+                             <p className="text-[10px] text-[#64748B] font-medium font-sans">12 dari 14 Kamar Terisi Aktif</p>
                              <span className="inline-block bg-emerald-50 text-brand-green text-[9px] font-bold px-2 py-0.5 rounded-full mt-1 font-sans">Okupansi Sangat Tinggi</span>
                            </div>
                            <div className="relative w-24 h-24 flex items-center justify-center">
@@ -1217,23 +1217,23 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
                             DEBIT = KREDIT (Balanced)
                           </div>
-                          <span className="text-[9px] text-slate-400 mt-1">Asas double-entry terjaga otomatis</span>
+                          <span className="text-[9px] text-[#64748B] mt-1">Asas double-entry terjaga otomatis</span>
                         </div>
                         
                         <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
-                          <span className="text-[9px] text-slate-400 font-bold uppercase font-mono tracking-wider">Total Entri Buku Jurnal</span>
+                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider">Total Entri Buku Jurnal</span>
                           <div className="text-xl font-black text-slate-800 font-mono mt-1">{journalEntries.length} Baris</div>
-                          <span className="text-[9px] text-slate-400 mt-1">Arsip transaksi tercatat permanen</span>
+                          <span className="text-[9px] text-[#64748B] mt-1">Arsip transaksi tercatat permanen</span>
                         </div>
 
                         <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
-                          <span className="text-[9px] text-slate-400 font-bold uppercase font-mono tracking-wider">Rekening Akun Aktif (COA)</span>
+                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider">Rekening Akun Aktif (COA)</span>
                           <div className="text-xl font-black text-slate-800 font-mono mt-1">{accounts.length} Akun</div>
-                          <span className="text-[9px] text-slate-400 mt-1">Aset, Liabilitas, Ekuitas, Pendapatan, Beban</span>
+                          <span className="text-[9px] text-[#64748B] mt-1">Aset, Liabilitas, Ekuitas, Pendapatan, Beban</span>
                         </div>
 
                         <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
-                          <span className="text-[9px] text-slate-400 font-bold uppercase font-mono tracking-wider">Ekspor Arsip Keuangan</span>
+                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider">Ekspor Arsip Keuangan</span>
                           <div className="flex gap-1.5 mt-2">
                             <button
                               onClick={handleExportLedgerCSV}
@@ -1245,7 +1245,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             </button>
                             <button
                               onClick={handleExportCOACSV}
-                              className="flex-1 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-[10px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer"
+                              className="flex-1 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-900 text-white font-extrabold text-[10px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer"
                               title="Ekspor COA ke CSV/Excel"
                             >
                               <Download size={12} />
@@ -1266,7 +1266,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                             {/* Search */}
                             <div className="relative flex-1 md:flex-none">
-                              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#64748B]" />
                               <input 
                                 type="text"
                                 placeholder="Cari jurnal, deskripsi, kode..."
@@ -1356,7 +1356,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                     <td className="py-3.5 px-3 text-right font-mono text-emerald-600 font-bold">
                                       {row.debit > 0 ? formatRupiah(row.debit) : '-'}
                                     </td>
-                                    <td className="py-3.5 px-3 text-right font-mono text-slate-400">
+                                    <td className="py-3.5 px-3 text-right font-mono text-[#64748B]">
                                       {row.credit > 0 ? "(" + formatRupiah(row.credit) + ")" : '-'}
                                     </td>
                                     <td className={"py-3.5 px-3 text-right font-mono font-semibold " + (row.runningBalance < 0 ? 'text-red-500' : 'text-slate-850')}>
@@ -1368,7 +1368,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
                               {getFilteredLedgerRows().length === 0 && (
                                 <tr>
-                                  <td colSpan={7} className="py-10 text-center text-slate-400 font-semibold">
+                                  <td colSpan={7} className="py-10 text-center text-[#64748B] font-semibold">
                                     Tidak ada entri jurnal umum yang sesuai dengan pencarian Anda.
                                   </td>
                                 </tr>
@@ -1394,7 +1394,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                 <div>
                                   <span className="font-mono text-gray-400 text-[10px] mr-2">[{acc.id}]</span>
                                   <span className="text-slate-850 text-[11px] font-bold">{acc.name}</span>
-                                  <span className="text-[8px] text-slate-400 font-normal uppercase ml-1 px-1 bg-slate-200/50 rounded">{acc.type}</span>
+                                  <span className="text-[8px] text-[#64748B] font-normal uppercase ml-1 px-1 bg-slate-200/50 rounded">{acc.type}</span>
                                 </div>
                                 <span className="font-bold text-slate-800 font-mono text-[11px]">
                                   {formatRupiah(acc.balance)}
@@ -1417,7 +1417,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                               <div>
-                                <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Pilih Akun Debit (Penambahan Aset/Beban)</label>
+                                <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Pilih Akun Debit (Penambahan Aset/Beban)</label>
                                 <select 
                                   value={journalForm.debitAccount}
                                   onChange={(e) => setJournalForm({...journalForm, debitAccount: Number(e.target.value)})}
@@ -1427,7 +1427,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                 </select>
                               </div>
                               <div>
-                                <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Pilih Akun Kredit (Pengurangan Aset / Penambahan Revenue/Liability)</label>
+                                <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Pilih Akun Kredit (Pengurangan Aset / Penambahan Revenue/Liability)</label>
                                 <select 
                                   value={journalForm.creditAccount}
                                   onChange={(e) => setJournalForm({...journalForm, creditAccount: Number(e.target.value)})}
@@ -1438,7 +1438,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                               </div>
                               <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
                                 <div className="sm:col-span-1">
-                                  <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Nominal (Rupiah)</label>
+                                  <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Nominal (Rupiah)</label>
                                   <input 
                                     type="number"
                                     placeholder="Nominal"
@@ -1448,7 +1448,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                   />
                                 </div>
                                 <div className="sm:col-span-2">
-                                  <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Keterangan / Deskripsi Transaksi</label>
+                                  <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Keterangan / Deskripsi Transaksi</label>
                                   <input 
                                     type="text"
                                     placeholder="Keterangan transaksi lengkap..."
@@ -1462,8 +1462,8 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                           </div>
 
                           <div className="flex justify-between items-center border-t border-gray-100 pt-3">
-                            <span className="text-[10px] text-slate-400 font-sans italic flex items-center gap-1">
-                              <ShieldAlert size={12} className="text-amber-500" />
+                            <span className="text-[10px] text-[#64748B] font-sans italic flex items-center gap-1">
+                              <ShieldAlert size={12} className="text-[#0D9488] font-bold" />
                               Mendukung penyesuaian timbangan COA secara instan
                             </span>
                             <button
@@ -1591,7 +1591,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
  
                            {filteredPayments.length === 0 && (
                              <tr>
-                               <td colSpan={7} className="py-10 text-center text-slate-400 font-semibold">
+                               <td colSpan={7} className="py-10 text-center text-[#64748B] font-semibold">
                                  Tidak ada data billing atau piutang yang ditemukan.
                                </td>
                              </tr>
@@ -1620,7 +1620,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                          
                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-medium">
                            <div>
-                             <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Kategori Biaya</label>
+                             <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Kategori Biaya</label>
                              <select 
                                value={expenseForm.category}
                                onChange={(e) => setExpenseForm({...expenseForm, category: e.target.value})}
@@ -1633,7 +1633,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                              </select>
                            </div>
                            <div>
-                             <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Pilih Vendor / Supplier</label>
+                             <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Pilih Vendor / Supplier</label>
                              <select
                                value={expenseForm.vendor}
                                onChange={(e) => setExpenseForm({...expenseForm, vendor: e.target.value})}
@@ -1644,7 +1644,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                              </select>
                            </div>
                            <div>
-                             <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Nominal Belanja (Rp)</label>
+                             <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Nominal Belanja (Rp)</label>
                              <input 
                                type="number"
                                placeholder="Nominal belanja..."
@@ -1654,7 +1654,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                              />
                            </div>
                            <div>
-                             <label className="text-[10px] text-slate-400 font-bold block mb-1 uppercase font-mono">Deskripsi Barang / Jasa</label>
+                             <label className="text-[10px] text-[#64748B] font-bold block mb-1 uppercase font-mono">Deskripsi Barang / Jasa</label>
                              <input 
                                type="text"
                                placeholder="Pembelian sabun cair, lampu led, AC, dll..."
@@ -1667,7 +1667,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                            <div className="sm:col-span-2 p-3 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between">
                              <div className="space-y-0.5">
                                <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1 font-sans">
-                                 <ShieldAlert size={12} className="text-amber-500 animate-pulse" />
+                                 <ShieldAlert size={12} className="text-[#0D9488] font-bold animate-pulse" />
                                  Gunakan Skema Persetujuan Berjenjang (Nominal & Approval Matrix)
                                </span>
                                <p className="text-[9px] text-slate-500 font-normal leading-relaxed font-sans">
@@ -1723,7 +1723,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                  }
                                }
                              }}
-                             className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-4 py-2.5 rounded-2xl cursor-pointer"
+                             className="bg-slate-900 hover:bg-[#0D9488]/10 text-[#0D9488] text-white text-xs font-bold px-4 py-2.5 rounded-2xl cursor-pointer"
                            >
                              {expenseForm.approvalRequired ? "Kirim Form Persetujuan" : "Post Belanja Langsung"}
                            </button>
@@ -1748,7 +1748,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                    </span>
                                  </div>
                                  <p className="text-xs font-bold text-slate-800">{po.items}</p>
-                                 <div className="text-[10px] text-slate-400 font-sans">Vendor: {po.vendor} | Tanggal: {po.date}</div>
+                                 <div className="text-[10px] text-[#64748B] font-sans">Vendor: {po.vendor} | Tanggal: {po.date}</div>
                                </div>
                                <div className="flex items-center gap-3 shrink-0 self-stretch sm:self-auto justify-between border-t sm:border-t-0 border-slate-100 pt-2 sm:pt-0">
                                  <span className="font-mono text-xs font-bold text-slate-800">{formatRupiah(po.amount)}</span>
@@ -1801,7 +1801,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                <div className="flex justify-between items-start gap-4">
                                  <div>
                                    <h5 className="text-xs font-bold text-slate-800">{item.name}</h5>
-                                   <span className="text-[9px] text-slate-400 block font-mono">Kategori: {item.category}</span>
+                                   <span className="text-[9px] text-[#64748B] block font-mono">Kategori: {item.category}</span>
                                  </div>
                                  <div className="text-right">
                                    <span className={`text-[11px] font-extrabold font-mono ${item.stock <= item.minStock ? 'text-red-500 animate-pulse' : 'text-emerald-500'}`}>
@@ -1813,7 +1813,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                  </div>
                                </div>
                                <div className="flex justify-between items-center pt-1 border-t border-slate-200/50">
-                                 <span className="text-[9px] text-slate-400 font-sans">Min: {item.minStock} {item.unit}</span>
+                                 <span className="text-[9px] text-[#64748B] font-sans">Min: {item.minStock} {item.unit}</span>
                                  <button
                                    onClick={() => {
                                      const rawAdjustment = prompt(`Stock Opname untuk ${item.name}. Masukkan stock real sekarang:`, item.stock.toString());
@@ -1860,7 +1860,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                              <div key={v.id} className="p-2 px-3 bg-slate-50 border border-slate-100 rounded-xl flex justify-between items-center text-xs">
                                <div>
                                  <strong className="text-slate-800 block">{v.name}</strong>
-                                 <span className="text-[9px] text-slate-400 font-mono">Tipe: {v.category}</span>
+                                 <span className="text-[9px] text-[#64748B] font-mono">Tipe: {v.category}</span>
                                </div>
                                <span className="text-[10px] text-slate-500 font-mono">{v.phone}</span>
                              </div>
@@ -1929,7 +1929,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                  </div>
                                </div>
                                <div className="text-left sm:text-right border-t sm:border-t-0 border-slate-200/60 pt-2 sm:pt-0 space-y-0.5">
-                                 <span className="text-[9px] text-slate-400 font-bold block uppercase font-sans">Nilai Buku Bersih (Net Book Value)</span>
+                                 <span className="text-[9px] text-[#64748B] font-bold block uppercase font-sans">Nilai Buku Bersih (Net Book Value)</span>
                                  <div className="text-sm font-extrabold text-slate-800 font-mono">{formatRupiah(netBookValue)}</div>
                                  <span className="text-[9px] text-red-500 font-mono block">Akum. Depresiasi: {formatRupiah(asset.accumDepr)}</span>
                                </div>
@@ -1942,7 +1942,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                      {/* Right Panel: Costing Work-order Maintenance (Module 6) */}
                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
                        <h4 className="text-xs font-bold text-slate-800 font-display">Pembebanan Biaya Perbaikan (Work-orders)</h4>
-                       <p className="text-[10px] text-slate-400 font-sans">Hubungkan keluhan perbaikan teknis tenant dengan pencatatan beban di Chart of Accounts.</p>
+                       <p className="text-[10px] text-[#64748B] font-sans">Hubungkan keluhan perbaikan teknis tenant dengan pencatatan beban di Chart of Accounts.</p>
                        
                        <div className="space-y-3 text-xs">
                          <div className="p-3 bg-[#fef2f2] border border-red-150 rounded-2xl space-y-1.5">
@@ -1975,7 +1975,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                          <div className="p-3 bg-slate-50 border border-slate-100 rounded-2xl space-y-1.5">
                            <div className="flex justify-between font-bold">
                              <span className="text-slate-800">WO-089: Service AC Rusak F102</span>
-                             <span className="text-slate-400">Normal</span>
+                             <span className="text-[#64748B]">Normal</span>
                            </div>
                            <p className="text-[10px] text-slate-600 font-sans">Teknisi: Sinar Mandiri AC | Pekerjaan: Cuci AC & Isi Freon</p>
                            <div className="flex justify-between items-center pt-2 border-t border-slate-200/60 font-sans">
@@ -1991,7 +1991,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                    alert(e.message);
                                  }
                                }}
-                               className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[9px] px-2.5 py-1 rounded-lg cursor-pointer animate-pulse"
+                               className="bg-slate-900 hover:bg-[#0D9488]/10 text-[#0D9488] text-white font-bold text-[9px] px-2.5 py-1 rounded-lg cursor-pointer animate-pulse"
                              >
                                Post Biaya Gedung
                              </button>
@@ -2031,7 +2031,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                                  </span>
                                </div>
                                <p className="text-xs text-slate-700 font-medium mt-0.5">{req.purpose}</p>
-                               <span className="text-[9px] text-slate-400 block font-mono">Tgl Pengajuan: {req.date}</span>
+                               <span className="text-[9px] text-[#64748B] block font-mono">Tgl Pengajuan: {req.date}</span>
                              </div>
                              <div className="flex items-center gap-3 self-stretch sm:self-auto justify-between border-t sm:border-t-0 border-slate-150 pt-2 sm:pt-0 font-sans">
                                <span className="font-mono text-xs font-bold text-slate-800">{formatRupiah(req.amount)}</span>
@@ -2084,7 +2084,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                              database.logActivity("System Finance", "BANK_RECONCILIATION", "Otomatisasi kliring & rekonsiliasi laporan rekening koran Bank Mandiri");
                              alert("Sukses! 3 baris mutasi koran bank berhasil dicocokkan otomatis dengan record transaksi piutang dan invoice.");
                            }}
-                           className="bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-bold px-3 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs font-sans"
+                           className="bg-slate-900 hover:bg-[#0D9488]/10 text-[#0D9488] text-white text-[10px] font-bold px-3 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs font-sans"
                          >
                            <ArrowRightLeft size={12} />
                            Auto Reconcile Statements
@@ -2096,7 +2096,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                            <div key={stmt.id} className="p-3 bg-slate-50 border border-slate-100 rounded-2xl flex justify-between gap-4 font-sans">
                              <div className="space-y-1">
                                <div className="flex items-center gap-2">
-                                 <span className="font-mono text-[9px] text-slate-400">{stmt.date}</span>
+                                 <span className="font-mono text-[9px] text-[#64748B]">{stmt.date}</span>
                                  <span className={`text-[8px] px-1.5 py-0.5 rounded font-extrabold uppercase font-mono ${
                                    stmt.matched ? 'bg-emerald-50 text-brand-green' : 'bg-red-50 text-red-500 animate-pulse'
                                  }`}>
@@ -2133,11 +2133,11 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
  
                        <div className="p-4 bg-slate-900 text-white rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                          <div className="space-y-1">
-                           <span className="text-[9px] text-slate-400 font-bold font-mono block">SALDO UTANG PAJAK DAERAH PBJT (KODE AKUN 2100)</span>
+                           <span className="text-[9px] text-[#64748B] font-bold font-mono block">SALDO UTANG PAJAK DAERAH PBJT (KODE AKUN 2100)</span>
                            <div className="text-xl font-black text-amber-400 font-mono">
                              {formatRupiah(accounts.find(a=>a.id===2100)?.balance || 0)}
                            </div>
-                           <p className="text-[9px] text-slate-400 font-sans">Penyetoran wajib dilakukan paling lambat tanggal 15 setiap bulannya.</p>
+                           <p className="text-[9px] text-[#64748B] font-sans">Penyetoran wajib dilakukan paling lambat tanggal 15 setiap bulannya.</p>
                          </div>
                          <button
                            onClick={async () => {
@@ -2166,14 +2166,14 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
  
                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-semibold">
                          <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                           <span className="text-[9px] text-slate-400 font-mono block">ESTIMASI BEBAN PPh FINAL (0.5%)</span>
+                           <span className="text-[9px] text-[#64748B] font-mono block">ESTIMASI BEBAN PPh FINAL (0.5%)</span>
                            <div className="text-sm font-bold text-slate-800 font-mono mt-1">
                              {formatRupiah(totalInflow * 0.005)}
                            </div>
-                           <p className="text-[8px] text-slate-400 font-normal leading-relaxed mt-0.5 font-sans">PPh Final PP No. 55 Tahun 2022 atas omset usaha kos mikro.</p>
+                           <p className="text-[8px] text-[#64748B] font-normal leading-relaxed mt-0.5 font-sans">PPh Final PP No. 55 Tahun 2022 atas omset usaha kos mikro.</p>
                          </div>
                          <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                           <span className="text-[9px] text-slate-400 font-mono block">STATUS KEPATUHAN PAJAK</span>
+                           <span className="text-[9px] text-[#64748B] font-mono block">STATUS KEPATUHAN PAJAK</span>
                            <span className="inline-block bg-emerald-50 border border-emerald-200 text-brand-green text-[9px] font-extrabold px-2 py-0.5 rounded-full mt-2 uppercase font-mono">
                              Taat Pajak (Compliant)
                            </span>
@@ -2277,8 +2277,8 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           <div className="space-y-4">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Kupon Promo & Kampanye Diskon</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">Terbitkan potongan harga sewa eksklusif untuk mendongkrak minat okupansi.</p>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Kupon Promo & Kampanye Diskon</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Terbitkan potongan harga sewa eksklusif untuk mendongkrak minat okupansi.</p>
               </div>
               <button 
                 onClick={() => {
@@ -2307,8 +2307,8 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           <div className="space-y-4">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-3">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Riwayat Transaksi Pemesanan & Kontrak Sewa</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">Pantau settlement pembayaran, unduh lembar spreadsheet, serta lihat & cetak bukti invoice penagihan.</p>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Riwayat Transaksi Pemesanan & Kontrak Sewa</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Pantau settlement pembayaran, unduh lembar spreadsheet, serta lihat & cetak bukti invoice penagihan.</p>
               </div>
               <button
                 type="button"
@@ -2353,7 +2353,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                 placeholder="Cari nama penyewa atau nomor kamar..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 text-xs pl-9 pr-4 py-2.5 rounded-2xl outline-none text-slate-200 focus:border-amber-500 transition-colors"
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-xs pl-9 pr-4 py-2.5 rounded-2xl outline-none text-[#3A444D] focus:border-[#0D9488] focus:bg-white transition-colors font-medium"
               />
             </div>
 
@@ -2366,24 +2366,24 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                 .map(b => {
                   const propertyName = properties.find(p => p.id === b.property_id)?.name || 'Properti Kos';
                   return (
-                    <div key={b.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl space-y-3 text-xs">
+                    <div key={b.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] space-y-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
                       <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[9px] font-mono bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded border border-blue-500/20 font-bold uppercase tracking-wider">
+                            <span className="text-[9px] font-mono bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg border border-blue-100 font-bold uppercase tracking-wider">
                               {b.midtrans_order_id || `BOOK-${b.id}`}
                             </span>
                             <span className="text-[9px] text-slate-500 font-mono italic">
                               Masuk: {b.booking_date}
                             </span>
                           </div>
-                          <h4 className="font-extrabold text-white uppercase mt-1.5">
+                          <h4 className="font-extrabold text-[#3A444D] uppercase mt-1.5 text-sm">
                             {b.tenant_name}
                           </h4>
-                          <p className="text-[10px] text-slate-400 mt-0.5">
-                            Kamar <strong className="text-amber-500">{b.room_number}</strong> | {propertyName}
+                          <p className="text-[11px] text-[#64748B] mt-0.5">
+                            Kamar <strong className="text-[#0D9488] font-bold">{b.room_number}</strong> | {propertyName}
                           </p>
-                          <p className="text-[9px] text-slate-450 font-mono mt-1">
+                          <p className="text-[11px] text-[#64748B] font-mono mt-1">
                             Durasi: {b.duration_months > 0 ? `${b.duration_months} Bulan` : 'Sewa Harian'} | Mulai Sewa: {b.check_in_date}
                           </p>
                         </div>
@@ -2392,18 +2392,18 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             b.status === 'approved' 
                               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
                               : b.status === 'pending'
-                                ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 animate-pulse'
+                                ? 'bg-amber-500/10 text-[#0D9488] font-bold border-amber-500/20 animate-pulse'
                                 : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
                           }`}>
                             {b.status === 'approved' ? 'Lunas / Berjalan' : b.status === 'pending' ? 'Menunggu Bayar' : 'Dibatalkan'}
                           </span>
-                          <span className="text-xs font-mono font-bold text-slate-200 block">
+                          <span className="text-sm font-mono font-bold text-[#3A444D] block">
                             {formatRupiah(b.total_price)}
                           </span>
                         </div>
                       </div>
 
-                      <div className="flex gap-2 border-t border-slate-850/80 pt-2.5 flex-wrap">
+                      <div className="flex gap-2 border-t border-[#F1F5F9] pt-3.5 flex-wrap">
                         <button
                           type="button"
                           onClick={() => {
@@ -2418,7 +2418,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                               date: b.check_in_date || b.booking_date
                             });
                           }}
-                          className="p-1 px-3 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-xl transition font-medium cursor-pointer text-[10px] flex items-center gap-1 border border-slate-700"
+                          className="p-2 px-4 bg-white hover:bg-[#F8FAFC] text-[#3A444D] rounded-xl border border-[#E2E8F0] transition font-bold cursor-pointer text-xs flex items-center gap-1.5 shadow-xs"
                         >
                           <FileText size={11} />
                           Lihat & Cetak Invoice (Kwitansi)
@@ -2429,7 +2429,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             <button
                               type="button"
                               onClick={() => handleApproveBooking(b)}
-                              className="p-1 px-3 bg-emerald-650 hover:bg-emerald-600 text-white rounded-xl font-bold cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md"
+                              className="p-2 px-4 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl font-bold cursor-pointer transition text-xs flex items-center gap-1.5 shadow-xs"
                             >
                               <Check size={11} />
                               Setujui Pembayaran
@@ -2437,7 +2437,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             <button
                               type="button"
                               onClick={() => handleCancelBooking(b)}
-                              className="p-1 px-3 bg-red-950/20 hover:bg-red-500 text-red-500 rounded-xl transition cursor-pointer text-[10px] flex items-center gap-1 border border-red-500/20"
+                              className="p-2 px-4 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl transition font-bold cursor-pointer text-xs flex items-center gap-1.5 border border-red-100 hover:border-red-500 shadow-xs"
                             >
                               <X size={11} />
                               Tolak
@@ -2458,10 +2458,10 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
         {activeTab === 'tenants' && (
           <div className="space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3 flex-wrap gap-2">
+            <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-4 flex-wrap gap-4 text-left">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Daftar Aktif Penghuni Kamar (Tenants)</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">Daftar seluruh penghuni kosmopolit terverifikasi dengan info alokasi kamar & jangka waktu sewa berjalan.</p>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Daftar Aktif Penghuni Kamar (Tenants)</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Daftar seluruh penghuni kosmopolit terverifikasi dengan info alokasi kamar & jangka waktu sewa berjalan.</p>
               </div>
               <button
                 type="button"
@@ -2498,7 +2498,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                     triggerAppRefresh();
                   }
                 }}
-                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 transition-all shadow-md focus:outline-none cursor-pointer"
+                className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all shadow-sm focus:outline-none cursor-pointer"
               >
                 <Plus size={11} />
                 Pendaftaran Manual
@@ -2510,27 +2510,27 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                 const propertyName = properties.find(p => p.id === t.property_id)?.name || 'Properti Kos';
                 const dateEnd = new Date(new Date(t.start_date).setMonth(new Date(t.start_date).getMonth() + (t.duration_months || 1))).toISOString().split('T')[0];
                 return (
-                  <div key={t.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl flex gap-3.5 items-start text-xs relative overflow-hidden shadow-sm">
-                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-extrabold text-white shrink-0 shadow-inner bg-slate-800`}>
+                  <div key={t.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex gap-4 items-start text-xs relative overflow-hidden shadow-xs text-left hover:border-[#0D9488] transition-all">
+                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-extrabold text-white shrink-0 shadow-inner bg-[#0D9488]/10 text-[#0D9488]`}>
                       {t.avatar_initials || t.full_name.slice(0, 2).toUpperCase()}
                     </div>
                     <div className="space-y-1.5 flex-1 min-w-0">
                       <div>
-                        <h4 className="font-extrabold text-white text-sm tracking-tight truncate capitalize">{t.full_name}</h4>
-                        <p className="text-[10px] text-slate-455 font-mono font-bold uppercase">{propertyName}</p>
+                        <h4 className="font-extrabold text-[#3A444D] text-base tracking-tight truncate capitalize">{t.full_name}</h4>
+                        <p className="text-[10px] text-[#64748B] font-mono font-bold uppercase">{propertyName}</p>
                       </div>
 
-                      <div className="space-y-1 text-slate-350 text-[11px]">
-                        <p>📍 Kamar Alokasi: <strong className="text-amber-500 font-mono">Kamar {t.room_number}</strong></p>
-                        <p>📞 No. WhatsApp: <span className="font-mono text-slate-300">{t.phone}</span></p>
-                        <p>⏱️ Jangka Pemesanan: <span className="font-mono text-slate-200 font-bold">{t.duration_months || 1} Bulan</span></p>
-                        <p className="text-[10px] text-slate-450 mt-1">
-                          Periode: <span className="font-mono font-bold text-slate-400">{t.start_date}</span> s/d <span className="font-mono font-bold text-slate-450">{dateEnd}</span>
+                      <div className="space-y-1 text-[#64748B] text-[11px]">
+                        <p>📍 Kamar Alokasi: <strong className="text-[#0D9488] font-bold font-mono">Kamar {t.room_number}</strong></p>
+                        <p>📞 No. WhatsApp: <span className="font-mono text-[#3A444D]">{t.phone}</span></p>
+                        <p>⏱️ Jangka Pemesanan: <span className="font-mono text-[#3A444D] font-bold">{t.duration_months || 1} Bulan</span></p>
+                        <p className="text-[10px] text-[#64748B] mt-1">
+                          Periode: <span className="font-mono font-bold text-[#64748B]">{t.start_date}</span> s/d <span className="font-mono font-bold text-[#64748B]">{dateEnd}</span>
                         </p>
                       </div>
 
-                      <div className="flex gap-2 pt-1.5 border-t border-slate-800 mt-2 flex-wrap items-center justify-between">
-                        <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/15">
+                      <div className="flex gap-2 pt-3 border-t border-[#F1F5F9] mt-3 flex-wrap items-center justify-between">
+                        <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-100">
                           Verified Tenant
                         </span>
                         <button
@@ -2574,8 +2574,8 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           <div className="space-y-4">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">User & Manajemen Hak Akses (RBAC)</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">Daftarkan fungsionaris klerikal / petugas lapangan, atur limit akses finansial & modifikasi basis data.</p>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">User & Manajemen Hak Akses (RBAC)</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Daftarkan fungsionaris klerikal / petugas lapangan, atur limit akses finansial & modifikasi basis data.</p>
               </div>
               <button
                 type="button"
@@ -2605,15 +2605,15 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                       <span className="font-extrabold text-white text-sm capitalize">{u.full_name}</span>
                       <span className={`text-[8px] font-mono font-bold uppercase px-2 py-0.5 rounded-full ${
                         u.role === 'super' || u.role === 'admin' 
-                          ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' 
+                          ? 'bg-amber-500/10 text-[#0D9488] font-bold border border-amber-500/20' 
                           : u.role === 'finance'
                             ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            : 'bg-slate-800 text-slate-400'
+                            : 'bg-[#0D9488]/10 text-[#0D9488] text-[#64748B]'
                       }`}>
                         {u.role === 'super' ? 'SUPER COOP' : u.role === 'admin' ? 'SYSTEM ADMIN' : u.role === 'finance' ? 'CHIEF FINANCIAL' : 'FIELD OPERATOR'}
                       </span>
                     </div>
-                    <p className="text-[10px] text-slate-400">📧 Email: <span className="font-mono text-slate-300">{u.email}</span></p>
+                    <p className="text-[10px] text-[#64748B]">📧 Email: <span className="font-mono text-[#3A444D]">{u.email}</span></p>
                     <p className="text-[10px] text-slate-500 flex items-center gap-1">🔑 Izin Otoritas: <span className="font-sans text-slate-305">{u.access}</span></p>
                     <span className="text-[9px] text-slate-600 block">Last login: {u.last_login || 'Masa aktif hari ini'}</span>
                   </div>
@@ -2632,7 +2632,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                         });
                         setShowUserModal(true);
                       }}
-                      className="flex-1 md:flex-initial p-1.5 px-3 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center"
+                      className="flex-1 md:flex-initial p-1.5 px-3 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center"
                     >
                       <Edit2 size={11} />
                       Ubah Izin
@@ -2656,8 +2656,8 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           <div className="space-y-4">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight">Audit Trail & Log Aktivitas Kepegawaian</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">Mutasi kronologis perubahan inventaris kamar, setoran reservasi survey, serta reset ledger akuntansi.</p>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Audit Trail & Log Aktivitas Kepegawaian</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Mutasi kronologis perubahan inventaris kamar, setoran reservasi survey, serta reset ledger akuntansi.</p>
               </div>
               <button
                 type="button"
@@ -2681,7 +2681,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               {activityLogs.map(l => (
                 <div key={l.id} className="border-b border-white/5 pb-2.5 flex flex-col sm:flex-row justify-between text-slate-350 gap-1 select-all">
                   <div>
-                    <span className="text-amber-500 font-bold uppercase tracking-wider">[{l.time || '11:15'}]</span>{' '}
+                    <span className="text-[#0D9488] font-bold font-bold uppercase tracking-wider">[{l.time || '11:15'}]</span>{' '}
                     <span className="text-indigo-400 font-extrabold">@{l.admin_name}</span>{' '}
                     <span className="text-white font-bold bg-slate-900 px-1 py-0.2 rounded tracking-wide border border-slate-800 text-[9px] uppercase">{l.action}</span>
                     <p className="text-[#8e9aa8] text-[9.5px] mt-0.5">{l.detail}</p>
@@ -2701,14 +2701,14 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-800 pb-3 gap-2">
               <div>
-                <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight flex items-center gap-2">
-                  <Terminal size={14} className="text-amber-500" />
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
+                  <Terminal size={14} className="text-[#0D9488] font-bold" />
                   Midtrans Sandbox & Diagnostics Ledger
                 </h2>
-                <p className="text-[11px] text-slate-400 mt-0.5 font-sans">Real-time monitoring of browser client payments, API requests, state responses, and webhook ingestions.</p>
+                <p className="text-xs text-[#64748B] mt-0.5 font-sans">Real-time monitoring of browser client payments, API requests, state responses, and webhook ingestions.</p>
               </div>
               <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                <label className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-400 uppercase cursor-pointer bg-slate-900 border border-slate-805 px-3 py-1.5 rounded-xl">
+                <label className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-[#64748B] uppercase cursor-pointer bg-slate-900 border border-slate-805 px-3 py-1.5 rounded-xl">
                   <input 
                     type="checkbox" 
                     checked={autoRefreshLogs} 
@@ -2720,7 +2720,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                 <button
                   type="button"
                   onClick={fetchMidtransLogs}
-                  className="bg-slate-850 hover:bg-slate-800 text-slate-350 hover:text-white p-1.5 px-3 rounded-xl transition text-[10px] border border-slate-850 flex items-center gap-1.5 font-bold cursor-pointer"
+                  className="bg-slate-850 hover:bg-[#0D9488]/10 text-[#0D9488] text-slate-350 hover:text-white p-1.5 px-3 rounded-xl transition text-[10px] border border-slate-850 flex items-center gap-1.5 font-bold cursor-pointer"
                 >
                   <RefreshCw size={12} className={midtransLoading ? "animate-spin" : ""} />
                   Sync
@@ -2745,7 +2745,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[10px]">
                   <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-850 space-y-1">
                     <span className="text-slate-500 block uppercase font-mono font-bold">Client Key (Public-Facing)</span>
-                    <p className="font-mono text-slate-300 break-all select-all">
+                    <p className="font-mono text-[#3A444D] break-all select-all">
                       {(import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || '🔴 NOT DETECTED'}
                     </p>
                     <span className={`inline-block text-[8px] font-bold uppercase rounded-full px-2 py-0.2 mt-1 ${((import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || '').startsWith('SB-') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-450 border border-red-500/20'}`}>
@@ -2755,7 +2755,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
                   <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-850 space-y-1">
                     <span className="text-slate-500 block uppercase font-mono font-bold">Server Key (Secure API Proxy)</span>
-                    <p className="font-mono text-slate-300">
+                    <p className="font-mono text-[#3A444D]">
                       ••••••••••••••••{midtransLogs.length > 0 ? " (Configured)" : " (Loading diagnostics)"}
                     </p>
                     <span className="inline-block text-[8px] font-bold bg-amber-500/10 text-amber-550 border border-amber-500/20 uppercase rounded-full px-2 py-0.2 mt-1">
@@ -2764,10 +2764,10 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                   </div>
                 </div>
 
-                <div className="text-[10px] text-slate-400 space-y-1.5 leading-relaxed bg-slate-950/40 p-3 rounded-2xl border border-white/5">
-                  <p className="font-bold text-slate-300">💡 Cara Menyelesaikan Pembayaran Sandbox / Simulasi:</p>
+                <div className="text-[10px] text-[#64748B] space-y-1.5 leading-relaxed bg-slate-950/40 p-3 rounded-2xl border border-white/5">
+                  <p className="font-bold text-[#3A444D]">💡 Cara Menyelesaikan Pembayaran Sandbox / Simulasi:</p>
                   <ul className="list-disc pl-4 space-y-1 text-slate-350">
-                    <li>Saat booking baru di checkout, modal <span className="text-amber-500 font-bold">Midtrans Snap</span> akan muncul otomatis di client browser.</li>
+                    <li>Saat booking baru di checkout, modal <span className="text-[#0D9488] font-bold font-bold">Midtrans Snap</span> akan muncul otomatis di client browser.</li>
                     <li>Jika server tidak mendeteksi kredensial asli, tombol <span className="text-emerald-400 font-bold">"Failsafe Interactive Simulation"</span> gratis akan terdorong secara otomatis!</li>
                     <li>Untuk melakukan flow transaksi sandbox asli, salin nomor rekening virtual (VA) yang ditunjuk oleh Midtrans popup sandbox Anda.</li>
                     <li>Masukkan nomor VA tersebut ke simulator resmi di: <a href="https://payment-simulator.sandbox.midtrans.com" target="_blank" rel="noopener noreferrer" className="text-amber-550 hover:underline font-bold inline-flex items-center gap-0.5 font-mono">Simulator Midtrans <ExternalLink size={9} /></a> lalu klik Bayar/Settle untuk menembak webhook API secara instan!</li>
@@ -2779,10 +2779,10 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               <div className="bg-indigo-950/20 border border-indigo-500/10 p-4 rounded-3xl flex flex-col justify-between space-y-3.5">
                 <div>
                   <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider flex items-center gap-1.5 font-mono">
-                    <Activity size={12} className="text-amber-500" />
+                    <Activity size={12} className="text-[#0D9488] font-bold" />
                     Ledger Metrics
                   </h3>
-                  <p className="text-[10px] text-slate-400 mt-1">Metrik agregat sandbox request sejak server runtime diinisialisasi:</p>
+                  <p className="text-[10px] text-[#64748B] mt-1">Metrik agregat sandbox request sejak server runtime diinisialisasi:</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-center font-mono">
@@ -2827,7 +2827,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                   className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all duration-155 cursor-pointer ${
                     midtransFilter === f.id
                       ? 'bg-amber-500 text-black shadow-sm'
-                      : 'bg-slate-900 border border-slate-805 text-slate-400 hover:text-white'
+                      : 'bg-slate-900 border border-slate-805 text-[#64748B] hover:text-white'
                   }`}
                 >
                   {f.name}
@@ -2859,7 +2859,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             log.type === 'webhook' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' :
                             log.type === 'simulation' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
                             log.type === 'error' ? 'bg-red-500/10 text-red-500 border border-red-500/20' :
-                            'bg-slate-800 text-slate-400'
+                            'bg-[#0D9488]/10 text-[#0D9488] text-[#64748B]'
                           }`}>
                             {log.type.toUpperCase()}
                           </span>
@@ -2872,15 +2872,15 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                             {log.status.toUpperCase()}
                           </span>
 
-                          <span className="text-slate-300 font-extrabold select-all">Order: {log.orderId}</span>
+                          <span className="text-[#3A444D] font-extrabold select-all">Order: {log.orderId}</span>
                           
                           {log.amount && (
-                            <span className="text-amber-500 font-bold">{formatRupiah(log.amount)}</span>
+                            <span className="text-[#0D9488] font-bold font-bold">{formatRupiah(log.amount)}</span>
                           )}
                         </div>
 
                         <div className="flex items-center gap-1.5 justify-end w-full md:w-auto">
-                          <div className="text-slate-400 text-[10px] md:text-right max-w-sm truncate">
+                          <div className="text-[#64748B] text-[10px] md:text-right max-w-sm truncate">
                             {log.message}
                           </div>
                           <span className="text-slate-600 text-[10px] font-bold font-sans">
@@ -2898,20 +2898,20 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                               navigator.clipboard.writeText(JSON.stringify(log, null, 2));
                               alert('Payload JSON disalin ke papan klip!');
                             }}
-                            className="absolute right-3 top-3 bg-slate-950 p-1 px-2.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer text-[9px] font-bold font-sans"
+                            className="absolute right-3 top-3 bg-slate-950 p-1 px-2.5 rounded-lg border border-slate-800 text-[#64748B] hover:text-white transition flex items-center gap-1.5 cursor-pointer text-[9px] font-bold font-sans"
                           >
                             <Copy size={9} />
                             Copy JSON
                           </button>
                           
                           <div className="text-[10px] text-slate-500 font-mono space-y-1">
-                            <div><span className="font-bold text-slate-400">Timestamp:</span> {log.timestamp} ({new Date(log.timestamp).toLocaleString()})</div>
-                            {log.customerName && <div><span className="font-bold text-slate-400">Customer:</span> {log.customerName} &lt;{log.customerEmail}&gt;</div>}
-                            <div><span className="font-bold text-slate-400">UUID Tracking ID:</span> {log.id}</div>
+                            <div><span className="font-bold text-[#64748B]">Timestamp:</span> {log.timestamp} ({new Date(log.timestamp).toLocaleString()})</div>
+                            {log.customerName && <div><span className="font-bold text-[#64748B]">Customer:</span> {log.customerName} &lt;{log.customerEmail}&gt;</div>}
+                            <div><span className="font-bold text-[#64748B]">UUID Tracking ID:</span> {log.id}</div>
                           </div>
 
                           <div className="pt-2 border-t border-white/5">
-                            <span className="text-[9px] font-bold text-slate-400 uppercase block font-mono mb-1">State Payload Details:</span>
+                            <span className="text-[9px] font-bold text-[#64748B] uppercase block font-mono mb-1">State Payload Details:</span>
                             <pre className="text-[9px] text-[#bdc3c7] font-mono leading-relaxed bg-slate-950 p-3.5 rounded-xl border border-slate-855 overflow-x-auto select-all max-h-60 no-scrollbar whitespace-pre-wrap">
                               {JSON.stringify(log.details, null, 2)}
                             </pre>
@@ -2935,11 +2935,11 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         {activeTab === 'email_integration' && (
           <div className="space-y-6">
             <div className="border-b border-slate-800 pb-3">
-              <h2 className="text-base font-extrabold font-display text-white uppercase tracking-tight flex items-center gap-2">
-                <Mail size={14} className="text-amber-500" />
+              <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
+                <Mail size={14} className="text-[#0D9488] font-bold" />
                 Integrasi Email Notifikasi Premium (MailerSend)
               </h2>
-              <p className="text-[11px] text-slate-400 mt-0.5">Konfigurasi pengiriman email kuitansi digital, jadwal reservasi survey, dan notifikasi hunian real-time via MailerSend.</p>
+              <p className="text-xs text-[#64748B] mt-0.5">Konfigurasi pengiriman email kuitansi digital, jadwal reservasi survey, dan notifikasi hunian real-time via MailerSend.</p>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2947,19 +2947,19 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               {/* Kolom Kiri: Konfigurasi Identitas Pengirim */}
               <div className="bg-slate-900 border border-slate-805 p-5 rounded-3xl space-y-4">
                 <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider font-mono flex items-center gap-2">
-                  <UserCog size={13} className="text-amber-500" />
+                  <UserCog size={13} className="text-[#0D9488] font-bold" />
                   Kredensial & Identitas Pengirim
                 </h3>
 
                 <div className="space-y-3.5 text-xs">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">MailerSend API Key</label>
+                    <label className="block text-[10px] font-bold text-[#64748B] uppercase tracking-wider mb-1 font-mono">MailerSend API Key</label>
                     <div className="relative">
                       <input 
                         type="password" 
                         readOnly
                         value="••••••••••••••••••••••••••••••••"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 font-mono text-[10px]"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-[#3A444D] font-mono text-[10px]"
                       />
                       <span className="absolute right-3 top-2 text-[8px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded px-1.5 py-0.5 font-bold uppercase font-mono">
                         Server Injected
@@ -2969,25 +2969,25 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">From Email (Domain Terverifikasi)</label>
+                    <label className="block text-[10px] font-bold text-[#64748B] uppercase tracking-wider mb-1 font-mono">From Email (Domain Terverifikasi)</label>
                     <input 
                       type="email" 
                       value={emailSenderEmail}
                       onChange={(e) => setEmailSenderEmail(e.target.value)}
                       placeholder="info@trial-3yxj5ljp10zg6o2r.mlsender.net"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 font-mono text-[11px]"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-[#3A444D] font-mono text-[11px]"
                     />
-                    <p className="text-[9px] text-slate-500 mt-1 font-sans">PENTING: MailerSend akun trial mewajibkan alamat pengirim berakhiran domain trial mereka (contoh: <code className="text-slate-400 font-mono">info@trial-3yxj5ljp10zg6o2r.mlsender.net</code>). Sesuaikan jika Anda mendaftarkan domain Anda sendiri.</p>
+                    <p className="text-[9px] text-slate-500 mt-1 font-sans">PENTING: MailerSend akun trial mewajibkan alamat pengirim berakhiran domain trial mereka (contoh: <code className="text-[#64748B] font-mono">info@trial-3yxj5ljp10zg6o2r.mlsender.net</code>). Sesuaikan jika Anda mendaftarkan domain Anda sendiri.</p>
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Nama Pengirim (Sender Name)</label>
+                    <label className="block text-[10px] font-bold text-[#64748B] uppercase tracking-wider mb-1 font-mono">Nama Pengirim (Sender Name)</label>
                     <input 
                       type="text" 
                       value={emailSenderName}
                       onChange={(e) => setEmailSenderName(e.target.value)}
                       placeholder="Samara Stay Premium"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 text-[11px]"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-[#3A444D] text-[11px]"
                     />
                     <p className="text-[9px] text-slate-500 mt-1 font-sans">Nama yang akan tertera sebagai pengirim pada kotak masuk email penyewa kos.</p>
                   </div>
@@ -2998,12 +2998,12 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                     <CheckCircle size={10} className="text-emerald-400" />
                     Automated Event Triggers
                   </p>
-                  <p className="text-slate-400 leading-relaxed font-sans">
+                  <p className="text-[#64748B] leading-relaxed font-sans">
                     Sistem Samara Stay telah dikonfigurasi untuk mengirimkan notifikasi email secara otomatis pada kejadian berikut:
                   </p>
                   <ul className="list-disc pl-4 space-y-1 text-slate-500 font-sans">
-                    <li><strong className="text-slate-400">Pembayaran Sewa Sukses</strong>: Kuitansi digital dikirim otomatis ke penyewa.</li>
-                    <li><strong className="text-slate-400">Survey Terjadwal & Lunas</strong>: Surat konfirmasi kedatangan survey & reservasi dikirim instan.</li>
+                    <li><strong className="text-[#64748B]">Pembayaran Sewa Sukses</strong>: Kuitansi digital dikirim otomatis ke penyewa.</li>
+                    <li><strong className="text-[#64748B]">Survey Terjadwal & Lunas</strong>: Surat konfirmasi kedatangan survey & reservasi dikirim instan.</li>
                   </ul>
                 </div>
               </div>
@@ -3011,40 +3011,40 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               {/* Kolom Kanan: Formulir Uji Coba Email */}
               <div className="bg-slate-900 border border-slate-805 p-5 rounded-3xl space-y-4">
                 <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider font-mono flex items-center gap-2">
-                  <Play size={11} className="text-amber-500" />
+                  <Play size={11} className="text-[#0D9488] font-bold" />
                   Kirim Uji Coba Email (Live Test)
                 </h3>
 
                 <div className="space-y-3.5 text-xs">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Email Penerima (To Recipient)</label>
+                    <label className="block text-[10px] font-bold text-[#64748B] uppercase tracking-wider mb-1 font-mono">Email Penerima (To Recipient)</label>
                     <input 
                       type="email" 
                       value={testEmailTo}
                       onChange={(e) => setTestEmailTo(e.target.value)}
                       placeholder="contoh: yogiatmaja26@gmail.com"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 font-mono text-[11px]"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-[#3A444D] font-mono text-[11px]"
                     />
                     <p className="text-[9px] text-slate-500 mt-1 font-sans">Catatan trial: MailerSend trial hanya memperbolehkan pengiriman ke email yang terdaftar sebagai authorized recipient atau email akun pembuat MailerSend Anda.</p>
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Subjek Email (Subject)</label>
+                    <label className="block text-[10px] font-bold text-[#64748B] uppercase tracking-wider mb-1 font-mono">Subjek Email (Subject)</label>
                     <input 
                       type="text" 
                       value={testEmailSubject}
                       onChange={(e) => setTestEmailSubject(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 text-[11px]"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-[#3A444D] text-[11px]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-1 font-mono">Pesan / Isi Email (Message Content)</label>
+                    <label className="block text-[10px] font-bold text-[#64748B] uppercase tracking-wider mb-1 font-mono">Pesan / Isi Email (Message Content)</label>
                     <textarea 
                       rows={3}
                       value={testEmailBody}
                       onChange={(e) => setTestEmailBody(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 text-[11px] font-sans no-scrollbar"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-[#3A444D] text-[11px] font-sans no-scrollbar"
                     />
                   </div>
 
@@ -3052,7 +3052,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                     type="button"
                     onClick={handleSendTestEmail}
                     disabled={emailSending}
-                    className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-slate-800 text-black disabled:text-slate-500 font-extrabold py-2 rounded-xl transition duration-155 flex items-center justify-center gap-2 text-xs cursor-pointer"
+                    className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-[#0D9488]/10 text-[#0D9488] text-black disabled:text-slate-500 font-extrabold py-2 rounded-xl transition duration-155 flex items-center justify-center gap-2 text-xs cursor-pointer"
                   >
                     {emailSending ? (
                       <>
@@ -3077,10 +3077,10 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                     <p className="font-extrabold uppercase font-mono tracking-wider">
                       {emailResult.success ? '✓ Sukses Terkirim' : '✗ Gagal Mengirim'}
                     </p>
-                    <p className="font-sans leading-relaxed text-slate-300">{emailResult.message}</p>
+                    <p className="font-sans leading-relaxed text-[#3A444D]">{emailResult.message}</p>
                     {emailResult.details && (
                       <div className="pt-2 border-t border-white/5">
-                        <span className="font-bold text-slate-400 uppercase block font-mono mb-1 text-[8px]">Respons Detail API:</span>
+                        <span className="font-bold text-[#64748B] uppercase block font-mono mb-1 text-[8px]">Respons Detail API:</span>
                         <pre className="text-[9px] bg-slate-950 p-2 rounded-lg border border-white/5 overflow-x-auto select-all text-[#bdc3c7] font-mono leading-relaxed whitespace-pre-wrap max-h-32 no-scrollbar">
                           {typeof emailResult.details === 'object' ? JSON.stringify(emailResult.details, null, 2) : emailResult.details}
                         </pre>
@@ -3130,9 +3130,9 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         onClose={() => setShowCouponModal(false)}
         title="BUAT KUPON DISKON BARU"
       >
-        <form onSubmit={handleCreateCoupon} className="space-y-4 font-sans text-xs text-slate-300">
+        <form onSubmit={handleCreateCoupon} className="space-y-4 font-sans text-xs text-[#3A444D]">
           <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Kode Unik Kupon (KAPITAL)</label>
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Kode Unik Kupon (KAPITAL)</label>
             <input 
               type="text" required
               value={couponForm.code}
@@ -3143,7 +3143,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Deskripsi Kampanye</label>
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Deskripsi Kampanye</label>
             <input 
               type="text" required
               value={couponForm.description}
@@ -3155,7 +3155,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Tipe Potongan</label>
+              <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Tipe Potongan</label>
               <select
                 value={couponForm.discount_type}
                 onChange={(e) => setCouponForm({ ...couponForm, discount_type: e.target.value as any })}
@@ -3167,7 +3167,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Nilai Potongan</label>
+              <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Nilai Potongan</label>
               <input 
                 type="number" required
                 value={couponForm.discount_value}
@@ -3178,7 +3178,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Maksimal Potongan Nominal (IDR)</label>
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Maksimal Potongan Nominal (IDR)</label>
             <input 
               type="number" required
               value={couponForm.max_discount_amount}
@@ -3191,7 +3191,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             <button
               type="button"
               onClick={() => setShowCouponModal(false)}
-              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all cursor-pointer"
+              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-[#3A444D] font-bold transition-all cursor-pointer"
             >
               Batalkan
             </button>
@@ -3225,9 +3225,9 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         onClose={() => setShowUserModal(false)}
         title={activeUserEdit ? "MUTASI HAK AKSES SISTEM" : "DAFTAR AKSES BARU"}
       >
-        <form onSubmit={handleSaveUser} className="space-y-4 font-sans text-xs text-slate-300">
+        <form onSubmit={handleSaveUser} className="space-y-4 font-sans text-xs text-[#3A444D]">
           <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold text-slate-400 font-mono">Nama Lengkap Petugas</label>
+            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap Petugas</label>
             <input 
               type="text" required
               value={userForm.fullName}
@@ -3238,7 +3238,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold text-slate-400 font-mono">Alamat Email Resmi</label>
+            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Alamat Email Resmi</label>
             <input 
               type="email" required
               value={userForm.email}
@@ -3250,7 +3250,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold text-slate-400 font-mono">Jabatan / Role</label>
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Jabatan / Role</label>
               <select
                 value={userForm.role}
                 onChange={(e) => setUserForm({ ...userForm, role: e.target.value as any })}
@@ -3271,7 +3271,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                 onChange={(e) => setUserForm({ ...userForm, active: e.target.checked })}
                 className="w-4 h-4 accent-amber-500 rounded border-slate-800 bg-slate-950"
               />
-              <label htmlFor="active_status" className="text-[10px] font-bold text-slate-300 font-mono uppercase cursor-pointer">AKUN AKTIF</label>
+              <label htmlFor="active_status" className="text-[10px] font-bold text-[#3A444D] font-mono uppercase cursor-pointer">AKUN AKTIF</label>
             </div>
           </div>
 
@@ -3279,7 +3279,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             <button
               type="button"
               onClick={() => setShowUserModal(false)}
-              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all text-xs cursor-pointer"
+              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-[#3A444D] font-bold transition-all text-xs cursor-pointer"
             >
               Batalkan
             </button>
@@ -3299,13 +3299,13 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
         title={confirmDialog.title}
       >
-        <div className="space-y-4 font-sans text-slate-300">
+        <div className="space-y-4 font-sans text-[#3A444D]">
           <p className="text-sm leading-relaxed">{confirmDialog.message}</p>
           <div className="flex gap-2.5 pt-2">
             <button
               type="button"
               onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
-              className="flex-1 py-2 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all text-xs cursor-pointer"
+              className="flex-1 py-2 rounded-xl border border-white/10 hover:bg-white/5 text-[#3A444D] font-bold transition-all text-xs cursor-pointer"
             >
               Batalkan
             </button>
