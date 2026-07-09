@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import * as LucideIcons from 'lucide-react';
 import { database, sandboxState } from '../lib/supabase';
-import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice } from '../types';
+import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings } from '../types';
 import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
 import { Loader } from '../components/common/Loader';
@@ -37,7 +38,29 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [users, setUsers] = useState<UserSystem[]>([]);
   const [tenantsList, setTenantsList] = useState<Tenant[]>([]);
+  const [tenantFilter, setTenantFilter] = useState<'active' | 'checkout'>('active');
   const [loading, setLoading] = useState(true);
+
+  // Third-party occupant states
+  const [editingOccupantBooking, setEditingOccupantBooking] = useState<Booking | null>(null);
+  const [occupantForm, setOccupantForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    nik: ''
+  });
+
+  // System Settings & Master Facilities states
+  const [settings, setSettingsState] = useState<SystemSettings | null>(null);
+  const [facilitiesList, setFacilitiesList] = useState<{ icon: string, title: string, subtitle: string }[]>([]);
+  const [showFacilityModal, setShowFacilityModal] = useState(false);
+  const [editingFacilityIndex, setEditingFacilityIndex] = useState<number | null>(null);
+  const [facilityForm, setFacilityForm] = useState({
+    title: '',
+    subtitle: '',
+    icon: 'Sparkles'
+  });
+  const [facilitySearchQuery, setFacilitySearchQuery] = useState('');
 
   // ERP Finance states
   const [accounts, setAccounts] = useState<AccountCOA[]>([]);
@@ -423,7 +446,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
     async function loadData() {
       try {
         setLoading(true);
-        const [p, r, b, s, c, t, logs, uList, tList, acc, jrn, pay] = await Promise.all([
+        const [p, r, b, s, c, t, logs, uList, tList, acc, jrn, pay, sett] = await Promise.all([
           database.fetchProperties(),
           database.fetchRooms(),
           database.fetchBookings(),
@@ -435,10 +458,38 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           database.fetchTenants(),
           database.fetchAccounts(),
           database.fetchJournalEntries(),
-          database.fetchPayments()
+          database.fetchPayments(),
+          database.fetchSettings()
         ]);
-        setProperties(p);
-        setRooms(r);
+
+        let activeFacilitiesList: string[] = [];
+        if (sett && sett.standard_facilities) {
+          try {
+            const parsed = JSON.parse(sett.standard_facilities);
+            if (Array.isArray(parsed)) {
+              activeFacilitiesList = parsed.map((f: any) => f.title.trim().toLowerCase());
+            }
+          } catch (e) {
+            console.error("Error parsing standard_facilities in Admin:", e);
+          }
+        } else {
+          activeFacilitiesList = [
+            "jam operasional", "check in", "security", "wifi", "air", "parkir", "laundry", "cleaning"
+          ];
+        }
+
+        const filteredP = (p || []).map((item: any) => ({
+          ...item,
+          facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
+        }));
+
+        const filteredR = (r || []).map((item: any) => ({
+          ...item,
+          facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
+        }));
+
+        setProperties(filteredP);
+        setRooms(filteredR);
         setBookings(b);
         setSurveys(s);
         setCoupons(c);
@@ -449,6 +500,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         setAccounts(acc);
         setJournalEntries(jrn);
         setPayments(pay);
+        setSettingsState(sett);
       } catch (err) {
         console.error(err);
       } finally {
@@ -468,6 +520,88 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
     };
   }, [triggerAppRefresh]);
 
+  useEffect(() => {
+    if (settings && settings.standard_facilities) {
+      try {
+        const parsed = JSON.parse(settings.standard_facilities);
+        if (Array.isArray(parsed)) {
+          setFacilitiesList(parsed);
+        }
+      } catch (e) {
+        console.error("Error parsing standard_facilities:", e);
+      }
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    if (editingOccupantBooking) {
+      setOccupantForm({
+        name: editingOccupantBooking.occupant_name || '',
+        phone: editingOccupantBooking.occupant_phone || '',
+        email: editingOccupantBooking.occupant_email || '',
+        nik: editingOccupantBooking.occupant_nik || ''
+      });
+    }
+  }, [editingOccupantBooking]);
+
+  const handleSaveOccupantDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOccupantBooking) return;
+
+    const updatedBooking = {
+      ...editingOccupantBooking,
+      occupant_name: occupantForm.name,
+      occupant_phone: occupantForm.phone,
+      occupant_email: occupantForm.email,
+      occupant_nik: occupantForm.nik
+    };
+
+    await database.saveBooking(updatedBooking);
+
+    // Also update the room's tenant name if it is currently occupied by this booking
+    const room = rooms.find(r => r.id === editingOccupantBooking.room_id);
+    if (room && room.current_tenant_name === editingOccupantBooking.occupant_name) {
+      const updatedRoom = {
+        ...room,
+        current_tenant_name: occupantForm.name
+      };
+      await database.saveRoom(updatedRoom);
+    }
+
+    database.logActivity("System", "UPDATE_OCCUPANT_DATA", `Mengubah data penghuni untuk kamar ${editingOccupantBooking.room_number}`);
+    setEditingOccupantBooking(null);
+    triggerAppRefresh();
+  };
+
+  const handleConfirmArrival = async (b: Booking) => {
+    customConfirm(
+      'Konfirmasi Kedatangan Penghuni',
+      `Konfirmasi bahwa penghuni ${b.occupant_name || b.tenant_name} telah datang dan check-in secara fisik di kamar ${b.room_number}?`,
+      async () => {
+        const updated = { 
+          ...b, 
+          occupant_arrival_status: 'checked_in' as const, 
+          is_occupant_verified: true 
+        };
+        await database.saveBooking(updated);
+        
+        // Also update the room's current tenant name and status if necessary
+        const room = rooms.find(r => r.id === b.room_id);
+        if (room) {
+          const updatedRoom = {
+            ...room,
+            status: 'occupied' as const,
+            current_tenant_name: b.occupant_name || b.tenant_name
+          };
+          await database.saveRoom(updatedRoom);
+        }
+
+        database.logActivity("System", "ARRIVAL_CONFIRMATION", `Kedatangan penghuni ${b.occupant_name || b.tenant_name} dikonfirmasi`);
+        triggerAppRefresh();
+      }
+    );
+  };
+
   const handleApproveBooking = async (b: Booking) => {
     customConfirm(
       'Setujui Sewa Kamar',
@@ -477,6 +611,73 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         await database.saveBooking(updated);
         database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
         triggerAppRefresh();
+      }
+    );
+  };
+
+  const handleSaveFacility = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!facilityForm.title.trim()) {
+      alert("Nama fasilitas wajib diisi!");
+      return;
+    }
+
+    let newList = [...facilitiesList];
+    const newFacility = {
+      title: facilityForm.title.trim(),
+      subtitle: facilityForm.subtitle.trim(),
+      icon: facilityForm.icon
+    };
+
+    if (editingFacilityIndex !== null) {
+      newList[editingFacilityIndex] = newFacility;
+      database.logActivity("System", "UPDATE_FACILITY", `Mengubah fasilitas ${newFacility.title}`);
+    } else {
+      newList.push(newFacility);
+      database.logActivity("System", "CREATE_FACILITY", `Menambahkan fasilitas ${newFacility.title}`);
+    }
+
+    if (settings) {
+      const updatedSettings = {
+        ...settings,
+        standard_facilities: JSON.stringify(newList)
+      };
+      const saved = await database.saveSettings(updatedSettings);
+      setSettingsState(saved);
+      triggerAppRefresh();
+      setShowFacilityModal(false);
+    } else {
+      const updatedSettings = {
+        id: 1,
+        booking_rules: '',
+        survey_rules: '',
+        standard_facilities: JSON.stringify(newList)
+      };
+      const saved = await database.saveSettings(updatedSettings);
+      setSettingsState(saved);
+      triggerAppRefresh();
+      setShowFacilityModal(false);
+    }
+  };
+
+  const handleDeleteFacility = async (index: number) => {
+    const facilityTitle = facilitiesList[index]?.title;
+    customConfirm(
+      'Hapus Fasilitas',
+      `Apakah Anda yakin ingin menghapus fasilitas "${facilityTitle}" dari sistem master?`,
+      async () => {
+        const newList = facilitiesList.filter((_, idx) => idx !== index);
+        database.logActivity("System", "DELETE_FACILITY", `Menghapus fasilitas ${facilityTitle}`);
+        
+        if (settings) {
+          const updatedSettings = {
+            ...settings,
+            standard_facilities: JSON.stringify(newList)
+          };
+          const saved = await database.saveSettings(updatedSettings);
+          setSettingsState(saved);
+          triggerAppRefresh();
+        }
       }
     );
   };
@@ -842,6 +1043,97 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             </div>
           </div>
         )}
+
+        {activeTab === 'facilities' && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
+              <div>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Master Fasilitas Layanan</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Kelola dan kustomisasi daftar fasilitas all-inclusive untuk properti kos dan unit hunian.</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setEditingFacilityIndex(null);
+                  setFacilityForm({ title: '', subtitle: '', icon: 'Sparkles' });
+                  setShowFacilityModal(true);
+                }}
+                className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
+              >
+                <Plus size={14} />
+                Tambah Fasilitas
+              </button>
+            </div>
+
+            {/* Search Input */}
+            <div className="relative w-full">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none text-[#64748B]">
+                <Search size={14} />
+              </span>
+              <input
+                type="text"
+                value={facilitySearchQuery}
+                onChange={(e) => setFacilitySearchQuery(e.target.value)}
+                placeholder="Cari nama fasilitas..."
+                className="w-full bg-white border border-[#E2E8F0] pl-10 pr-4 py-2.5 rounded-2xl text-xs outline-none focus:border-[#0D9488]"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {facilitiesList
+                .filter(fac => fac.title.toLowerCase().includes(facilitySearchQuery.toLowerCase()))
+                .map((fac, idx) => {
+                  const IconComp = (LucideIcons as any)[fac.icon] || LucideIcons.HelpCircle;
+                  return (
+                    <div key={idx} className="bg-white border border-[#E2E8F0] p-4 rounded-[20px] flex flex-col justify-between gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-[#0D9488]/10 text-[#0D9488] flex items-center justify-center shrink-0">
+                          <IconComp size={18} />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-[#3A444D] text-sm">{fac.title}</h4>
+                          <p className="text-xs text-[#64748B] font-medium mt-0.5">{fac.subtitle || 'All-inclusive service'}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 border-t border-[#F1F5F9] pt-3">
+                        <button
+                          onClick={() => {
+                            setEditingFacilityIndex(idx);
+                            setFacilityForm({
+                              title: fac.title,
+                              subtitle: fac.subtitle || '',
+                              icon: fac.icon || 'Sparkles'
+                            });
+                            setShowFacilityModal(true);
+                          }}
+                          className="flex-1 p-2 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                        >
+                          <Edit2 size={12} />
+                          Ubah
+                        </button>
+                        <button
+                          onClick={() => handleDeleteFacility(idx)}
+                          className="flex-1 p-2 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                        >
+                          <Trash2 size={12} />
+                          Hapus
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {facilitiesList.filter(fac => fac.title.toLowerCase().includes(facilitySearchQuery.toLowerCase())).length === 0 && (
+                <div className="col-span-full bg-white border border-[#E2E8F0] p-8 rounded-[24px] text-center">
+                  <Sparkles className="mx-auto text-[#0D9488] mb-2 animate-bounce" size={24} />
+                  <span className="text-xs font-bold text-[#3A444D] block">Fasilitas Tidak Ditemukan</span>
+                  <span className="text-[10px] text-[#64748B] block mt-1">Coba saring dengan kata kunci lain atau daftarkan fasilitas master baru.</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
 
         {activeTab === 'surveys' && (
           <div className="space-y-4">
@@ -2390,18 +2682,81 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                         <div className="text-left sm:text-right space-y-1.5 shrink-0 self-stretch sm:self-auto flex sm:flex-col justify-between sm:justify-start items-center sm:items-end">
                           <span className={`text-[8px] font-mono px-2.5 py-0.5 rounded-full border font-bold uppercase block w-fit ${
                             b.status === 'approved' 
-                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
-                              : b.status === 'pending'
-                                ? 'bg-amber-500/10 text-[#0D9488] font-bold border-amber-500/20 animate-pulse'
-                                : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                              ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
+                              : b.status === 'checkout'
+                                ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                : b.status === 'pending'
+                                  ? 'bg-amber-500/10 text-[#0D9488] font-bold border-amber-500/20 animate-pulse'
+                                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
                           }`}>
-                            {b.status === 'approved' ? 'Lunas / Berjalan' : b.status === 'pending' ? 'Menunggu Bayar' : 'Dibatalkan'}
+                            {b.status === 'approved' ? 'Lunas / Berjalan' : b.status === 'checkout' ? 'Selesai / Checked Out' : b.status === 'pending' ? 'Menunggu Bayar' : 'Dibatalkan'}
                           </span>
                           <span className="text-sm font-mono font-bold text-[#3A444D] block">
                             {formatRupiah(b.total_price)}
                           </span>
                         </div>
                       </div>
+
+                      {(b.is_for_other || !!b.occupant_name) && (
+                        <div className="bg-amber-500/5 border border-amber-500/10 p-3.5 rounded-2xl space-y-2 mt-2">
+                          <div className="flex justify-between items-center flex-wrap gap-2">
+                            <span className="text-[10px] uppercase font-mono font-bold text-amber-600 tracking-wider flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                              Detail Penghuni Utama (Si B) - Pesanan Orang Lain
+                            </span>
+                            <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-lg border uppercase ${
+                              b.occupant_arrival_status === 'checked_in'
+                                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/10'
+                                : 'bg-amber-500/10 text-amber-600 border-amber-500/10 animate-pulse'
+                            }`}>
+                              {b.occupant_arrival_status === 'checked_in' ? '✓ Sudah Check-In (Settle)' : '⏳ Menunggu Kedatangan'}
+                            </span>
+                          </div>
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-700 p-2 bg-slate-50/50 rounded-xl border border-slate-100">
+                            <div>
+                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">Nama Lengkap</span>
+                              <strong className="text-slate-800 capitalize">{b.occupant_name || '-'}</strong>
+                            </div>
+                            <div>
+                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">No. WhatsApp</span>
+                              <strong className="text-slate-800 font-mono">{b.occupant_phone || '-'}</strong>
+                            </div>
+                            <div>
+                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">Email</span>
+                              <strong className="text-slate-800">{b.occupant_email || '-'}</strong>
+                            </div>
+                            <div>
+                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">NIK KTP</span>
+                              <strong className="text-slate-800 font-mono">{b.occupant_nik || '-'}</strong>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 pt-2 border-t border-slate-100/50">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingOccupantBooking(b);
+                              }}
+                              className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-600 hover:text-white font-extrabold text-[10px] rounded-xl border border-amber-500/20 transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider"
+                            >
+                              <Edit2 size={11} />
+                              Update Data Penghuni (Si B)
+                            </button>
+                            
+                            {b.occupant_arrival_status !== 'checked_in' && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmArrival(b)}
+                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-550 text-white font-extrabold text-[10px] rounded-xl transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider"
+                              >
+                                <CheckCircle size={11} />
+                                Konfirmasi Kedatangan (Check-In)
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                       <div className="flex gap-2 border-t border-[#F1F5F9] pt-3.5 flex-wrap">
                         <button
@@ -2505,8 +2860,39 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               </button>
             </div>
 
+            {/* Sub-tabs for filtering Active vs Checked Out tenants */}
+            <div className="flex gap-2 p-1 bg-[#F1F5F9] rounded-2xl w-fit">
+              <button
+                type="button"
+                onClick={() => setTenantFilter('active')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  tenantFilter === 'active'
+                    ? 'bg-white text-[#0D9488] shadow-xs'
+                    : 'text-[#64748B] hover:text-[#3A444D]'
+                }`}
+              >
+                Aktif Berjalan
+              </button>
+              <button
+                type="button"
+                onClick={() => setTenantFilter('checkout')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  tenantFilter === 'checkout'
+                    ? 'bg-white text-[#0D9488] shadow-xs'
+                    : 'text-[#64748B] hover:text-[#3A444D]'
+                }`}
+              >
+                Sudah Check-Out
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {tenantsList.map(t => {
+              {tenantsList
+                .filter(t => {
+                  const isCheckout = t.status === 'checkout';
+                  return tenantFilter === 'checkout' ? isCheckout : !isCheckout;
+                })
+                .map(t => {
                 const propertyName = properties.find(p => p.id === t.property_id)?.name || 'Properti Kos';
                 const dateEnd = new Date(new Date(t.start_date).setMonth(new Date(t.start_date).getMonth() + (t.duration_months || 1))).toISOString().split('T')[0];
                 return (
@@ -2530,41 +2916,69 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                       </div>
 
                       <div className="flex gap-2 pt-3 border-t border-[#F1F5F9] mt-3 flex-wrap items-center justify-between">
-                        <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-100">
-                          Verified Tenant
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            customConfirm(
-                              'Check Out Penghuni',
-                              `Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`,
-                              async () => {
-                                const list = sandboxState.getTenants();
-                                sandboxState.setTenants(list.filter(item => item.id !== t.id));
-                                
-                                // return room back to available 
-                                const rList = rooms.filter(x => x.room_number === t.room_number);
-                                for (const matchedRoom of rList) {
-                                  await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
+                        {t.status === 'checkout' ? (
+                          <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-rose-50 text-rose-700 border border-rose-100">
+                            Checked Out
+                          </span>
+                        ) : (
+                          <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-100">
+                            Verified Tenant
+                          </span>
+                        )}
+                        {t.status !== 'checkout' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              customConfirm(
+                                'Check Out Penghuni',
+                                `Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`,
+                                async () => {
+                                  // Mark tenant status as checkout and update
+                                  await database.saveTenant({ ...t, status: 'checkout' });
+                                  
+                                  // return room back to available 
+                                  const rList = rooms.filter(x => x.room_number === t.room_number);
+                                  for (const matchedRoom of rList) {
+                                    await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
+                                  }
+
+                                  // Also update corresponding bookings to 'checkout' status
+                                  const matchedBooking = bookings.find(b => 
+                                    b.room_number === t.room_number && 
+                                    b.property_id === t.property_id && 
+                                    (b.tenant_name.toLowerCase() === t.full_name.toLowerCase() || 
+                                     (b.occupant_name && b.occupant_name.toLowerCase() === t.full_name.toLowerCase())) &&
+                                    b.status === 'approved'
+                                  );
+                                  if (matchedBooking) {
+                                    await database.saveBooking({ ...matchedBooking, status: 'checkout' });
+                                  }
+
+                                  database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name} (Status: Checkout)`);
+                                  triggerAppRefresh();
                                 }
-                                database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name}`);
-                                triggerAppRefresh();
-                              }
-                            );
-                          }}
-                          className="text-rose-450 hover:text-rose-400 text-[10px] font-bold font-sans transition-colors cursor-pointer"
-                        >
-                          Check Out / Hapus
-                        </button>
+                              );
+                            }}
+                            className="text-rose-450 hover:text-rose-400 text-[10px] font-bold font-sans transition-colors cursor-pointer"
+                          >
+                            Check Out / Hapus
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
                 );
               })}
 
-              {tenantsList.length === 0 && (
-                <div className="col-span-2 text-center text-slate-500 text-xs py-10">Belum ada penyewa yang check-in aktif berjalan.</div>
+              {tenantsList.filter(t => {
+                const isCheckout = t.status === 'checkout';
+                return tenantFilter === 'checkout' ? isCheckout : !isCheckout;
+              }).length === 0 && (
+                <div className="col-span-2 text-center text-slate-500 text-xs py-10">
+                  {tenantFilter === 'checkout' 
+                    ? 'Belum ada penyewa yang sudah check-out.' 
+                    : 'Belum ada penyewa yang check-in aktif berjalan.'}
+                </div>
               )}
             </div>
           </div>
@@ -3122,6 +3536,169 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
           onSave={handleAddRoom}
           onCancel={() => setShowRoomModal(false)}
         />
+      </Modal>
+
+      {/* Facility Editor modal */}
+      <Modal
+        isOpen={showFacilityModal}
+        onClose={() => setShowFacilityModal(false)}
+        title={editingFacilityIndex !== null ? 'Ubah Master Fasilitas' : 'Tambah Master Fasilitas Baru'}
+      >
+        <form onSubmit={handleSaveFacility} className="space-y-4 font-sans text-xs text-[#3A444D]">
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Nama Fasilitas</label>
+            <input 
+              type="text" required
+              value={facilityForm.title}
+              onChange={(e) => setFacilityForm({ ...facilityForm, title: e.target.value })}
+              placeholder="Contoh: AC, WiFi, Water Heater"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none focus:border-[#0D9488]"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Keterangan / Subtitle</label>
+            <input 
+              type="text"
+              value={facilityForm.subtitle}
+              onChange={(e) => setFacilityForm({ ...facilityForm, subtitle: e.target.value })}
+              placeholder="Contoh: 100 Mbps, 1.5 PK, 24 Jam"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none focus:border-[#0D9488]"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Pilih Icon Representasi</label>
+            <div className="grid grid-cols-6 gap-2 p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl max-h-40 overflow-y-auto">
+              {[
+                { name: 'Wifi', label: 'WiFi' },
+                { name: 'Zap', label: 'Listrik' },
+                { name: 'Car', label: 'Parkir' },
+                { name: 'Shirt', label: 'Laundry' },
+                { name: 'Sparkles', label: 'Cleaning' },
+                { name: 'Droplet', label: 'Air' },
+                { name: 'Shield', label: 'Security' },
+                { name: 'LogIn', label: 'Check In' },
+                { name: 'BedDouble', label: 'Kamar' },
+                { name: 'Tv', label: 'TV' },
+                { name: 'Wind', label: 'AC' },
+                { name: 'Coffee', label: 'Pantry' },
+                { name: 'Refrigerator', label: 'Kulkas' },
+                { name: 'Key', label: 'Akses Kunci' },
+                { name: 'Bath', label: 'Mandi' },
+                { name: 'Lock', label: 'Gembok' },
+                { name: 'Camera', label: 'CCTV' }
+              ].map((ic) => {
+                const IconComp = (LucideIcons as any)[ic.name] || LucideIcons.HelpCircle;
+                const isSelected = facilityForm.icon === ic.name;
+                return (
+                  <button
+                    key={ic.name}
+                    type="button"
+                    onClick={() => setFacilityForm({ ...facilityForm, icon: ic.name })}
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
+                      isSelected 
+                        ? 'border-[#0D9488] bg-[#0D9488]/10 text-[#0D9488] font-bold' 
+                        : 'border-[#E2E8F0] hover:border-[#CBD5E1] text-[#64748B]'
+                    }`}
+                  >
+                    <IconComp size={16} />
+                    <span className="text-[8px] mt-1 truncate max-w-full">{ic.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setShowFacilityModal(false)}
+              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all duration-200 cursor-pointer"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all duration-200 cursor-pointer"
+            >
+              {editingFacilityIndex !== null ? 'Simpan Perubahan' : 'Tambah Fasilitas'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Third-Party Occupant Editor modal */}
+      <Modal
+        isOpen={!!editingOccupantBooking}
+        onClose={() => setEditingOccupantBooking(null)}
+        title="Update Data Lengkap Penghuni (Si B)"
+      >
+        <form onSubmit={handleSaveOccupantDetails} className="space-y-4 font-sans text-xs text-[#3A444D] text-left">
+          <div className="bg-amber-500/10 text-amber-600 p-2.5 rounded-xl text-[10px] leading-relaxed border border-amber-500/10">
+            <strong>Keterangan Admin:</strong> Perubahan data penghuni ini akan terhubung langsung ke database Supabase dan diperbarui di invoice/kontrak digital hunian.
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Nama Lengkap Penghuni (Si B)</label>
+            <input 
+              type="text" required
+              value={occupantForm.name}
+              onChange={(e) => setOccupantForm({ ...occupantForm, name: e.target.value })}
+              placeholder="Masukkan nama lengkap penghuni baru"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none focus:border-[#0D9488]"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">No. WhatsApp Aktif</label>
+            <input 
+              type="tel" required
+              value={occupantForm.phone}
+              onChange={(e) => setOccupantForm({ ...occupantForm, phone: e.target.value })}
+              placeholder="Contoh: 0812..."
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none focus:border-[#0D9488] font-mono"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">Email Aktif Penghuni</label>
+            <input 
+              type="email" required
+              value={occupantForm.email}
+              onChange={(e) => setOccupantForm({ ...occupantForm, email: e.target.value })}
+              placeholder="Contoh: email@penghuni.com"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none focus:border-[#0D9488]"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-[#64748B] font-mono">NIK KTP Penghuni (16 Digit)</label>
+            <input 
+              type="text" required maxLength={16}
+              value={occupantForm.nik}
+              onChange={(e) => setOccupantForm({ ...occupantForm, nik: e.target.value })}
+              placeholder="Masukkan NIK KTP"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none focus:border-[#0D9488] font-mono"
+            />
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setEditingOccupantBooking(null)}
+              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all duration-200 cursor-pointer"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all duration-200 cursor-pointer"
+            >
+              Simpan Perubahan
+            </button>
+          </div>
+        </form>
       </Modal>
 
       {/* Coupon Creator modal */}

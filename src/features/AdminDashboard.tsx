@@ -349,9 +349,8 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
             { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
             { icon: "Shield", title: "Security", subtitle: "24 Jam" },
             { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
-            { icon: "Zap", title: "Listrik", subtitle: "Token/Include" },
             { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
-            { icon: "Car", title: "Parkir", subtitle: "Motor & Mobil" },
+            { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
             { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
             { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
           ]);

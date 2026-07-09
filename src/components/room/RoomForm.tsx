@@ -3,6 +3,13 @@ import { Room, Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
 import { UploadCloud, Trash2, Image } from 'lucide-react';
 import { PRESETS } from '../../utils/imagePresets';
+import { database } from '../../lib/supabase';
+import * as LucideIcons from 'lucide-react';
+
+const renderIcon = (iconName: string) => {
+  const IconComponent = (LucideIcons as any)[iconName] || LucideIcons.HelpCircle;
+  return <IconComponent size={12} className="shrink-0" />;
+};
 
 interface RoomFormProps {
   room?: Room | null;
@@ -30,6 +37,25 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     daily_price: 100000,
     image_url: ''
   });
+
+  const [masterFacilities, setMasterFacilities] = useState<{ icon: string; title: string; subtitle: string }[]>([]);
+
+  useEffect(() => {
+    async function loadMasterFacilities() {
+      try {
+        const settings = await database.fetchSettings();
+        if (settings && settings.standard_facilities) {
+          const parsed = JSON.parse(settings.standard_facilities);
+          if (Array.isArray(parsed)) {
+            setMasterFacilities(parsed);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading master facilities in RoomForm:', err);
+      }
+    }
+    loadMasterFacilities();
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -216,7 +242,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         </div>
       </div>
 
-      <div className="space-y-1">
+      <div className="space-y-2">
         <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Fasilitas Dalam Kamar (Pisahkan Koma)</label>
         <input 
           type="text" 
@@ -225,6 +251,52 @@ export const RoomForm: React.FC<RoomFormProps> = ({
           placeholder="Ac, WiFi, Kasur Springbed, Kamar Mandi Dalam"
           className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500"
         />
+        {masterFacilities.length > 0 && (
+          <div className="pt-1.5 space-y-1">
+            <span className="text-[9px] text-slate-500 font-mono uppercase block">Pilih Cepat dari Master Fasilitas:</span>
+            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 bg-slate-950/45 rounded-xl border border-slate-900">
+              {masterFacilities.map((fac, idx) => {
+                const currentList = formData.facilitiesInput
+                  .split(',')
+                  .map(f => f.trim().toLowerCase())
+                  .filter(f => f.length > 0);
+                const isSelected = currentList.includes(fac.title.toLowerCase());
+                
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      const list = formData.facilitiesInput
+                        .split(',')
+                        .map(f => f.trim())
+                        .filter(f => f.length > 0);
+                      const index = list.findIndex(f => f.toLowerCase() === fac.title.toLowerCase());
+                      let newList: string[];
+                      if (index > -1) {
+                        newList = list.filter((_, i) => i !== index);
+                      } else {
+                        newList = [...list, fac.title];
+                      }
+                      setFormData(prev => ({
+                        ...prev,
+                        facilitiesInput: newList.join(', ')
+                      }));
+                    }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#0D9488]/20 text-[#0D9488] border-[#0D9488]/50'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    {renderIcon(fac.icon)}
+                    <span>{fac.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="space-y-1">

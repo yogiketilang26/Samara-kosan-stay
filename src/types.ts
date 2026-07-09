@@ -59,6 +59,7 @@ export interface Tenant {
   payment_status: 'paid' | 'pending' | 'overdue';
   emergency_contact?: string;
   created_at?: string;
+  status?: 'active' | 'checkout';
 }
 
 export interface Booking {
@@ -74,7 +75,7 @@ export interface Booking {
   pbjt?: number;
   deposit_amount?: number;
   payment_method: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'checkout';
   booking_date: string;
   user_id?: string;
   room_id: number | null;
@@ -89,6 +90,14 @@ export interface Booking {
   dp_amount?: number;
   coupon_code?: string | null;
   discount_amount?: number | null;
+  is_for_other?: boolean;
+  occupant_name?: string;
+  occupant_phone?: string;
+  occupant_email?: string;
+  occupant_nik?: string;
+  occupant_ktp_image?: string;
+  is_occupant_verified?: boolean;
+  occupant_arrival_status?: 'pending' | 'checked_in';
   created_at?: string;
 }
 

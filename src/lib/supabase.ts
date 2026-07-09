@@ -127,7 +127,7 @@ const SEED_PROPERTIES: Property[] = [
     type: "campur",
     total_rooms: 20,
     available_rooms: 15,
-    facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "Dapur Bersama", "Parkir Mobil"],
+    facilities: ["Ac", "WiFi", "Kamar Mandi Dalam", "Water Heater", "Dapur Bersama", "Parkir Motor"],
     image_url: PRESETS[0].dataUrl,
     images: [
       PRESETS[0].dataUrl,
@@ -523,9 +523,8 @@ const SEED_SETTINGS: SystemSettings = {
     { "icon": "LogIn", "title": "Check In", "subtitle": "Fleksibel" },
     { "icon": "Shield", "title": "Security", "subtitle": "24 Jam" },
     { "icon": "Wifi", "title": "WiFi", "subtitle": "100 Mbps" },
-    { "icon": "Zap", "title": "Listrik", "subtitle": "Token/Include" },
     { "icon": "Droplet", "title": "Air", "subtitle": "Bersih 24 Jam" },
-    { "icon": "Car", "title": "Parkir", "subtitle": "Motor & Mobil" },
+    { "icon": "Car", "title": "Parkir", "subtitle": "Hanya Motor" },
     { "icon": "Shirt", "title": "Laundry", "subtitle": "Tersedia" },
     { "icon": "Sparkles", "title": "Cleaning", "subtitle": "2x / Minggu" }
   ]),
@@ -658,7 +657,31 @@ export const sandboxState = {
   getActivityLogs: () => getLocalState<ActivityLog[]>('samara_activity_logs', SEED_ACTIVITY_LOGS),
   setActivityLogs: (data: ActivityLog[]) => setLocalState('samara_activity_logs', data),
 
-  getSettings: () => getLocalState<SystemSettings>('samara_settings', SEED_SETTINGS),
+  getSettings: () => {
+    const settings = getLocalState<SystemSettings>('samara_settings', SEED_SETTINGS);
+    if (settings && settings.standard_facilities) {
+      try {
+        const facs = JSON.parse(settings.standard_facilities);
+        if (Array.isArray(facs)) {
+          const filtered = facs.filter((f: any) => f.title !== 'Listrik');
+          const updated = filtered.map((f: any) => {
+            if (f.title === 'Parkir') {
+              return { ...f, subtitle: 'Hanya Motor' };
+            }
+            return f;
+          });
+          const serialized = JSON.stringify(updated);
+          if (serialized !== settings.standard_facilities) {
+            settings.standard_facilities = serialized;
+            localStorage.setItem('samara_settings', JSON.stringify(settings));
+          }
+        }
+      } catch (e) {
+        console.error('Error migrating settings in local state:', e);
+      }
+    }
+    return settings;
+  },
   setSettings: (data: SystemSettings) => setLocalState('samara_settings', data)
 };
 
@@ -867,24 +890,44 @@ export const database = {
     // Trigger room reservation status on approval
     if (updated.status === 'approved' && updated.room_id) {
       const rooms = sandboxState.getRooms();
-      sandboxState.setRooms(rooms.map(r => r.id === updated.room_id ? { ...r, status: 'occupied', current_tenant_name: updated.tenant_name } : r));
+      const occupantName = (updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_name || updated.tenant_name) : updated.tenant_name;
+      sandboxState.setRooms(rooms.map(r => r.id === updated.room_id ? { ...r, status: 'occupied', current_tenant_name: occupantName } : r));
       
-      // Seed Tenant record automatically
+      // Seed or Update Tenant record automatically
       const currentTenants = sandboxState.getTenants();
-      const newTenant: Tenant = {
-        id: currentTenants.length ? Math.max(...currentTenants.map(t => t.id)) + 1 : 1,
-        full_name: updated.tenant_name,
-        phone: updated.phone,
-        email: updated.email || '',
-        avatar_initials: updated.tenant_name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(),
-        avatar_color: "bg-indigo-600",
-        property_id: updated.property_id,
-        room_number: updated.room_number,
-        start_date: updated.check_in_date || new Date().toISOString().split('T')[0],
-        duration_months: updated.duration_months || 1,
-        payment_status: 'paid'
-      };
-      sandboxState.setTenants([...currentTenants, newTenant]);
+      const existingTenantIndex = currentTenants.findIndex(t => t.room_number === updated.room_number && t.property_id === updated.property_id);
+      
+      const occupantPhone = (updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_phone || updated.phone) : updated.phone;
+      const occupantEmail = ((updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_email || updated.email) : updated.email) || '';
+      const occupantInitials = occupantName.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
+
+      if (existingTenantIndex > -1) {
+        currentTenants[existingTenantIndex] = {
+          ...currentTenants[existingTenantIndex],
+          full_name: occupantName,
+          phone: occupantPhone,
+          email: occupantEmail,
+          avatar_initials: occupantInitials,
+          property_id: updated.property_id,
+          room_number: updated.room_number,
+        };
+        sandboxState.setTenants([...currentTenants]);
+      } else {
+        const newTenant: Tenant = {
+          id: currentTenants.length ? Math.max(...currentTenants.map(t => t.id)) + 1 : 1,
+          full_name: occupantName,
+          phone: occupantPhone,
+          email: occupantEmail,
+          avatar_initials: occupantInitials,
+          avatar_color: "bg-indigo-600",
+          property_id: updated.property_id,
+          room_number: updated.room_number,
+          start_date: updated.check_in_date || new Date().toISOString().split('T')[0],
+          duration_months: updated.duration_months || 1,
+          payment_status: 'paid'
+        };
+        sandboxState.setTenants([...currentTenants, newTenant]);
+      }
 
       // Add or update payment invoice automatically
       const payments = sandboxState.getPayments();
@@ -947,6 +990,17 @@ export const database = {
       }
     }
 
+    // Release room on checkout
+    if (updated.status === 'checkout') {
+      const rooms = sandboxState.getRooms();
+      sandboxState.setRooms(rooms.map(r => {
+        if (r.id === updated.room_id || (r.room_number === updated.room_number && r.property_id === updated.property_id)) {
+          return { ...r, status: 'available', current_tenant_name: null };
+        }
+        return r;
+      }));
+    }
+
     if (isSupabaseConfigured && supabase) {
       try {
         const { id, ...payload } = updated;
@@ -958,18 +1012,19 @@ export const database = {
 
         // Real-time integration into Supabase database tables for approved bookings
         if (updated.status === 'approved' && updated.room_id) {
+          const occupantName = (updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_name || updated.tenant_name) : updated.tenant_name;
           // 1. Update Room Table status & tenant on Supabase
-          const { error: roomErr } = await safeSupabaseUpsert('rooms', { status: 'occupied', current_tenant_name: updated.tenant_name }, updated.room_id);
+          const { error: roomErr } = await safeSupabaseUpsert('rooms', { status: 'occupied', current_tenant_name: occupantName }, updated.room_id);
           if (roomErr) {
             console.error('[SUPABASE] Room occupancy update error:', roomErr);
           }
 
-          // 2. Insert corresponding Tenant record into Supabase
-          const tenantPayload = {
-            full_name: updated.tenant_name,
-            phone: updated.phone,
-            email: updated.email || '',
-            avatar_initials: updated.tenant_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+          // 2. Insert or update corresponding Tenant record in Supabase
+          const tenantPayload: any = {
+            full_name: occupantName,
+            phone: (updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_phone || updated.phone) : updated.phone,
+            email: ((updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_email || updated.email) : updated.email) || '',
+            avatar_initials: occupantName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
             avatar_color: "bg-indigo-650",
             property_id: updated.property_id,
             room_number: updated.room_number,
@@ -977,9 +1032,26 @@ export const database = {
             duration_months: updated.duration_months || 1,
             payment_status: 'paid'
           };
-          const { error: tenantErr } = await safeSupabaseUpsert('tenants', tenantPayload);
+
+          // Try to locate existing tenant by room and property to avoid duplicate inserts on Supabase DB
+          let existingTenantId = null;
+          try {
+            const { data: dbTenants } = await supabase
+              .from('tenants')
+              .select('id')
+              .eq('room_number', updated.room_number)
+              .eq('property_id', updated.property_id)
+              .limit(1);
+            if (dbTenants && dbTenants.length > 0) {
+              existingTenantId = dbTenants[0].id;
+            }
+          } catch (dbErr) {
+            console.warn('[SUPABASE] Failed checking existing tenants table, fallback to insert:', dbErr);
+          }
+
+          const { error: tenantErr } = await safeSupabaseUpsert('tenants', tenantPayload, existingTenantId);
           if (tenantErr) {
-            console.error('[SUPABASE] Tenant seed error:', tenantErr);
+            console.error('[SUPABASE] Tenant seed/update error:', tenantErr);
           }
 
           // 3. Insert real Payment Invoice record into Supabase
@@ -1557,6 +1629,46 @@ export const database = {
       if (!error && data) return data as Tenant[];
     }
     return sandboxState.getTenants();
+  },
+
+  async saveTenant(tenant: Partial<Tenant>): Promise<Tenant> {
+    const list = sandboxState.getTenants();
+    const exists = list.some(t => t.id === tenant.id);
+    let finalTenant = { ...tenant } as Tenant;
+    if (exists) {
+      const idx = list.findIndex(t => t.id === tenant.id);
+      finalTenant = { ...list[idx], ...tenant };
+      list[idx] = finalTenant;
+      sandboxState.setTenants([...list]);
+    } else {
+      const nextId = list.length ? Math.max(...list.map(t => t.id)) + 1 : 1;
+      finalTenant = {
+        id: tenant.id || nextId,
+        full_name: tenant.full_name || '',
+        phone: tenant.phone || '',
+        email: tenant.email || '',
+        avatar_initials: tenant.avatar_initials || '',
+        avatar_color: tenant.avatar_color || 'bg-indigo-600',
+        property_id: tenant.property_id || null,
+        room_number: tenant.room_number || '',
+        start_date: tenant.start_date || new Date().toISOString().split('T')[0],
+        duration_months: tenant.duration_months || 1,
+        payment_status: tenant.payment_status || 'paid',
+        status: tenant.status || 'active'
+      } as Tenant;
+      sandboxState.setTenants([...list, finalTenant]);
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await safeSupabaseUpsert('tenants', finalTenant, finalTenant.id);
+      if (error) {
+        console.error('[SUPABASE] saveTenant error:', error);
+      }
+    }
+
+    // Dispatch global event for sync
+    window.dispatchEvent(new Event('samara_state_changed'));
+    return finalTenant;
   },
 
   async fetchPayments(): Promise<PaymentInvoice[]> {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   LayoutDashboard, Building2, BedDouble, GraduationCap, 
-  Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail
+  Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail, Sparkles
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'dashboard', name: 'Dashboard', icon: LayoutDashboard },
     { id: 'properties', name: 'Properti Kos', icon: Building2 },
     { id: 'rooms', name: 'Kamar Hunian', icon: BedDouble },
+    { id: 'facilities', name: 'Master Fasilitas', icon: Sparkles },
     { id: 'surveys', name: 'Antrian Survey', icon: GraduationCap },
     { id: 'finance', name: 'Keuangan & PBJT', icon: Receipt },
     { id: 'coupons', name: 'Promo Diskon', icon: Ticket },

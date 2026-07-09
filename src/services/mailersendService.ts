@@ -101,6 +101,32 @@ export const mailersendService = {
           </table>
         </div>
 
+        ${booking.is_for_other ? `
+        <!-- Detail Tamu Penghuni (Si B) Card -->
+        <div style="background-color: #fef3c7; border: 1px solid #fde68a; border-radius: 16px; padding: 24px; margin: 25px 0;">
+          <h3 style="color: #92400e; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #fcd34d; padding-bottom: 10px;">Rincian Penghuni / Tamu (Si B)</h3>
+          <p style="font-size: 12px; color: #78350f; margin-bottom: 15px; line-height: 1.5;">Kamar ini dipesan oleh <strong>${booking.tenant_name}</strong> untuk dihunikan oleh tamu di bawah ini. Harap tunjukkan KTP/identitas yang sesuai saat check-in.</p>
+          <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
+            <tr>
+              <td style="color: #b45309; width: 45%; font-weight: 600;">Nama Lengkap:</td>
+              <td style="color: #78350f; font-weight: 700; text-align: right;">${booking.occupant_name || '-'}</td>
+            </tr>
+            <tr>
+              <td style="color: #b45309; font-weight: 600;">No. WhatsApp:</td>
+              <td style="color: #78350f; font-weight: 700; text-align: right; font-family: monospace;">${booking.occupant_phone || '-'}</td>
+            </tr>
+            <tr>
+              <td style="color: #b45309; font-weight: 600;">Email Penghuni:</td>
+              <td style="color: #78350f; font-weight: 700; text-align: right;">${booking.occupant_email || '-'}</td>
+            </tr>
+            <tr>
+              <td style="color: #b45309; font-weight: 600;">NIK KTP Penghuni:</td>
+              <td style="color: #78350f; font-weight: 700; text-align: right; font-family: monospace;">${booking.occupant_nik || '-'}</td>
+            </tr>
+          </table>
+        </div>
+        ` : ''}
+
         <!-- Location Info -->
         <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #334155; background-color: #f8fafc; border-radius: 0 12px 12px 0;">
           <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Alamat Hunian:</strong>
@@ -143,6 +169,26 @@ export const mailersendService = {
 
       const result = await response.json();
       console.log(`[MAILERSEND SERVICE] Response:`, result);
+
+      // Send confirmation to the occupant as well if different
+      if (booking.is_for_other && booking.occupant_email && booking.occupant_email !== booking.email) {
+        console.log(`[MAILERSEND SERVICE] Sending occupant email copy to: ${booking.occupant_email}`);
+        await fetch('/api/email/send', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            to: booking.occupant_email,
+            subject: `[Samara Stay] Konfirmasi Hunian Kamar - Unit ${booking.room_number}`,
+            text: `Halo ${booking.occupant_name}, Anda didaftarkan sewa kamar di ${propertyName} (Kamar ${booking.room_number}) oleh ${booking.tenant_name}.`,
+            html: html.replace(`Halo <strong>${booking.tenant_name}</strong>`, `Halo <strong>${booking.occupant_name}</strong>`)
+          })
+        }).catch(err => {
+          console.error('[MAILERSEND SERVICE ERROR] Failed to send copy to occupant:', err);
+        });
+      }
+
       return result.success;
     } catch (err) {
       console.error('[MAILERSEND SERVICE ERROR] Failed to send email via API:', err);

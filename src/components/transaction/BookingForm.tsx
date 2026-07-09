@@ -34,6 +34,11 @@ interface BookingFormProps {
     phone: string;
     email: string;
     nik: string;
+    isForOther?: boolean;
+    occupantName?: string;
+    occupantPhone?: string;
+    occupantEmail?: string;
+    occupantNik?: string;
   };
   setBookingForm: (val: any) => void;
   onProceedToPayment: (calculatedTotal: number) => void;
@@ -181,6 +186,32 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       ) : (
         // Regular direct booking direct fields
         <div className="space-y-3">
+          {/* Quick toggle mode buttons for Pemesan */}
+          <div className="flex gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setBookingForm({ ...bookingForm, isForOther: false })}
+              className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer text-center ${
+                !bookingForm.isForOther
+                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/10 font-black'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              👤 Booking Sendiri
+            </button>
+            <button
+              type="button"
+              onClick={() => setBookingForm({ ...bookingForm, isForOther: true })}
+              className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer text-center ${
+                bookingForm.isForOther
+                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/10 font-black'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              👥 Booking Orang Lain (Ketiga)
+            </button>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Nama Tenant Utama</label>
@@ -204,7 +235,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className={bookingForm.isForOther ? "grid grid-cols-1" : "grid grid-cols-2 gap-3"}>
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Email</label>
               <input 
@@ -212,19 +243,90 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                 value={bookingForm.email}
                 onChange={(e) => setBookingForm({ ...bookingForm, email: e.target.value })}
                 placeholder="alamat@email.com"
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205"
+                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 focus:border-amber-500 outline-none"
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">NIK KTP (16 digit)</label>
+            {!bookingForm.isForOther && (
+              <div className="space-y-1">
+                <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">NIK KTP (16 digit)</label>
+                <input 
+                  type="text" required={!bookingForm.isForOther} maxLength={16}
+                  value={bookingForm.nik}
+                  onChange={(e) => setBookingForm({ ...bookingForm, nik: e.target.value })}
+                  placeholder="NIK KTP"
+                  className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono focus:border-amber-500 outline-none"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Booking untuk orang lain toggle & form */}
+          <div className="bg-slate-900/40 p-3.5 rounded-2xl border border-slate-800/80 space-y-3">
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
               <input 
-                type="text" required maxLength={16}
-                value={bookingForm.nik}
-                onChange={(e) => setBookingForm({ ...bookingForm, nik: e.target.value })}
-                placeholder="NIK KTP"
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono"
+                type="checkbox"
+                checked={!!bookingForm.isForOther}
+                onChange={(e) => setBookingForm({ ...bookingForm, isForOther: e.target.checked })}
+                className="w-4 h-4 rounded border-slate-800 bg-slate-950 text-amber-500 focus:ring-0 cursor-pointer"
               />
-            </div>
+              <span className="font-bold text-[11px] text-amber-500 hover:text-amber-400 transition-colors">
+                Saya memesan / booking Kamar ini untuk Orang Lain (Tamu/Penghuni Baru)
+              </span>
+            </label>
+
+            {bookingForm.isForOther && (
+              <div className="pt-2.5 border-t border-slate-800/60 space-y-3">
+                <div className="bg-amber-500/10 text-amber-400 p-2.5 rounded-xl text-[10px] leading-relaxed border border-amber-500/10">
+                  <strong>Catatan Pemesanan Pihak Ketiga:</strong> Masukkan data lengkap orang yang akan menempati kamar (Si B). Kamar akan otomatis terbooking lunas aman di sistem setelah pembayaran selesai. Admin akan memverifikasi NIK KTP mereka saat kedatangan/check-in.
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Nama Lengkap Penghuni</label>
+                    <input 
+                      type="text" required={bookingForm.isForOther}
+                      value={bookingForm.occupantName || ''}
+                      onChange={(e) => setBookingForm({ ...bookingForm, occupantName: e.target.value })}
+                      placeholder="Nama lengkap penghuni"
+                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 focus:border-amber-500 outline-none capitalize"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">No. WhatsApp Penghuni</label>
+                    <input 
+                      type="tel" required={bookingForm.isForOther}
+                      value={bookingForm.occupantPhone || ''}
+                      onChange={(e) => setBookingForm({ ...bookingForm, occupantPhone: e.target.value })}
+                      placeholder="Contoh: 0812..."
+                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Email Penghuni</label>
+                    <input 
+                      type="email" required={bookingForm.isForOther}
+                      value={bookingForm.occupantEmail || ''}
+                      onChange={(e) => setBookingForm({ ...bookingForm, occupantEmail: e.target.value })}
+                      placeholder="email.penghuni@gmail.com"
+                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">NIK KTP Penghuni (16 digit)</label>
+                    <input 
+                      type="text" required={bookingForm.isForOther} maxLength={16}
+                      value={bookingForm.occupantNik || ''}
+                      onChange={(e) => setBookingForm({ ...bookingForm, occupantNik: e.target.value })}
+                      placeholder="NIK KTP Penghuni"
+                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
