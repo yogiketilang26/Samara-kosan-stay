@@ -1079,7 +1079,7 @@ export default function AdminDashboard({ onRefreshTrigger, triggerAppRefresh }: 
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-100 pb-4">
                         <div className="flex items-start gap-4">
                           <img 
-                            src={p.image_url} 
+                            src={p.image_url || null} 
                             alt={p.name} 
                             className="w-16 h-16 object-cover rounded-2xl bg-slate-100 shrink-0" 
                             referrerPolicy="no-referrer"

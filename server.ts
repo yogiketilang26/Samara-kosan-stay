@@ -134,33 +134,23 @@ async function startServer() {
         suffix: serverKey.slice(-4)
       });
 
-      // If server key is NOT provided, gracefully back off to complete demo sandbox token
-      if (!serverKey || serverKey === 'MY_MIDTRANS_SERVER_KEY' || serverKey === '') {
-        console.log('[MIDTRANS SIMULATOR] No Server Key configured. Generating interactive Sandbox Token.');
-        
-        addMidtransLog({
-          orderId: order_id || 'unknown',
-          customerName: customer_details?.first_name || 'Anonymous',
-          customerEmail: customer_details?.email || 'N/A',
-          amount: gross_amount,
-          type: 'simulation',
-          status: 'simulated',
-          message: 'No Server Key configured. Gracefully fell back to local interactive simulation.',
-          details: { order_id, gross_amount, customer_details }
-        });
-
-        return res.json({
-          token: `snap-token-sim-${Math.floor(100000 + Math.random() * 900000)}`,
-          redirect_url: `https://app.sandbox.midtrans.com/snap/v3/redirection/sim-${Math.floor(100000 + Math.random() * 900000)}`,
-          mode: 'simulation'
+      // If server key is NOT provided, throw transparent error instead of simulation fallback
+      if (!serverKey || serverKey === 'YOUR_MIDTRANS_SERVER_KEY_HERE' || serverKey === 'MY_MIDTRANS_SERVER_KEY' || serverKey === '') {
+        console.error('[MIDTRANS ERROR] Server Key is not configured.');
+        return res.status(400).json({
+          success: false,
+          error: 'MIDTRANS_SERVER_KEY tidak ditemukan atau belum dikonfigurasi di server. Silakan hubungi admin.'
         });
       }
 
       // Real API Call using Node fetch with Base64 authentication header
       const authHeader = Buffer.from(`${serverKey}:`).toString('base64');
-      // Force Sandbox URL as requested to ensure secure sandbox testing
-      const isProduction = false;
-      const midtransUrl = 'https://app.sandbox.midtrans.com/snap/v1/transactions';
+      
+      // Dynamic Production / Sandbox detection
+      const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true' || process.env.NODE_ENV === 'production';
+      const midtransUrl = isProduction 
+        ? 'https://app.snap.midtrans.com/snap/v1/transactions' 
+        : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
 
       const payload = {
         transaction_details: {
@@ -174,7 +164,7 @@ async function startServer() {
         item_details,
       };
 
-      console.log('[MIDTRANS REAL] Forwarding request to Midtrans API:', midtransUrl);
+      console.log(`[MIDTRANS REAL] Forwarding request to Midtrans API: ${midtransUrl} (${isProduction ? 'Production' : 'Sandbox'})`);
       
       addMidtransLog({
         orderId: order_id || 'unknown',
@@ -199,7 +189,7 @@ async function startServer() {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error_messages ? data.error_messages.join(', ') : 'Midtrans API Error');
+        throw new Error(data.error_messages ? data.error_messages.join(', ') : (data.message || 'Midtrans API Error'));
       }
 
       addMidtransLog({
@@ -219,8 +209,7 @@ async function startServer() {
         mode: isProduction ? 'production' : 'sandbox'
       });
     } catch (error: any) {
-      // Use standard informative warnings instead of high-severity console.error to avoid raising test alerts
-      console.warn('[MIDTRANS ADAPTIVE FALLBACK] Real Midtrans charge call could not be completed. Returning interactive simulation payload. Option details:', error.message || error);
+      console.error('[MIDTRANS REAL ERROR]', error);
       
       addMidtransLog({
         orderId: req.body?.order_id || 'unknown',
@@ -229,15 +218,13 @@ async function startServer() {
         amount: req.body?.gross_amount,
         type: 'error',
         status: 'failed',
-        message: `Midtrans charge failed: ${error.message || 'Unknown error'}. Fell back to interactive simulation.`,
+        message: `Midtrans charge failed: ${error.message || 'Unknown error'}.`,
         details: { error: error.message || 'Unknown error' }
       });
 
-      return res.json({
-        token: `snap-token-sim-${Math.floor(100000 + Math.random() * 900000)}`,
-        redirect_url: `https://app.sandbox.midtrans.com/snap/v3/redirection/sim-${Math.floor(100000 + Math.random() * 900000)}`,
-        mode: 'simulation',
-        error: error.message || 'Credential verification failed'
+      return res.status(400).json({
+        success: false,
+        error: `Gagal memproses pembayaran Midtrans: ${error.message || 'Unknown error'}`
       });
     }
   });
@@ -459,6 +446,10 @@ async function startServer() {
             }
 
             if (booking) {
+              if (booking.status === 'approved') {
+                console.log(`[SUPABASE WEBHOOK SYNC] Webhook received but booking ${orderId} is ALREADY approved. Skipping duplicate processing for idempotency.`);
+                return res.status(200).json({ status: 'OK', message: 'Booking already approved' });
+              }
               console.log(`[SUPABASE WEBHOOK SYNC] Booking found: ID ${booking.id}, status: ${booking.status}. Updating status to approved...`);
               
               // 2. Update booking status
@@ -654,6 +645,10 @@ async function startServer() {
             }
 
             if (survey) {
+              if (survey.status === 'survey_confirmed') {
+                console.log(`[SUPABASE WEBHOOK SYNC] Webhook received but survey ${orderId} is ALREADY confirmed. Skipping duplicate processing for idempotency.`);
+                return res.status(200).json({ status: 'OK', message: 'Survey already confirmed' });
+              }
               console.log(`[SUPABASE WEBHOOK SYNC] Survey found: ID ${survey.id}. Updating status to survey_confirmed...`);
               
               // 2. Update survey status

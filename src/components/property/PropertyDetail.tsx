@@ -36,7 +36,7 @@ export const PropertyDetail: React.FC<PropertyDetailProps> = ({
         <div className="relative h-64 md:h-80 bg-slate-950 overflow-hidden flex items-center justify-center">
           {property.image_url ? (
             <img 
-              src={property.image_url} 
+              src={property.image_url || null} 
               alt={property.name}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover select-none"

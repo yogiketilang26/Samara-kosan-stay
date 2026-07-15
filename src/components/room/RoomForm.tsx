@@ -35,10 +35,14 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     facilitiesInput: '',
     is_daily_enabled: false,
     daily_price: 100000,
-    image_url: ''
+    image_url: '',
+    images: [] as string[]
   });
 
   const [masterFacilities, setMasterFacilities] = useState<{ icon: string; title: string; subtitle: string }[]>([]);
+  const [isUploadingMain, setIsUploadingMain] = useState(false);
+  const [isUploadingGallery, setIsUploadingGallery] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     async function loadMasterFacilities() {
@@ -46,18 +50,30 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         const settings = await database.fetchSettings();
         if (settings && settings.standard_facilities) {
           const parsed = JSON.parse(settings.standard_facilities);
-          if (Array.isArray(parsed)) {
+          if (Array.isArray(parsed) && parsed.length > 0) {
             setMasterFacilities(parsed);
+            return;
           }
         }
       } catch (err) {
         console.error('Error loading master facilities in RoomForm:', err);
       }
+      setMasterFacilities([
+        { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
+        { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
+        { icon: "Shield", title: "Security", subtitle: "24 Jam" },
+        { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
+        { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
+        { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
+        { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
+        { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
+      ]);
     }
     loadMasterFacilities();
   }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (room) {
@@ -72,7 +88,8 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         facilitiesInput: room.facilities.join(', '),
         is_daily_enabled: room.is_daily_enabled || false,
         daily_price: room.daily_price || 100000,
-        image_url: room.image_url || ''
+        image_url: room.image_url || '',
+        images: room.images || []
       });
     } else {
       setFormData({
@@ -86,7 +103,8 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         facilitiesInput: '',
         is_daily_enabled: false,
         daily_price: 100000,
-        image_url: ''
+        image_url: '',
+        images: []
       });
     }
   }, [room, properties]);
@@ -98,6 +116,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         alert("Ukuran gambar maksimal adalah 10MB!");
         return;
       }
+      setIsUploadingMain(true);
       try {
         const compressedBase64 = await compressImage(file, 640, 480, 0.5);
         setFormData(prev => ({
@@ -106,6 +125,9 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         }));
       } catch (err) {
         console.error(err);
+        alert("Gagal memproses gambar!");
+      } finally {
+        setIsUploadingMain(false);
       }
     }
   };
@@ -113,7 +135,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
   const handleRemoveImage = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    if (confirm("Apakah Anda yakin ingin menghapus gambar kamar ini?")) {
+    if (confirm("Apakah Anda yakin ingin menghapus gambar utama kamar ini?")) {
       setFormData(prev => ({
         ...prev,
         image_url: ''
@@ -124,27 +146,76 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const facilitiesList = formData.facilitiesInput
-      .split(',')
-      .map(f => f.trim())
-      .filter(f => f.length > 0);
+  const handleGalleryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      setIsUploadingGallery(true);
+      const newImages = [...formData.images];
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file.size > 10 * 1024 * 1024) {
+            alert("Ukuran gambar maksimal adalah 10MB!");
+            continue;
+          }
+          const compressedBase64 = await compressImage(file, 640, 480, 0.5);
+          newImages.push(compressedBase64);
+        }
+        setFormData(prev => ({
+          ...prev,
+          images: newImages.slice(0, 4) // max 4 images
+        }));
+      } catch (err) {
+        console.error(err);
+        alert("Gagal memproses gambar galeri!");
+      } finally {
+        setIsUploadingGallery(false);
+        if (galleryInputRef.current) {
+          galleryInputRef.current.value = '';
+        }
+      }
+    }
+  };
 
-    onSave({
-      id: room?.id,
-      property_id: Number(formData.property_id),
-      room_number: formData.room_number,
-      room_type: formData.room_type,
-      price: Number(formData.price),
-      size_sqm: Number(formData.size_sqm),
-      floor: Number(formData.floor),
-      status: formData.status,
-      facilities: facilitiesList,
-      is_daily_enabled: formData.is_daily_enabled,
-      daily_price: formData.is_daily_enabled ? Number(formData.daily_price) : 0,
-      image_url: formData.image_url
-    });
+  const handleRemoveGalleryImage = (index: number) => {
+    if (confirm("Apakah Anda yakin ingin menghapus foto galeri kamar ini?")) {
+      setFormData(prev => ({
+        ...prev,
+        images: prev.images.filter((_, idx) => idx !== index)
+      }));
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const facilitiesList = formData.facilitiesInput
+        .split(',')
+        .map(f => f.trim())
+        .filter(f => f.length > 0);
+
+      await onSave({
+        id: room?.id,
+        property_id: Number(formData.property_id),
+        room_number: formData.room_number,
+        room_type: formData.room_type,
+        price: Number(formData.price),
+        size_sqm: Number(formData.size_sqm),
+        floor: Number(formData.floor),
+        status: formData.status,
+        facilities: facilitiesList,
+        is_daily_enabled: formData.is_daily_enabled,
+        daily_price: formData.is_daily_enabled ? Number(formData.daily_price) : 0,
+        image_url: formData.image_url,
+        images: formData.images
+      });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -302,43 +373,56 @@ export const RoomForm: React.FC<RoomFormProps> = ({
       <div className="space-y-1">
         <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono block mb-1">Foto Kamar / Unit Gallery</label>
         
-        {formData.image_url ? (
-          <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
-            <img 
-              src={formData.image_url} 
-              alt="Pratinjau Kamar" 
-              className="w-full h-36 object-cover rounded-xl animate-fade-in"
-            />
-            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="p-1 px-2.5 bg-slate-850 hover:bg-slate-755 text-white rounded-xl text-[10px] font-bold font-mono transition shadow-lg cursor-pointer border border-slate-755"
-              >
-                Ganti Gambar
-              </button>
-              <button
-                type="button"
-                onClick={handleRemoveImage}
-                className="p-1 px-2.5 bg-red-650 hover:bg-red-555 text-white rounded-xl text-[10px] font-bold font-mono transition shadow-lg flex items-center gap-1 cursor-pointer"
-              >
-                <Trash2 size={11} />
-                Hapus
-              </button>
+        <div className="relative">
+          {formData.image_url ? (
+            <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
+              <img 
+                src={formData.image_url || null} 
+                alt="Pratinjau Kamar" 
+                className="w-full h-36 object-cover rounded-xl animate-fade-in"
+              />
+              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  disabled={isUploadingMain || isSaving}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-1 px-2.5 bg-slate-850 hover:bg-slate-755 text-white rounded-xl text-[10px] font-bold font-mono transition shadow-lg cursor-pointer border border-slate-755 disabled:opacity-50"
+                >
+                  Ganti Gambar
+                </button>
+                <button
+                  type="button"
+                  disabled={isUploadingMain || isSaving}
+                  onClick={handleRemoveImage}
+                  className="p-1 px-2.5 bg-red-650 hover:bg-red-555 text-white rounded-xl text-[10px] font-bold font-mono transition shadow-lg flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 size={11} />
+                  Hapus
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div 
-            onClick={() => fileInputRef.current?.click()}
-            className="border border-dashed border-slate-800 hover:border-amber-500/50 bg-slate-950 p-4 rounded-2xl text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-1.5 group font-sans"
-          >
-            <UploadCloud size={20} className="text-slate-500 group-hover:text-amber-500 transition-colors animate-pulse" />
-            <div>
-              <span className="text-slate-300 block font-bold text-[11px] group-hover:text-amber-500 transition-colors">Pilih & Upload Gambar Kamar</span>
-              <span className="text-[8px] text-slate-500 font-mono block mt-0.5">Maksimal 5MB (PNG, JPG, JPEG)</span>
+          ) : (
+            <div 
+              onClick={() => !isUploadingMain && !isSaving && fileInputRef.current?.click()}
+              className="border border-dashed border-slate-800 hover:border-amber-500/50 bg-slate-950 p-4 rounded-2xl text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-1.5 group font-sans"
+            >
+              <UploadCloud size={20} className="text-slate-500 group-hover:text-amber-500 transition-colors animate-pulse" />
+              <div>
+                <span className="text-slate-300 block font-bold text-[11px] group-hover:text-amber-500 transition-colors">Pilih & Upload Gambar Kamar</span>
+                <span className="text-[8px] text-slate-500 font-mono block mt-0.5">Maksimal 10MB (PNG, JPG, JPEG)</span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Main Image Upload Loading Overlay */}
+          {isUploadingMain && (
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center gap-2 z-10 animate-fade-in">
+              <LucideIcons.Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
+              <span className="text-[10px] font-bold text-amber-500 uppercase font-mono tracking-wider">Mengompres & Memuat...</span>
+            </div>
+          )}
+        </div>
+
         <input 
           type="file"
           ref={fileInputRef}
@@ -370,6 +454,52 @@ export const RoomForm: React.FC<RoomFormProps> = ({
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Additional Room Gallery (Multiple Images) */}
+        <div className="mt-4 bg-slate-900 border border-slate-805 p-3 rounded-2xl space-y-2">
+          <span className="text-[9px] font-bold text-slate-400 font-mono block uppercase">Foto Tambahan / Galeri Unit (Maksimal 4)</span>
+          <div className="grid grid-cols-4 gap-2">
+            {formData.images.map((img, idx) => (
+              <div key={idx} className="relative group h-16 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
+                <img src={img || null} alt={`Galeri ${idx + 1}`} className="w-full h-full object-cover" />
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => handleRemoveGalleryImage(idx)}
+                  className="absolute inset-0 bg-red-650/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer disabled:opacity-50"
+                  title="Hapus gambar ini"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            {isUploadingGallery && (
+              <div className="h-16 rounded-xl border border-dashed border-amber-500/50 bg-slate-950/90 flex flex-col items-center justify-center text-amber-500 animate-pulse">
+                <LucideIcons.Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-[7px] font-bold mt-1 uppercase font-mono">Memuat...</span>
+              </div>
+            )}
+            {formData.images.length < 4 && !isUploadingGallery && (
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={() => galleryInputRef.current?.click()}
+                className="h-16 rounded-xl border border-dashed border-slate-800 hover:border-amber-500/50 bg-slate-950 flex flex-col items-center justify-center text-slate-500 hover:text-amber-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <UploadCloud size={16} />
+                <span className="text-[8px] font-bold mt-1 font-sans">Tambah</span>
+              </button>
+            )}
+          </div>
+          <input 
+            type="file"
+            ref={galleryInputRef}
+            onChange={handleGalleryFileChange}
+            accept="image/*"
+            multiple
+            className="hidden"
+          />
         </div>
       </div>
 
@@ -404,16 +534,25 @@ export const RoomForm: React.FC<RoomFormProps> = ({
       <div className="flex gap-2 pt-2">
         <button
           type="button"
+          disabled={isSaving}
           onClick={onCancel}
-          className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-slate-305 font-bold transition-all cursor-pointer"
+          className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-slate-305 font-bold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Batalkan
         </button>
         <button
           type="submit"
-          className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all cursor-pointer text-[11px]"
+          disabled={isSaving || isUploadingMain || isUploadingGallery}
+          className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all cursor-pointer text-[11px] flex items-center justify-center gap-1.5 disabled:bg-amber-500/50 disabled:border-amber-500/30 disabled:cursor-not-allowed"
         >
-          {room ? 'Simpan Perubahan' : 'Buat Baru'}
+          {isSaving ? (
+            <>
+              <LucideIcons.Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Menyimpan...</span>
+            </>
+          ) : (
+            room ? 'Simpan Perubahan' : 'Buat Baru'
+          )}
         </button>
       </div>
     </form>

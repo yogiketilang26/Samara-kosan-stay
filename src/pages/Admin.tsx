@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import * as LucideIcons from 'lucide-react';
-import { database, sandboxState } from '../lib/supabase';
+import { database, getIsSupabaseConfigured } from '../lib/supabase';
+import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings } from '../types';
 import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
@@ -28,6 +29,77 @@ interface AdminProps {
 }
 
 export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps) {
+  // Use granular real-time table hooks to fetch data and receive live changes
+  const { data: propertiesData, loading: propertiesLoading } = useRealtimeTable<Property>(
+    'properties',
+    () => database.fetchProperties(),
+    refreshTrigger
+  );
+  const { data: roomsData, loading: roomsLoading } = useRealtimeTable<Room>(
+    'rooms',
+    () => database.fetchRooms(),
+    refreshTrigger
+  );
+  const { data: bookingsData, loading: bookingsLoading } = useRealtimeTable<Booking>(
+    'bookings',
+    () => database.fetchBookings(),
+    refreshTrigger
+  );
+  const { data: surveysData, loading: surveysLoading } = useRealtimeTable<Survey>(
+    'surveys',
+    () => database.fetchSurveys(),
+    refreshTrigger
+  );
+  const { data: couponsData, loading: couponsLoading } = useRealtimeTable<Coupon>(
+    'coupons',
+    () => database.fetchCoupons(),
+    refreshTrigger
+  );
+  const { data: transactionsData, loading: transactionsLoading } = useRealtimeTable<FinancialTransaction>(
+    'financial_transactions',
+    () => database.fetchFinancialTransactions(),
+    refreshTrigger
+  );
+  const { data: activityLogsData, loading: activityLogsLoading } = useRealtimeTable<ActivityLog>(
+    'activity_logs',
+    () => database.fetchActivityLogs(),
+    refreshTrigger
+  );
+  const { data: usersData, loading: usersLoading } = useRealtimeTable<UserSystem>(
+    'users',
+    () => database.fetchUsers(),
+    refreshTrigger
+  );
+  const { data: tenantsData, loading: tenantsLoading } = useRealtimeTable<Tenant>(
+    'tenants',
+    () => database.fetchTenants(),
+    refreshTrigger
+  );
+  const { data: accountsData, loading: accountsLoading } = useRealtimeTable<AccountCOA>(
+    'accounts',
+    () => database.fetchAccounts(),
+    refreshTrigger
+  );
+  const { data: journalEntriesData, loading: journalEntriesLoading } = useRealtimeTable<JournalEntry>(
+    'journal_entries',
+    () => database.fetchJournalEntries(),
+    refreshTrigger
+  );
+  const { data: paymentsData, loading: paymentsLoading } = useRealtimeTable<PaymentInvoice>(
+    'payments',
+    () => database.fetchPayments(),
+    refreshTrigger
+  );
+  const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
+    'settings',
+    () => database.fetchSettings().then(res => [res]),
+    refreshTrigger
+  );
+
+  const hooksLoading = propertiesLoading || roomsLoading || bookingsLoading || surveysLoading || couponsLoading ||
+    transactionsLoading || activityLogsLoading || usersLoading || tenantsLoading || accountsLoading ||
+    journalEntriesLoading || paymentsLoading || settingsLoading;
+
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -40,6 +112,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   const [tenantsList, setTenantsList] = useState<Tenant[]>([]);
   const [tenantFilter, setTenantFilter] = useState<'active' | 'checkout'>('active');
   const [loading, setLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Third-party occupant states
   const [editingOccupantBooking, setEditingOccupantBooking] = useState<Booking | null>(null);
@@ -443,94 +516,82 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   }, [activeTab, autoRefreshLogs]);
 
   useEffect(() => {
-    async function loadData() {
+    let activeFacilitiesList: string[] = [];
+    const sett = settingsData && settingsData.length > 0 ? settingsData[0] : null;
+    if (sett && sett.standard_facilities) {
       try {
-        setLoading(true);
-        const [p, r, b, s, c, t, logs, uList, tList, acc, jrn, pay, sett] = await Promise.all([
-          database.fetchProperties(),
-          database.fetchRooms(),
-          database.fetchBookings(),
-          database.fetchSurveys(),
-          database.fetchCoupons(),
-          database.fetchFinancialTransactions(),
-          database.fetchActivityLogs(),
-          database.fetchUsers(),
-          database.fetchTenants(),
-          database.fetchAccounts(),
-          database.fetchJournalEntries(),
-          database.fetchPayments(),
-          database.fetchSettings()
-        ]);
-
-        let activeFacilitiesList: string[] = [];
-        if (sett && sett.standard_facilities) {
-          try {
-            const parsed = JSON.parse(sett.standard_facilities);
-            if (Array.isArray(parsed)) {
-              activeFacilitiesList = parsed.map((f: any) => f.title.trim().toLowerCase());
-            }
-          } catch (e) {
-            console.error("Error parsing standard_facilities in Admin:", e);
-          }
-        } else {
-          activeFacilitiesList = [
-            "jam operasional", "check in", "security", "wifi", "air", "parkir", "laundry", "cleaning"
-          ];
+        const parsed = JSON.parse(sett.standard_facilities);
+        if (Array.isArray(parsed)) {
+          activeFacilitiesList = parsed.map((f: any) => f.title.trim().toLowerCase());
         }
-
-        const filteredP = (p || []).map((item: any) => ({
-          ...item,
-          facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
-        }));
-
-        const filteredR = (r || []).map((item: any) => ({
-          ...item,
-          facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
-        }));
-
-        setProperties(filteredP);
-        setRooms(filteredR);
-        setBookings(b);
-        setSurveys(s);
-        setCoupons(c);
-        setTransactions(t);
-        setActivityLogs(logs);
-        setUsers(uList);
-        setTenantsList(tList);
-        setAccounts(acc);
-        setJournalEntries(jrn);
-        setPayments(pay);
-        setSettingsState(sett);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
+      } catch (e) {
+        console.error("Error parsing standard_facilities in Admin:", e);
       }
+    } else {
+      activeFacilitiesList = [
+        "jam operasional", "check in", "security", "wifi", "air", "parkir", "laundry", "cleaning"
+      ];
     }
-    loadData();
-  }, [refreshTrigger]);
+
+    const filteredP = (propertiesData || []).map((item: any) => ({
+      ...item,
+      facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
+    }));
+
+    const filteredR = (roomsData || []).map((item: any) => ({
+      ...item,
+      facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
+    }));
+
+    setProperties(filteredP);
+    setRooms(filteredR);
+    setBookings(bookingsData || []);
+    setSurveys(surveysData || []);
+    setCoupons(couponsData || []);
+    setTransactions(transactionsData || []);
+    setActivityLogs(activityLogsData || []);
+    setUsers(usersData || []);
+    setTenantsList(tenantsData || []);
+    setAccounts(accountsData || []);
+    setJournalEntries(journalEntriesData || []);
+    setPayments(paymentsData || []);
+    setSettingsState(sett);
+  }, [
+    propertiesData, roomsData, bookingsData, surveysData, couponsData,
+    transactionsData, activityLogsData, usersData, tenantsData,
+    accountsData, journalEntriesData, paymentsData, settingsData
+  ]);
 
   useEffect(() => {
-    const handleStateChange = () => {
-      triggerAppRefresh();
-    };
-    window.addEventListener('samara_state_changed', handleStateChange);
-    return () => {
-      window.removeEventListener('samara_state_changed', handleStateChange);
-    };
-  }, [triggerAppRefresh]);
+    if (!hooksLoading) {
+      setLoading(false);
+      setIsInitialLoad(false);
+    }
+  }, [hooksLoading]);
 
   useEffect(() => {
     if (settings && settings.standard_facilities) {
       try {
         const parsed = JSON.parse(settings.standard_facilities);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           setFacilitiesList(parsed);
+          return;
         }
       } catch (e) {
         console.error("Error parsing standard_facilities:", e);
       }
     }
+    // Default facilities fallback
+    setFacilitiesList([
+      { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
+      { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
+      { icon: "Shield", title: "Security", subtitle: "24 Jam" },
+      { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
+      { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
+      { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
+      { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
+      { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
+    ]);
   }, [settings]);
 
   useEffect(() => {
@@ -717,14 +778,17 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         await database.saveSurvey(updated);
         
         // Seed an income transaction for lost DP
-        const trPayload = {
-          transaction_date: new Date().toISOString().split('T')[0],
-          category: 'income' as const,
-          amount: 500000,
+        await database.postFinancialTransaction({
+          category: "Penerimaan Sewa",
           description: `DP Survey Hangus - ${s.tenant_name} (Unit ${s.room_number})`,
-          account_coa: 4200 // Pendapatan DP Survey Hangus
-        };
-        await (database as any).sandboxState?.saveFinancialTransaction(trPayload);
+          amount: 500000,
+          type: "income",
+          reference_type: "survey",
+          reference_id: String(s.id),
+          created_by: "Admin",
+          debit_account_id: 1010, // Kas dan Bank Mandiri
+          credit_account_id: 4200 // Pendapatan DP Survey Hangus
+        });
         
         database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
         triggerAppRefresh();
@@ -959,33 +1023,67 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             </div>
 
             <div className="space-y-3">
-              {properties.map(p => (
-                <div key={p.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
-                  <div>
-                    <h4 className="font-extrabold text-[#3A444D] uppercase font-sans text-sm">{p.name}</h4>
-                    <span className="text-[11px] text-[#64748B] font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln</span>
+              {properties.length > 0 ? (
+                properties.map(p => (
+                  <div key={p.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
+                    <div>
+                      <h4 className="font-extrabold text-[#3A444D] uppercase font-sans text-sm">{p.name}</h4>
+                      <span className="text-[11px] text-[#64748B] font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln</span>
+                    </div>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button 
+                        onClick={() => {
+                          setActivePropertyEdit(p);
+                          setShowPropertyModal(true);
+                        }}
+                        className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                      >
+                        <Edit2 size={12} />
+                        Ubah
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteProperty(p.id)}
+                        className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                      >
+                        <Trash2 size={12} />
+                        Hapus
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex gap-2 w-full sm:w-auto">
-                    <button 
-                      onClick={() => {
-                        setActivePropertyEdit(p);
-                        setShowPropertyModal(true);
-                      }}
-                      className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
-                    >
-                      <Edit2 size={12} />
-                      Ubah
-                    </button>
-                    <button 
-                      onClick={() => handleDeleteProperty(p.id)}
-                      className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
-                    >
-                      <Trash2 size={12} />
-                      Hapus
-                    </button>
+                ))
+              ) : (
+                <div className="bg-white border border-dashed border-amber-300 rounded-[20px] p-8 text-center space-y-4">
+                  <div className="mx-auto w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-500">
+                    <ShieldAlert size={24} />
                   </div>
+                  <div className="max-w-md mx-auto space-y-2">
+                    <h3 className="font-extrabold text-sm text-[#3A444D] uppercase">Katalog Properti Kosong</h3>
+                    <p className="text-xs text-[#64748B] leading-relaxed">
+                      {getIsSupabaseConfigured() ? (
+                        "Koneksi Supabase aktif, namun tidak ada data properti yang ditemukan di tabel 'properties'. Jika Anda sudah memasukkan data properti di Supabase Table Editor tapi belum muncul, hal ini dikarenakan fitur Row Level Security (RLS) di Supabase secara default memblokir semua hak baca publik."
+                      ) : (
+                        "Belum ada properti kos yang ditambahkan. Silakan klik tombol 'Tambah Properti' di atas untuk memulai."
+                      )}
+                    </p>
+                  </div>
+                  {getIsSupabaseConfigured() && (
+                    <div className="bg-slate-50 rounded-xl p-4 max-w-lg mx-auto text-left border border-[#E2E8F0] space-y-3">
+                      <span className="block text-[10px] font-bold text-slate-400 font-mono uppercase">💡 SOLUSI UNTUK MENAMPILKAN DATA DARI SUPABASE:</span>
+                      <p className="text-[11px] text-[#3A444D] leading-relaxed">
+                        Jalankan perintah SQL berikut di menu <strong>SQL Editor</strong> di dashboard Supabase Anda untuk mematikan RLS atau mengaktifkan kebijakan baca untuk publik (SELECT):
+                      </p>
+                      <pre className="bg-slate-900 text-[#00FF66] p-3 rounded-lg text-[11px] font-mono overflow-x-auto select-all">
+{`-- Solusi Cepat: Matikan RLS untuk tabel-tabel katalog
+ALTER TABLE properties DISABLE ROW LEVEL SECURITY;
+ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
+                      </pre>
+                      <p className="text-[10px] text-[#64748B] italic">
+                        * Setelah menjalankan perintah tersebut, halaman ini akan memuat seluruh data secara real-time.
+                      </p>
+                    </div>
+                  )}
                 </div>
-              ))}
+              )}
             </div>
           </div>
         )}
@@ -1010,36 +1108,70 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             </div>
 
             <div className="space-y-3">
-              {rooms.map(r => {
-                const parentProj = properties.find(p=>p.id === r.property_id)?.name || 'Properti N/A';
-                return (
-                  <div key={r.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
-                    <div>
-                      <h4 className="font-extrabold text-[#3A444D] uppercase text-sm">KAMAR {r.room_number} ({r.room_type})</h4>
-                      <p className="text-[11px] text-[#64748B] font-mono mt-0.5">{parentProj} | Lantai {r.floor} | Stat: <span className="font-bold text-[#0D9488]">{r.status}</span></p>
+              {rooms.length > 0 ? (
+                rooms.map(r => {
+                  const parentProj = properties.find(p=>p.id === r.property_id)?.name || 'Properti N/A';
+                  return (
+                    <div key={r.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
+                      <div>
+                        <h4 className="font-extrabold text-[#3A444D] uppercase text-sm">KAMAR {r.room_number} ({r.room_type})</h4>
+                        <p className="text-[11px] text-[#64748B] font-mono mt-0.5">{parentProj} | Lantai {r.floor} | Stat: <span className="font-bold text-[#0D9488]">{r.status}</span></p>
+                      </div>
+                      <div className="flex gap-2 w-full sm:w-auto">
+                        <button 
+                          onClick={() => {
+                            setActiveRoomEdit(r);
+                            setShowRoomModal(true);
+                          }}
+                          className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                        >
+                          <Edit2 size={12} />
+                          Kustomisasi
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteRoom(r.id)}
+                          className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                        >
+                          <Trash2 size={12} />
+                          Hapus
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2 w-full sm:w-auto">
-                      <button 
-                        onClick={() => {
-                          setActiveRoomEdit(r);
-                          setShowRoomModal(true);
-                        }}
-                        className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
-                      >
-                        <Edit2 size={12} />
-                        Kustomisasi
-                      </button>
-                      <button 
-                        onClick={() => handleDeleteRoom(r.id)}
-                        className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
-                      >
-                        <Trash2 size={12} />
-                        Hapus
-                      </button>
-                    </div>
+                  );
+                })
+              ) : (
+                <div className="bg-white border border-dashed border-amber-300 rounded-[20px] p-8 text-center space-y-4">
+                  <div className="mx-auto w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-500">
+                    <ShieldAlert size={24} />
                   </div>
-                );
-              })}
+                  <div className="max-w-md mx-auto space-y-2">
+                    <h3 className="font-extrabold text-sm text-[#3A444D] uppercase">Data Kamar Kosong</h3>
+                    <p className="text-xs text-[#64748B] leading-relaxed">
+                      {getIsSupabaseConfigured() ? (
+                        "Koneksi Supabase aktif, namun tidak ada kamar yang ditemukan di tabel 'rooms'. Jika Anda sudah menginputkan kamar di Supabase tapi belum muncul, hal ini kemungkinan besar diblokir oleh Row Level Security (RLS) di Supabase."
+                      ) : (
+                        "Belum ada kamar kos yang ditambahkan. Silakan klik tombol 'Tambah Kamar' di atas untuk memulai."
+                      )}
+                    </p>
+                  </div>
+                  {getIsSupabaseConfigured() && (
+                    <div className="bg-slate-50 rounded-xl p-4 max-w-lg mx-auto text-left border border-[#E2E8F0] space-y-3">
+                      <span className="block text-[10px] font-bold text-slate-400 font-mono uppercase">💡 SOLUSI UNTUK MENAMPILKAN DATA DARI SUPABASE:</span>
+                      <p className="text-[11px] text-[#3A444D] leading-relaxed">
+                        Jalankan perintah SQL berikut di menu <strong>SQL Editor</strong> dashboard Supabase Anda untuk mematikan RLS:
+                      </p>
+                      <pre className="bg-slate-900 text-[#00FF66] p-3 rounded-lg text-[11px] font-mono overflow-x-auto select-all">
+{`-- Solusi Cepat: Matikan RLS untuk tabel-tabel katalog
+ALTER TABLE properties DISABLE ROW LEVEL SECURITY;
+ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
+                      </pre>
+                      <p className="text-[10px] text-[#64748B] italic">
+                        * Setelah menjalankan perintah tersebut, halaman ini akan memuat seluruh data secara real-time.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1828,7 +1960,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                            </tr>
                          </thead>
                          <tbody className="divide-y divide-gray-100 font-medium text-slate-700">
-                           {filteredPayments.map((p) => (
+                           {(filteredPayments || []).slice(0, 100).map((p) => (
                              <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
                                <td className="py-3 px-3 font-mono text-[10px] text-gray-500">{p.id}</td>
                                <td className="py-3 px-3 font-bold text-slate-800">{p.tenant_name}</td>
@@ -2546,7 +2678,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                              <td className="py-2.5 px-3 text-slate-500 font-sans">Pembayaran booking kamar R201 oleh Yogi Atmaja, post revenue ke akun 4000</td>
                              <td className="py-2.5 px-3 font-mono text-gray-400 text-[10px]">104.244.42.1</td>
                            </tr>
-                           {activityLogs.map((log, index) => (
+                           {(activityLogs || []).slice(0, 100).map((log, index) => (
                              <tr key={index} className="hover:bg-slate-50/50 transition-colors">
                                <td className="py-2.5 px-3 font-mono text-[10px] text-gray-400">{new Date().toISOString().slice(0, 10)} {10 + (index % 12)}:{(index * 7) % 60}</td>
                                <td className="py-2.5 px-3 font-bold text-slate-800">{log.admin_name || 'Admin'}</td>
@@ -2650,11 +2782,12 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             </div>
 
             <div className="space-y-3">
-              {bookings
+              {(bookings || [])
                 .filter(b => 
                   b.tenant_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                   b.room_number.toLowerCase().includes(searchQuery.toLowerCase())
                 )
+                .slice(0, 100)
                 .map(b => {
                   const propertyName = properties.find(p => p.id === b.property_id)?.name || 'Properti Kos';
                   return (
@@ -2820,7 +2953,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
               </div>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   const phoneNum = prompt("Ketik nomor WhatsApp penghuni baru (misal: 081293840293):");
                   const nameInput = prompt("Ketik nama penghuni baru:");
                   const roomInput = prompt("Ketik nomor kamar penghuni (misal: R201 atau 202):");
@@ -2840,10 +2973,8 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                       duration_months: Number(durationInMonthsInput) || 1,
                       payment_status: 'paid'
                     };
-                    // Save to local storage state
-                    const list = sandboxState.getTenants();
-                    const nextId = list.length ? Math.max(...list.map(t => t.id)) + 1 : 1;
-                    sandboxState.setTenants([...list, { ...payload, id: nextId } as Tenant]);
+                    // Save directly to the database
+                    await database.saveTenant(payload);
                     
                     // Also mark room as occupied if it exists
                     if (matchedRoom) {
@@ -3080,7 +3211,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
                     'Bersihkan Log Aktivitas',
                     'Apakah Anda yakin ingin mematikan / membersihkan semua log aktivitas sistem penampungan?',
                     async () => {
-                      sandboxState.setActivityLogs([]);
+                      await database.clearActivityLogs();
                       triggerAppRefresh();
                     }
                   );
@@ -3092,7 +3223,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
             </div>
 
             <div className="bg-slate-950 rounded-2xl border border-slate-850 p-4 font-mono text-[10px] space-y-2.5 overflow-y-auto max-h-[60vh] no-scrollbar">
-              {activityLogs.map(l => (
+              {(activityLogs || []).slice(0, 100).map(l => (
                 <div key={l.id} className="border-b border-white/5 pb-2.5 flex flex-col sm:flex-row justify-between text-slate-350 gap-1 select-all">
                   <div>
                     <span className="text-[#0D9488] font-bold font-bold uppercase tracking-wider">[{l.time || '11:15'}]</span>{' '}

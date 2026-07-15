@@ -151,7 +151,7 @@ ALTER TABLE IF EXISTS users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS journal_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS financial_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS accounts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE IF EXISTS system_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS coupons ENABLE ROW LEVEL SECURITY;
 
 -- 1. properties table policies
@@ -233,4 +233,28 @@ CREATE POLICY "Admin All Access for Transactions" ON financial_transactions
 
 CREATE POLICY "Admin All Access for Journal Entries" ON journal_entries
   FOR ALL TO authenticated USING (true);
+
+-- 12. system settings policies
+CREATE POLICY "Public Read Access for Settings" ON settings
+  FOR SELECT TO public USING (true);
+
+CREATE POLICY "Admin All Access for Settings" ON settings
+  FOR ALL TO authenticated USING (true);
+
+-- =========================================================================
+-- DATABASE MIGRATIONS & SCHEMA UPDATES
+-- =========================================================================
+-- Note: If you encounter errors about missing columns such as 'additional_rules',
+-- please run the following SQL statements in your Supabase SQL Editor:
+--
+-- ALTER TABLE IF EXISTS properties 
+--   ADD COLUMN IF NOT EXISTS description TEXT,
+--   ADD COLUMN IF NOT EXISTS additional_rules TEXT,
+--   ADD COLUMN IF NOT EXISTS policies TEXT,
+--   ADD COLUMN IF NOT EXISTS terms TEXT,
+--   ADD COLUMN IF NOT EXISTS regulations TEXT;
+--
+-- After running the SQL above, please remember to click "Reload schema" or "Refetch schema"
+-- in the Supabase Dashboard, or wait a few seconds for the schema cache to refresh.
+
 

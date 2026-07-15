@@ -17,7 +17,7 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({ property, onSelect }
       <div className="relative h-48 bg-slate-950 overflow-hidden flex items-center justify-center">
         {property.image_url ? (
           <img 
-            src={property.image_url} 
+            src={property.image_url || null} 
             alt={property.name}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover select-none transition-transform duration-500 hover:scale-105"

@@ -12,6 +12,7 @@ import {
 import { Property, Room, Booking, Survey, Coupon, SystemSettings } from '../types';
 import { database } from '../lib/supabase';
 import MidtransSimulator from '../components/MidtransSimulator';
+import RoomGallery from '../components/room/RoomGallery';
 
 interface UserWebsiteProps {
   onRefreshTrigger: number;
@@ -324,11 +325,10 @@ export default function UserWebsite({ onRefreshTrigger, triggerAppRefresh }: Use
         setSnapPaymentContext({ orderId, grossAmount, description });
         setSnapOpen(true);
       }
-    } catch (err) {
+    } catch (err: any) {
       setLoading(false);
-      console.error(err);
-      setSnapPaymentContext({ orderId, grossAmount, description });
-      setSnapOpen(true);
+      console.error('[MIDTRANS ERROR]', err);
+      alert(`Gagal memproses pembayaran Midtrans: ${err.message || 'Koneksi terputus atau credential server belum disetup'}`);
     }
   };
 
@@ -477,11 +477,10 @@ export default function UserWebsite({ onRefreshTrigger, triggerAppRefresh }: Use
         setSnapPaymentContext({ orderId, grossAmount, description });
         setSnapOpen(true);
       }
-    } catch (err) {
+    } catch (err: any) {
       setLoading(false);
-      console.error(err);
-      setSnapPaymentContext({ orderId, grossAmount, description });
-      setSnapOpen(true);
+      console.error('[MIDTRANS ERROR]', err);
+      alert(`Gagal memproses pembayaran Midtrans: ${err.message || 'Koneksi terputus atau credential server belum disetup'}`);
     }
   };
 
@@ -797,7 +796,7 @@ export default function UserWebsite({ onRefreshTrigger, triggerAppRefresh }: Use
                 >
                   <div className="relative h-56 bg-brand-darker select-none">
                     <img 
-                      src={p.image_url} 
+                      src={p.image_url || null} 
                       alt={p.name} 
                       className="w-full h-full object-cover opacity-85" 
                       referrerPolicy="no-referrer"
@@ -874,6 +873,11 @@ export default function UserWebsite({ onRefreshTrigger, triggerAppRefresh }: Use
             )}
           </div>
         )}
+
+        {/* Room Gallery section for interactive exploration */}
+        <section className="pt-12 border-t border-brand-steel/20">
+          <RoomGallery rooms={rooms} properties={properties} />
+        </section>
 
       </main>
 

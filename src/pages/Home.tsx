@@ -1,19 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { database } from '../lib/supabase';
+import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { Property, Room, Booking, Survey, Coupon, SystemSettings, StandardFacility, FAQItem, Tenant } from '../types';
 import BookingForm from '../components/transaction/BookingForm';
 import InvoiceCard from '../components/transaction/InvoiceCard';
 import Loader from '../components/common/Loader';
 import Modal from '../components/common/Modal';
 import MidtransSimulator from '../components/MidtransSimulator';
+import { compressImage } from '../utils/imageCompressor';
 import { 
   Sparkles, HelpCircle, Phone, BookOpen, Clock, HardDrive, Shield,
   MapPin, Wifi, Zap, ChevronLeft, Building2, Search, Calendar, Map, 
   User, CheckCircle, Heart, Tv, Utensils, Car, Info, X, Bed, RotateCw, 
   Play, Volume2, ArrowRight, Star, AlertCircle, ChevronRight, MapPinned,
   Shirt, Sparkle, Compass, Grid, MapIcon, CompassIcon, InfoIcon, LogIn, Droplet, Check,
-  MessageSquare, Mail
+  MessageSquare, Mail, UploadCloud
 } from 'lucide-react';
 import PremiumSearchFilter from '../components/premium/PremiumSearchFilter';
 import PremiumRoomGrid from '../components/premium/PremiumRoomGrid';
@@ -24,11 +26,41 @@ interface HomeProps {
 }
 
 export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
+  // Use granular real-time table hooks to fetch data and receive live changes
+  const { data: propertiesData, loading: propertiesLoading } = useRealtimeTable<Property>(
+    'properties',
+    () => database.fetchProperties(),
+    refreshTrigger
+  );
+  const { data: roomsData, loading: roomsLoading } = useRealtimeTable<Room>(
+    'rooms',
+    () => database.fetchRooms(),
+    refreshTrigger
+  );
+  const { data: couponsData, loading: couponsLoading } = useRealtimeTable<Coupon>(
+    'coupons',
+    () => database.fetchCoupons(),
+    refreshTrigger
+  );
+  const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
+    'settings',
+    () => database.fetchSettings().then(res => [res]),
+    refreshTrigger
+  );
+  const { data: tenantsData, loading: tenantsLoading } = useRealtimeTable<Tenant>(
+    'tenants',
+    () => database.fetchTenants(),
+    refreshTrigger
+  );
+
+  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading || tenantsLoading;
+
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Core Page Navigation State
   const [userPage, setUserPage] = useState<'home' | 'search' | 'detail'>('home');
@@ -117,72 +149,112 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
 
+  // Detailed room popup states
+  const [selectedRoomForDetail, setSelectedRoomForDetail] = useState<Room | null>(null);
+  const [activeDetailImageIndex, setActiveDetailImageIndex] = useState(0);
+  const [uploadingImage, setUploadingImage] = useState<boolean>(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
-        const [propsData, roomsData, couponsData, settingsData, tenantsData] = await Promise.all([
-          database.fetchProperties(),
-          database.fetchRooms(),
-          database.fetchCoupons(),
-          database.fetchSettings(),
-          database.fetchTenants()
-        ]);
-        
-        let activeFacilitiesList: string[] = [];
-        if (settingsData && settingsData.standard_facilities) {
-          try {
-            const parsed = JSON.parse(settingsData.standard_facilities);
-            if (Array.isArray(parsed)) {
-              activeFacilitiesList = parsed.map((f: any) => f.title.trim().toLowerCase());
-            }
-          } catch (e) {
-            console.error("Error parsing standard_facilities in Home:", e);
-          }
-        } else {
-          // Fallback to default master facilities if settings is not initialized yet
-          activeFacilitiesList = [
-            "jam operasional", "check in", "security", "wifi", "air", "parkir", "laundry", "cleaning"
-          ];
-        }
+    setActiveDetailImageIndex(0);
+  }, [selectedRoomForDetail]);
 
-        const filteredProps = (propsData || []).map(p => ({
-          ...p,
-          facilities: (p.facilities || []).filter(f => activeFacilitiesList.includes(f.trim().toLowerCase()))
-        }));
-
-        const filteredRooms = (roomsData || []).map(r => ({
-          ...r,
-          facilities: (r.facilities || []).filter(f => activeFacilitiesList.includes(f.trim().toLowerCase()))
-        }));
-
-        setProperties(filteredProps);
-        setRooms(filteredRooms);
-        setCoupons(couponsData);
-        setSettings(settingsData);
-        setTenants(tenantsData || []);
-        if (filteredProps && filteredProps.length > 0) {
-          const maxPriceVal = Math.max(...filteredProps.map(p => p.price));
-          setPriceRange(Math.max(5000000, maxPriceVal));
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
+  const handleUploadDetailImage = async (e: React.ChangeEvent<HTMLInputElement>, imageIndex: number) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeProperty) return;
+    
+    if (file.size > 10 * 1024 * 1024) {
+      alert("Ukuran gambar maksimal adalah 10MB!");
+      return;
     }
-    loadData();
-  }, [refreshTrigger]);
+    
+    try {
+      setUploadingImage(true);
+      const compressedBase64 = await compressImage(file, 800, 600, 0.7);
+      
+      let updatedProperty: Property;
+      if (imageIndex === -1) {
+        // Main photo
+        updatedProperty = {
+          ...activeProperty,
+          image_url: compressedBase64
+        };
+      } else {
+        // Gallery photo
+        const updatedImages = [...(activeProperty.images || [])];
+        // Ensure there is room
+        while (updatedImages.length <= imageIndex) {
+          updatedImages.push("");
+        }
+        updatedImages[imageIndex] = compressedBase64;
+        updatedProperty = {
+          ...activeProperty,
+          images: updatedImages
+        };
+      }
+      
+      const saved = await database.saveProperty(updatedProperty);
+      setActiveProperty(saved);
+      
+      // Update properties list so changes propagate back to list views instantly
+      setProperties(prev => prev.map(p => p.id === saved.id ? saved : p));
+      
+      alert("Gambar berhasil di-upload dan disimpan ke database Supabase!");
+    } catch (err) {
+      console.error("Error uploading image:", err);
+      alert("Gagal meng-upload gambar. Silakan coba lagi.");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
 
   useEffect(() => {
-    const handleStateChange = () => {
-      triggerAppRefresh?.();
-    };
-    window.addEventListener('samara_state_changed', handleStateChange);
-    return () => {
-      window.removeEventListener('samara_state_changed', handleStateChange);
-    };
-  }, [triggerAppRefresh]);
+    let activeFacilitiesList: string[] = [];
+    const sett = settingsData && settingsData.length > 0 ? settingsData[0] : null;
+    if (sett && sett.standard_facilities) {
+      try {
+        const parsed = JSON.parse(sett.standard_facilities);
+        if (Array.isArray(parsed)) {
+          activeFacilitiesList = parsed.map((f: any) => f.title.trim().toLowerCase());
+        }
+      } catch (e) {
+        console.error("Error parsing standard_facilities in Home:", e);
+      }
+    } else {
+      // Fallback to default master facilities if settings is not initialized yet
+      activeFacilitiesList = [
+        "jam operasional", "check in", "security", "wifi", "air", "parkir", "laundry", "cleaning"
+      ];
+    }
+
+    const filteredProps = (propertiesData || []).map(p => ({
+      ...p,
+      facilities: (p.facilities || []).filter(f => activeFacilitiesList.includes(f.trim().toLowerCase()))
+    }));
+
+    const filteredRooms = (roomsData || []).map(r => ({
+      ...r,
+      facilities: (r.facilities || []).filter(f => activeFacilitiesList.includes(f.trim().toLowerCase()))
+    }));
+
+    setProperties(filteredProps);
+    setRooms(filteredRooms);
+    setCoupons(couponsData || []);
+    setSettings(sett);
+    setTenants(tenantsData || []);
+    
+    if (filteredProps && filteredProps.length > 0) {
+      const maxPriceVal = Math.max(...filteredProps.map(p => p.price));
+      setPriceRange(Math.max(5000000, maxPriceVal));
+    }
+  }, [propertiesData, roomsData, couponsData, settingsData, tenantsData]);
+
+  useEffect(() => {
+    if (!hooksLoading) {
+      setLoading(false);
+      setIsInitialLoad(false);
+    }
+  }, [hooksLoading]);
 
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [activeTestimonialIdx, setActiveTestimonialIdx] = useState<number>(0);
@@ -529,13 +601,8 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
       }
     } catch (err: any) {
       setLoading(false);
-      console.error(err);
-      setSnapPaymentContext({
-        orderId,
-        grossAmount: calculatedTotal,
-        description
-      });
-      setSnapOpen(true);
+      console.error('[MIDTRANS ERROR]', err);
+      alert(`Gagal memproses pembayaran Midtrans: ${err.message || 'Koneksi terputus atau credential server belum disetup'}`);
     }
   };
 
@@ -813,6 +880,19 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
 
   // Leaflet map initialization and updates hook
   useEffect(() => {
+    // If the page is not 'search', remove the map if it exists, and clean up
+    if (userPage !== 'search') {
+      if (mapRef.current) {
+        try {
+          mapRef.current.remove();
+        } catch (e) {
+          console.warn('[LEAFLET CLEANUP] Error removing map:', e);
+        }
+        mapRef.current = null;
+      }
+      return;
+    }
+
     // Only initialize map if it doesn't exist yet
     if (!mapRef.current) {
       const container = document.getElementById('leaflet-map-container');
@@ -888,7 +968,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
       map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
     }
 
-  }, [filteredProperties, selectedMapProperty]);
+  }, [filteredProperties, selectedMapProperty, userPage]);
 
   // Handle zooming/panning to property when selectedMapProperty changes outside map
   useEffect(() => {
@@ -1510,7 +1590,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[500px]">
             
             {/* Sisi Kiri: Daftar Card Gedung Kosan atau Kamar Langsung (col-span-7) */}
-            <div className="lg:col-span-7 space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+            <div className="lg:col-span-7 space-y-5 max-h-[70vh] overflow-y-auto pr-3 pl-3 py-3 bg-slate-100 border border-slate-200 rounded-3xl shadow-inner shadow-slate-100 text-left">
               {searchMode === 'building' ? (
                 filteredProperties.length > 0 ? (
                   filteredProperties.map(p => {
@@ -1521,10 +1601,10 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                         key={p.id}
                         onMouseEnter={() => setHoveredPropertyId(p.id)}
                         onMouseLeave={() => setHoveredPropertyId(null)}
-                        className={`bg-white border rounded-2xl overflow-hidden flex flex-col sm:flex-row group transition-all duration-300 ${hoveredPropertyId === p.id ? 'border-brand-primary shadow-lg bg-[#F8F9FA]' : 'border-brand-beige'}`}
+                        className={`bg-white border rounded-2xl overflow-hidden flex flex-col sm:flex-row group transition-all duration-300 shadow-sm hover:shadow-md hover:-translate-y-0.5 ${hoveredPropertyId === p.id ? 'border-[#2E6F40] bg-slate-50/50' : 'border-[#E2E8F0]'}`}
                       >
                         {/* Left Thumbnail */}
-                        <div className="w-full sm:w-56 h-48 bg-slate-900 shrink-0 relative overflow-hidden">
+                        <div className="w-full sm:w-52 h-44 bg-slate-900 shrink-0 relative overflow-hidden">
                           <img 
                             src={p.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=400&q=80"} 
                             alt={p.name}
@@ -1532,51 +1612,57 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                             referrerPolicy="no-referrer"
                           />
                           <div className="absolute top-3 left-3 flex flex-col gap-1.5">
-                            <span className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase font-mono tracking-wider ${
+                            <span className={`px-2.5 py-1 rounded-md text-[8px] font-black uppercase font-mono tracking-wider shadow-sm ${
                               p.type === 'putri' 
-                                ? 'bg-brand-taupe text-[#F8F9FA] border border-brand-taupe/30' 
+                                ? 'bg-pink-600 text-white border border-pink-500/30' 
                                 : p.type === 'putra' 
-                                  ? 'bg-brand-steel text-[#F8F9FA] border border-brand-steel/30' 
-                                  : 'bg-brand-primary text-[#F8F9FA] border border-brand-primary/30'
+                                  ? 'bg-blue-600 text-white border border-blue-500/30' 
+                                  : 'bg-amber-600 text-white border border-amber-500/30'
                             }`}>
-                              KOS {p.type}
+                              KOS {p.type.toUpperCase()}
                             </span>
                           </div>
                         </div>
 
                         {/* Right Details */}
-                        <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                          <div className="space-y-1.5">
-                            <div className="flex justify-between items-start">
-                              <h3 className="font-extrabold text-brand-primary text-base font-display group-hover:text-brand-steel transition-colors">{p.name}</h3>
-                              <span className="text-[10px] text-brand-steel font-bold bg-[#F8F9FA] border border-brand-beige px-2 py-0.5 rounded-full uppercase">{availableCount} Unit Kosong</span>
+                        <div className="p-4 flex-1 flex flex-col justify-between space-y-3 min-w-0">
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-start gap-2">
+                              <h3 className="font-extrabold text-[#3A444D] text-sm group-hover:text-[#2E6F40] transition-colors truncate">{p.name}</h3>
+                              <span className={`text-[8px] font-extrabold font-mono px-2 py-0.5 rounded-full uppercase border shrink-0 ${
+                                availableCount > 0 
+                                  ? 'text-emerald-700 bg-emerald-50 border-emerald-100' 
+                                  : 'text-rose-700 bg-rose-50 border-rose-100'
+                              }`}>
+                                {availableCount} Unit Kosong
+                              </span>
                             </div>
                             
-                            <div className="flex items-center gap-1.5 text-brand-steel text-xs">
-                              <MapPin size={13} className="text-brand-taupe shrink-0" />
-                              <span className="truncate max-w-sm">{p.address}</span>
+                            <div className="flex items-center gap-1.5 text-[#64748B] text-[11px] font-medium leading-none">
+                              <MapPin size={12} className="text-[#2E6F40] shrink-0" />
+                              <span className="truncate">{p.address}</span>
                             </div>
 
-                            <p className="text-[10px] text-brand-steel font-light flex items-center gap-1">
-                              <Compass size={11} className="text-brand-taupe" />
-                              <span>Jarak fasilitas publik: <strong>500m ke Stasiun / 10 menit jalan kaki</strong></span>
+                            <p className="text-[10px] text-[#64748B] font-medium flex items-center gap-1 mt-1 leading-none">
+                              <Compass size={11} className="text-[#2E6F40]" />
+                              <span>Fasilitas Publik: <strong>500m ke Kampus / Stasiun</strong></span>
                             </p>
                           </div>
 
                           {/* Badges */}
                           <div className="flex flex-wrap gap-1">
-                            {p.facilities.slice(0, 4).map(f => (
-                              <span key={f} className="text-[9px] bg-[#F8F9FA] border border-brand-beige text-brand-steel font-semibold px-2 py-0.5 rounded-md">
+                            {p.facilities.slice(0, 3).map(f => (
+                              <span key={f} className="text-[9px] bg-slate-50 border border-[#E2E8F0] text-[#475569] font-bold px-2 py-0.5 rounded-md capitalize">
                                 {f}
                               </span>
                             ))}
                           </div>
 
                           {/* Footer details & Action */}
-                          <div className="border-t border-brand-beige pt-3 flex items-center justify-between text-xs">
+                          <div className="border-t border-[#F1F5F9] pt-2.5 flex items-center justify-between text-xs">
                             <div>
-                              <span className="text-[9px] text-brand-steel block uppercase font-mono font-bold mb-0.5">Mulai Dari</span>
-                              <span className="font-extrabold text-brand-primary font-mono text-base">{formatRupiah(p.price)}<span className="text-[10px] text-brand-steel font-sans font-light">/bln</span></span>
+                              <span className="text-[8px] text-[#64748B] block uppercase font-mono font-extrabold leading-none mb-0.5">Mulai Dari</span>
+                              <span className="font-black text-[#1E293B] font-mono text-xs">{formatRupiah(p.price)}<span className="text-[9px] text-[#64748B] font-sans font-medium"> / bln</span></span>
                             </div>
 
                             <button
@@ -1584,10 +1670,10 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                                 setActiveProperty(p);
                                 setUserPage('detail');
                               }}
-                              className="bg-brand-primary hover:bg-brand-steel text-white font-extrabold py-2 px-3.5 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1.5 shadow-md"
+                              className="bg-[#2E6F40] hover:bg-[#1f4b2b] text-white font-extrabold py-2 px-3 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-sm"
                             >
-                              <span>Lihat Detail Kamar</span>
-                              <ChevronRight size={12} />
+                              <span>Lihat Unit</span>
+                              <ChevronRight size={11} />
                             </button>
                           </div>
                         </div>
@@ -1610,10 +1696,10 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                     return (
                       <div 
                         key={r.id} 
-                        className="bg-white border border-brand-beige rounded-2xl p-5 flex flex-col sm:flex-row gap-5 hover:border-brand-primary hover:shadow-lg transition-all duration-300 group"
+                        className="bg-white border border-[#E2E8F0] hover:border-[#2E6F40] rounded-2xl p-4 flex flex-col sm:flex-row gap-4 hover:shadow-md transition-all duration-300 group shadow-sm text-left"
                       >
                         {/* Room image or fallback */}
-                        <div className="w-full sm:w-44 h-36 bg-slate-900 shrink-0 rounded-xl relative overflow-hidden">
+                        <div className="w-full sm:w-40 h-32 bg-slate-900 shrink-0 rounded-xl relative overflow-hidden">
                           <img 
                             src={r.image_url || p.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=400&q=80"} 
                             alt={`Kamar ${r.room_number}`}
@@ -1621,12 +1707,12 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                             referrerPolicy="no-referrer"
                           />
                           <div className="absolute top-2.5 left-2.5">
-                            <span className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase font-mono border ${
+                            <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase font-mono border shadow-sm ${
                               r.status === 'available' 
-                                ? 'bg-emerald-500 text-white border-emerald-600' 
+                                ? 'bg-emerald-600 text-white border-emerald-700' 
                                 : r.status === 'occupied' 
-                                  ? 'bg-amber-500 text-black border-amber-600' 
-                                  : 'bg-rose-500 text-white border-rose-600'
+                                  ? 'bg-amber-600 text-white border-amber-700' 
+                                  : 'bg-rose-600 text-white border-rose-700'
                             }`}>
                               {r.status === 'available' ? 'KOSONG' : r.status === 'occupied' ? 'TERISI' : 'PERBAIKAN'}
                             </span>
@@ -1634,50 +1720,60 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                         </div>
 
                         {/* Room Details */}
-                        <div className="flex-1 flex flex-col justify-between space-y-2.5 min-w-0">
+                        <div className="flex-1 flex flex-col justify-between space-y-2 min-w-0">
                           <div className="space-y-1">
                             <div className="flex justify-between items-start gap-2">
                               <div className="truncate">
-                                <span className="text-[8px] font-mono font-extrabold uppercase text-brand-steel bg-brand-beige/40 px-2 py-0.5 rounded-md mr-1.5">{r.room_type}</span>
-                                <h3 className="font-extrabold text-brand-primary text-base font-display inline-block font-sans">Kamar No. {r.room_number}</h3>
+                                <span className="text-[8px] font-mono font-extrabold uppercase text-[#2E6F40] bg-[#2E6F40]/10 border border-[#2E6F40]/20 px-2 py-0.5 rounded-md mr-1.5">{r.room_type}</span>
+                                <h3 className="font-extrabold text-[#3A444D] text-sm font-sans inline-block">Kamar No. {r.room_number}</h3>
                               </div>
-                              <span className="text-[9px] font-mono text-brand-steel bg-[#F8F9FA] border border-brand-beige px-2 py-0.5 rounded-full uppercase shrink-0">Lantai {r.floor} ({r.size_sqm} m²)</span>
+                              <span className="text-[9px] font-mono text-[#64748B] bg-slate-50 border border-[#E2E8F0] px-2 py-0.5 rounded-full uppercase shrink-0">Lantai {r.floor} ({r.size_sqm} m²)</span>
                             </div>
                             
-                            <p className="text-[11px] font-bold text-brand-primary flex items-center gap-1 leading-none mt-1">
-                              <Building2 size={12} className="text-brand-taupe shrink-0" />
+                            <p className="text-[11px] font-bold text-[#3A444D] flex items-center gap-1 leading-none mt-1">
+                              <Building2 size={12} className="text-[#2E6F40] shrink-0" />
                               <span className="truncate">{p.name}</span>
                             </p>
-                            <p className="text-[10px] text-brand-steel font-light flex items-center gap-1">
-                              <MapPin size={11} className="text-brand-taupe shrink-0" />
+                            <p className="text-[10px] text-[#64748B] font-medium flex items-center gap-1">
+                              <MapPin size={11} className="text-[#2E6F40] shrink-0" />
                               <span className="truncate">{p.address}</span>
                             </p>
                           </div>
 
                           {/* Facilities */}
                           <div className="flex flex-wrap gap-1">
-                            {r.facilities.slice(0, 5).map(f => (
-                              <span key={f} className="text-[8px] bg-[#F8F9FA] border border-brand-beige text-brand-steel px-1.5 py-0.5 rounded-md font-medium">
+                            {r.facilities.slice(0, 4).map(f => (
+                              <span key={f} className="text-[8px] bg-slate-50 border border-[#E2E8F0] text-[#475569] px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">
                                 {f}
                               </span>
                             ))}
                           </div>
 
                           {/* Footer / Action */}
-                          <div className="border-t border-brand-beige pt-2 flex items-center justify-between text-xs gap-3">
+                          <div className="border-t border-[#F1F5F9] pt-2 flex items-center justify-between text-xs gap-3">
                             <div>
-                              <span className="text-[8px] text-brand-steel block uppercase font-mono font-bold leading-none mb-0.5">Biaya Sewa</span>
-                              <span className="font-extrabold text-brand-primary font-mono text-sm">{formatRupiah(r.price)}<span className="text-[9px] text-brand-steel font-sans font-light">/bln</span></span>
+                              <span className="text-[8px] text-[#64748B] block uppercase font-mono font-bold leading-none mb-0.5">Biaya Sewa</span>
+                              <span className="font-black text-[#1E293B] font-mono text-xs">{formatRupiah(r.price)}<span className="text-[9px] text-[#64748B] font-sans font-medium">/bln</span></span>
                             </div>
 
-                            <div className="flex gap-1.5 shrink-0">
+                            <div className="flex gap-1.5 shrink-0 items-center">
+                              {r.status === 'available' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedRoomForDetail(r)}
+                                  className="border border-[#2E6F40] bg-emerald-50/25 hover:bg-[#2E6F40] hover:text-white text-[#2E6F40] font-black py-1.5 px-2.5 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                                >
+                                  <Info size={11} />
+                                  <span>Detail Kamar</span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => {
                                   setActiveProperty(p);
                                   setUserPage('detail');
                                 }}
-                                className="border border-brand-beige hover:border-brand-steel text-brand-steel font-bold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer"
+                                className="border border-[#E2E8F0] hover:border-[#64748B] text-[#475569] font-bold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer"
                               >
                                 Detail Kos
                               </button>
@@ -1689,9 +1785,9 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                                   setActiveRoom(r);
                                   setCheckoutFlow('monthly');
                                 }}
-                                className={`font-extrabold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-md ${
+                                className={`font-extrabold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
                                   r.status === 'available' 
-                                    ? 'bg-brand-primary hover:bg-brand-steel text-white' 
+                                    ? 'bg-[#2E6F40] hover:bg-[#1f4b2b] text-white' 
                                     : 'bg-slate-100 text-[#64748B] border border-slate-200 cursor-not-allowed shadow-none'
                                 }`}
                               >
@@ -1820,6 +1916,21 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm border border-slate-800 text-white px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider">
                 Foto Utama
               </div>
+              
+              {/* Admin Image Uploader Trigger */}
+              <div className="absolute bottom-4 right-4 z-10">
+                <label className="bg-[#2E6F40] hover:bg-[#235531] text-white px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-1.5">
+                  <UploadCloud size={13} />
+                  <span>{uploadingImage ? "Mengunggah..." : "Upload Foto Utama"}</span>
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    className="hidden" 
+                    disabled={uploadingImage}
+                    onChange={(e) => handleUploadDetailImage(e, -1)} 
+                  />
+                </label>
+              </div>
             </div>
 
             {/* Grid of 4 Smaller Photos (Col span 1 each) */}
@@ -1844,12 +1955,26 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                       onClick={() => setSelectedRoomImage(url)}
                     >
                       <img 
-                        src={url} 
+                        src={url || null} 
                         alt={label}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
                         referrerPolicy="no-referrer"
                       />
                       <div className="absolute bottom-2 left-2 bg-black/65 px-2 py-1 rounded-md text-[9px] font-semibold text-white tracking-wide">{label}</div>
+                      
+                      {/* Admin Image Uploader Trigger for Gallery */}
+                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10" onClick={(e) => e.stopPropagation()}>
+                        <label className="bg-slate-950/80 hover:bg-[#2E6F40] text-white p-2 rounded-lg shadow-md cursor-pointer flex items-center justify-center transition-colors">
+                          <UploadCloud size={12} />
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            className="hidden" 
+                            disabled={uploadingImage}
+                            onChange={(e) => handleUploadDetailImage(e, idx)} 
+                          />
+                        </label>
+                      </div>
                     </div>
                   );
                 });
@@ -2141,7 +2266,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                     <div className="bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#E2E8F0] flex gap-3">
                       {activeRoom.image_url ? (
                         <img 
-                          src={activeRoom.image_url} 
+                          src={activeRoom.image_url || null} 
                           alt={`Kamar ${activeRoom.room_number}`} 
                           className="w-14 h-14 object-cover rounded-xl border border-slate-800"
                         />
@@ -2309,7 +2434,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                       {r.image_url ? (
                         <div className="w-full h-36 rounded-xl overflow-hidden bg-[#F8FAFC] border border-[#E2E8F0] relative group">
                           <img 
-                            src={r.image_url} 
+                            src={r.image_url || null} 
                             alt={`Kamar ${r.room_number}`} 
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                           />
@@ -2337,13 +2462,28 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                             </span>
                           </div>
 
-                          <span className={`px-2 py-0.5 rounded-full text-[8px] font-extrabold uppercase font-mono border ${
-                            isAvailable 
-                              ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
-                              : 'bg-slate-100 text-[#64748B] border-slate-200'
-                          }`}>
-                            {isAvailable ? 'Tersedia' : 'Terisi'}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {isAvailable && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedRoomForDetail(r);
+                                }}
+                                className="px-2 py-0.5 rounded-md text-[8px] font-extrabold bg-[#2E6F40]/10 hover:bg-[#2E6F40]/25 border border-[#2E6F40]/30 text-[#2E6F40] transition-all uppercase tracking-wide flex items-center gap-0.5 cursor-pointer"
+                              >
+                                <Info size={10} />
+                                Detail
+                              </button>
+                            )}
+                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-extrabold uppercase font-mono border ${
+                              isAvailable 
+                                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
+                                : 'bg-slate-100 text-[#64748B] border-slate-200'
+                            }`}>
+                              {isAvailable ? 'Tersedia' : 'Terisi'}
+                            </span>
+                          </div>
                         </div>
 
                         {/* Facilities small preview */}
@@ -2418,15 +2558,15 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
       >
         {activeRoom && activeProperty && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
               <div>
                 <span className="text-[9px] font-bold text-[#64748B] font-mono uppercase">Jenis Sewa Dipilih</span>
                 <div className="flex gap-1.5 mt-0.5">
                   <button 
                     type="button" 
                     onClick={() => setCheckoutFlow('monthly')}
-                    className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase ${
-                      checkoutFlow === 'monthly' ? 'bg-amber-500 text-black' : 'bg-slate-850 text-[#64748B]'
+                    className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-wide cursor-pointer transition-all ${
+                      checkoutFlow === 'monthly' ? 'bg-[#2E6F40] text-white shadow-xs' : 'bg-[#F1F5F9] text-[#64748B] hover:bg-[#E2E8F0]'
                     }`}
                   >
                     Bulanan
@@ -2434,8 +2574,8 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                   <button 
                     type="button" 
                     onClick={() => setCheckoutFlow('survey')}
-                    className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase ${
-                      checkoutFlow === 'survey' ? 'bg-emerald-500 text-white' : 'bg-slate-850 text-[#64748B]'
+                    className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-wide cursor-pointer transition-all ${
+                      checkoutFlow === 'survey' ? 'bg-[#2E6F40] text-white shadow-xs' : 'bg-[#F1F5F9] text-[#64748B] hover:bg-[#E2E8F0]'
                     }`}
                   >
                     Janji Survey
@@ -2612,7 +2752,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <img 
-              src={selectedRoomImage} 
+              src={selectedRoomImage || null} 
               alt="Pratinjau Kamar Terbuka" 
               className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-slate-850 animate-fade-in"
               referrerPolicy="no-referrer"
@@ -2621,6 +2761,216 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
           <p className="text-[#64748B] text-xs font-mono tracking-wider mt-4 text-center">Klik di luar gambar atau tombol X untuk menutup pratinjau</p>
         </div>
       )}
+
+      {/* DETAIL KAMAR POPUP MODAL */}
+      <Modal
+        isOpen={selectedRoomForDetail !== null}
+        onClose={() => setSelectedRoomForDetail(null)}
+        title={`INFORMASI DETAIL KAMAR UNIT ${selectedRoomForDetail?.room_number || ''}`}
+      >
+        {selectedRoomForDetail && (
+          <div className="space-y-5 text-left max-h-[80vh] overflow-y-auto pr-1">
+            {/* Image section */}
+            {(() => {
+              const detailRoomImages = [
+                selectedRoomForDetail.image_url,
+                ...(selectedRoomForDetail.images || [])
+              ].filter(Boolean) as string[];
+
+              return detailRoomImages.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="relative group">
+                    <div 
+                      ref={scrollContainerRef}
+                      onScroll={(e) => {
+                        const container = e.currentTarget;
+                        const scrollPosition = container.scrollLeft;
+                        const itemWidth = container.clientWidth;
+                        if (itemWidth > 0) {
+                          const index = Math.round(scrollPosition / itemWidth);
+                          setActiveDetailImageIndex(index);
+                        }
+                      }}
+                      className="w-full h-52 rounded-2xl overflow-x-auto flex snap-x snap-mandatory scroll-smooth no-scrollbar bg-slate-100 border border-[#E2E8F0]"
+                    >
+                      {detailRoomImages.map((img, idx) => (
+                        <div key={idx} className="w-full h-full shrink-0 snap-start relative">
+                          <img 
+                            src={img} 
+                            alt={`Kamar ${selectedRoomForDetail.room_number} Gambar ${idx + 1}`} 
+                            className="w-full h-full object-cover select-none"
+                            draggable="false"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="absolute top-3 left-3 bg-[#2E6F40] px-3 py-1 rounded-xl text-[9px] font-extrabold text-white tracking-wide uppercase shadow z-10 select-none">
+                      LANTAI {selectedRoomForDetail.floor}
+                    </div>
+
+                    {detailRoomImages.length > 1 && (
+                      <>
+                        <div className="absolute bottom-3 right-3 bg-black/70 px-2 py-0.5 rounded-lg text-[9px] font-mono text-white z-10 select-none">
+                          {activeDetailImageIndex + 1} / {detailRoomImages.length}
+                        </div>
+
+                        {/* Navigation arrows */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (scrollContainerRef.current) {
+                              const prevIdx = (activeDetailImageIndex - 1 + detailRoomImages.length) % detailRoomImages.length;
+                              scrollContainerRef.current.scrollTo({
+                                left: prevIdx * scrollContainerRef.current.clientWidth,
+                                behavior: 'smooth'
+                              });
+                            }
+                          }}
+                          className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/90 hover:bg-white text-slate-800 flex items-center justify-center shadow-md transition-all cursor-pointer z-10 opacity-0 group-hover:opacity-100 duration-200"
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (scrollContainerRef.current) {
+                              const nextIdx = (activeDetailImageIndex + 1) % detailRoomImages.length;
+                              scrollContainerRef.current.scrollTo({
+                                left: nextIdx * scrollContainerRef.current.clientWidth,
+                                behavior: 'smooth'
+                              });
+                            }
+                          }}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/90 hover:bg-white text-slate-800 flex items-center justify-center shadow-md transition-all cursor-pointer z-10 opacity-0 group-hover:opacity-100 duration-200"
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  
+                  {detailRoomImages.length > 1 && (
+                    <div className="flex gap-2 overflow-x-auto py-1 scrollbar-thin">
+                      {detailRoomImages.map((img, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => {
+                            setActiveDetailImageIndex(idx);
+                            if (scrollContainerRef.current) {
+                              scrollContainerRef.current.scrollTo({
+                                left: idx * scrollContainerRef.current.clientWidth,
+                                behavior: 'smooth'
+                              });
+                            }
+                          }}
+                          className={`w-14 h-11 rounded-lg overflow-hidden border-2 transition-all shrink-0 cursor-pointer ${
+                            activeDetailImageIndex === idx 
+                              ? 'border-[#2E6F40] ring-1 ring-[#2E6F40]/30 scale-[1.03]' 
+                              : 'border-[#E2E8F0] opacity-70 hover:opacity-100'
+                          }`}
+                        >
+                          <img src={img} alt={`Thumbnail ${idx + 1}`} className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="w-full h-44 rounded-2xl bg-slate-50 border border-[#E2E8F0] flex flex-col items-center justify-center gap-2 text-slate-400">
+                  <Bed size={32} className="text-[#2E6F40]" />
+                  <span className="text-[10px] uppercase font-bold tracking-wider">Foto belum di-upload</span>
+                </div>
+              );
+            })()}
+
+            {/* Quick Specs Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-[#F8F9FA] border border-[#E2E8F0] p-3 rounded-xl text-center">
+                <span className="text-[8px] text-[#64748B] uppercase block font-mono">Tipe Kamar</span>
+                <span className="font-extrabold text-[#3A444D] text-xs uppercase">{selectedRoomForDetail.room_type}</span>
+              </div>
+              <div className="bg-[#F8F9FA] border border-[#E2E8F0] p-3 rounded-xl text-center">
+                <span className="text-[8px] text-[#64748B] uppercase block font-mono">Ukuran Kamar</span>
+                <span className="font-extrabold text-[#3A444D] text-xs">{selectedRoomForDetail.size_sqm} m²</span>
+              </div>
+              <div className="bg-[#F8F9FA] border border-[#E2E8F0] p-3 rounded-xl text-center">
+                <span className="text-[8px] text-[#64748B] uppercase block font-mono">Lantai Unit</span>
+                <span className="font-extrabold text-[#3A444D] text-xs">Lantai {selectedRoomForDetail.floor}</span>
+              </div>
+              <div className="bg-[#F8F9FA] border border-[#E2E8F0] p-3 rounded-xl text-center">
+                <span className="text-[8px] text-[#64748B] uppercase block font-mono">Biaya Sewa</span>
+                <span className="font-extrabold text-[#2E6F40] text-xs font-mono">{formatRupiah(selectedRoomForDetail.price)}/bln</span>
+              </div>
+            </div>
+
+            {/* Room Features */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-extrabold text-[#3A444D] uppercase tracking-wider flex items-center gap-1.5">
+                <span className="w-1.5 h-3.5 bg-[#2E6F40] rounded-full"></span>
+                Daftar Fasilitas Dalam Kamar
+              </h4>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {selectedRoomForDetail.facilities && selectedRoomForDetail.facilities.length > 0 ? (
+                  selectedRoomForDetail.facilities.map((fac, i) => (
+                    <div key={i} className="flex items-center gap-2 bg-[#F8F9FA] border border-[#E2E8F0] p-2.5 rounded-lg">
+                      <CheckCircle size={12} className="text-[#2E6F40]" />
+                      <span className="font-medium text-[#475569] capitalize">{fac}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-[10px] text-slate-400 italic">Fasilitas standar lengkap.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Status Information */}
+            <div className="bg-emerald-50 border border-emerald-200/50 p-4 rounded-xl flex items-start gap-3">
+              <CheckCircle className="text-[#2E6F40] mt-0.5 shrink-0" size={16} />
+              <div className="space-y-0.5">
+                <h5 className="font-black text-slate-800 text-xs">STATUS UNIT: TERSEDIA (AVAILABLE)</h5>
+                <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Unit kamar ini dalam kondisi siap huni, bersih, dan seluruh fasilitas penunjang (listrik, air, AC, sanitary) telah diinspeksi oleh tim housekeeping super-admin kami.</p>
+              </div>
+            </div>
+
+            {/* CTAs */}
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRoomForDetail(null);
+                  const p = properties.find(prop => prop.id === selectedRoomForDetail.property_id);
+                  if (p) {
+                    setActiveProperty(p);
+                    setActiveRoom(selectedRoomForDetail);
+                    setCheckoutFlow('survey');
+                  }
+                }}
+                className="w-full bg-white border border-[#E2E8F0] hover:bg-[#F8F9FA] text-[#3A444D] py-3 rounded-xl text-xs font-extrabold uppercase transition-all tracking-wider cursor-pointer text-center"
+              >
+                Jadwalkan Survey
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRoomForDetail(null);
+                  const p = properties.find(prop => prop.id === selectedRoomForDetail.property_id);
+                  if (p) {
+                    setActiveProperty(p);
+                    setActiveRoom(selectedRoomForDetail);
+                    setCheckoutFlow('monthly');
+                  }
+                }}
+                className="w-full bg-[#2E6F40] hover:bg-[#1f4b2b] text-white py-3 rounded-xl text-xs font-extrabold uppercase transition-all tracking-wider cursor-pointer shadow-md text-center"
+              >
+                Pesan Sekarang
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
     </div>
   );

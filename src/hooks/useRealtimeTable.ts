@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { getSupabaseClient, getIsSupabaseConfigured } from '../lib/supabase';
+import { useEffect, useState, useRef } from 'react';
+import { realtimeManager, getIsSupabaseConfigured, getSupabaseClient } from '../lib/supabase';
 
 export function useRealtimeTable<T>(
   tableName: string, 
@@ -9,11 +9,17 @@ export function useRealtimeTable<T>(
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<any>(null);
+  
+  // Keep the latest fetch function in a ref to avoid stale closure issues in callbacks
+  const fetchFnRef = useRef(fetchFn);
+  useEffect(() => {
+    fetchFnRef.current = fetchFn;
+  }, [fetchFn]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const res = await fetchFn();
+      const res = await fetchFnRef.current();
       setData(res);
       setError(null);
     } catch (err) {
@@ -24,40 +30,61 @@ export function useRealtimeTable<T>(
   };
 
   useEffect(() => {
+    // Initial fetch
     loadData();
 
     const isConfigured = getIsSupabaseConfigured();
     const client = getSupabaseClient();
 
     if (isConfigured && client) {
-      console.log(`[REALTIME] Subscribing to channel for table: ${tableName}`);
-      const channel = client
-        .channel(`public:${tableName}-changes`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: tableName },
-          (payload) => {
-            console.log(`[REALTIME EVENT] Received update for ${tableName}:`, payload);
-            loadData();
+      const handleRealtimeEvent = (payload: any) => {
+        if (payload.eventType === 'POLLING_REFRESH') {
+          console.log(`[useRealtimeTable] Backup polling triggered loadData for ${tableName}`);
+          loadData();
+          return;
+        }
+
+        console.log(`[useRealtimeTable Event] Received differential update for ${tableName}:`, payload);
+        
+        setData((currentData) => {
+          const { eventType, new: newRow, old: oldRow } = payload;
+          
+          if (eventType === 'INSERT') {
+            const exists = currentData.some((item: any) => (item as any).id === newRow.id);
+            if (exists) return currentData;
+            return [...currentData, newRow];
           }
-        )
-        .subscribe((status) => {
-          console.log(`[REALTIME STATUS] Subscription status for ${tableName}:`, status);
+          
+          if (eventType === 'UPDATE') {
+            return currentData.map((item: any) => (item as any).id === newRow.id ? { ...item, ...newRow } : item);
+          }
+          
+          if (eventType === 'DELETE') {
+            const targetId = oldRow?.id || newRow?.id;
+            return currentData.filter((item: any) => (item as any).id !== targetId);
+          }
+          
+          return currentData;
         });
+      };
+
+      // Subscribe via central manager to prevent duplicate websocket channels and leak-free lifecycle
+      const unsubscribe = realtimeManager.subscribe(tableName, {}, handleRealtimeEvent);
 
       return () => {
-        client.removeChannel(channel);
+        unsubscribe();
       };
     } else {
-      console.log(`[REALTIME FALLBACK] Supabase not active. Polling every 10 seconds for table: ${tableName}`);
-      // Fallback: poll every 10 seconds in design sandbox to simulate real-time feed updates
+      // Offline fallback: if Supabase is completely unavailable, run a local timer
+      console.log(`[useRealtimeTable Fallback] Offline/unconfigured. Polling locally for table: ${tableName}`);
       const timer = setInterval(() => {
         loadData();
-      }, 10000);
+      }, 15000);
       return () => clearInterval(timer);
     }
   }, [tableName, dependencyTrigger]);
 
   return { data, loading, error, refetch: loadData };
 }
+
 export default useRealtimeTable;

@@ -119,18 +119,7 @@ export const requestSnapTokenFromServer = async (
     });
     return data;
   } catch (error: any) {
-    console.info('=================== MIDTRANS TRANSACTION DIAGNOSTICS ===================');
-    console.info('[MIDTRANS INTENTIONAL FALLBACK] Midtrans Sandbox/Production service could not initialize directly with current keys:', error.message || error);
-    console.info('[MIDTRANS ACTION ROUTE] Please configure valid VITE_MIDTRANS_CLIENT_KEY and MIDTRANS_SERVER_KEY values in your settings.');
-    console.info('[MIDTRANS GRACEFUL RESOLUTION] To ensure normal app operation, the booking flow is falling back to the interactive sandbox simulation.');
-    console.info('========================================================================');
-    
-    // Graceful mock token fallback
-    return {
-      token: `snap-token-sim-${Math.floor(100000 + Math.random() * 900000)}`,
-      redirect_url: `https://app.sandbox.midtrans.com/snap/v3/redirection/sim-${Math.floor(100000 + Math.random() * 900000)}`,
-      mode: 'simulation',
-      error: error.message
-    };
+    console.error('[MIDTRANS SDK BRIDGE ERROR] Failed to obtain Snap token:', error);
+    throw error;
   }
 };

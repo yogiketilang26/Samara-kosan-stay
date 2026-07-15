@@ -34,13 +34,13 @@ export const Modal: React.FC<ModalProps> = ({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-            className="relative bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl w-full max-w-lg p-6 shadow-2xl z-10 space-y-4 max-h-[90vh] overflow-y-auto no-scrollbar"
+            className="relative bg-white border border-slate-200 text-slate-800 rounded-3xl w-full max-w-lg p-6 shadow-2xl z-10 space-y-4 max-h-[90vh] overflow-y-auto no-scrollbar text-left"
           >
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-extrabold font-display uppercase tracking-tight text-white">{title}</h3>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-extrabold font-display uppercase tracking-tight text-slate-800">{title}</h3>
               <button 
                 onClick={onClose} 
-                className="text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition-colors"
+                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-full hover:bg-slate-50 transition-colors"
               >
                 <X size={18} />
               </button>

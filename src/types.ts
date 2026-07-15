@@ -36,6 +36,7 @@ export interface Room {
   current_tenant_name?: string | null;
   facilities: string[];
   image_url?: string;
+  images?: string[];
   discount_percent?: number | null;
   discount_until?: string | null;
   is_daily_enabled: boolean;

@@ -15,7 +15,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect }) => {
       {room.image_url && (
         <div className="h-40 -mx-4 -mt-4 mb-1 relative overflow-hidden rounded-t-2xl">
           <img 
-            src={room.image_url} 
+            src={room.image_url || null} 
             alt={`Kamar ${room.room_number}`}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"

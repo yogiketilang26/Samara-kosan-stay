@@ -104,54 +104,54 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5 font-sans text-xs text-slate-300">
+    <form onSubmit={handleSubmit} className="space-y-5 font-sans text-xs text-[#475569]">
       {checkoutFlow === 'survey' ? (
         // Survey workflow fields
-        <div className="space-y-3">
-          <div className="bg-amber-500/5 border border-amber-500/10 p-3 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-amber-400">
-            <ShieldAlert size={14} className="shrink-0 animate-pulse" />
+        <div className="space-y-3 text-left">
+          <div className="bg-amber-50 border border-amber-200/60 p-3.5 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-amber-900">
+            <ShieldAlert size={14} className="shrink-0 text-amber-600 animate-pulse" />
             <p>Sewa Komitmen Survey membutuhkan DP Rp 500.000. Jaminan ini akan hangus jika Anda tidak hadir sesuai jadwal (No-Show), namun sepenuhnya dikembalikan/dikompensasikan ke harga sewa jika lanjut sewa (Covenan Transparansi).</p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Nama Lengkap</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap</label>
               <input 
                 type="text" required
                 value={surveyForm.fullName}
                 onChange={(e) => setSurveyForm({ ...surveyForm, fullName: e.target.value })}
                 placeholder="Sesuai KTP"
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-505"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Nomor KTP (16 Digit NIK)</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nomor KTP (16 Digit NIK)</label>
               <input 
                 type="text" required maxLength={16}
                 value={surveyForm.nik}
                 onChange={(e) => setSurveyForm({ ...surveyForm, nik: e.target.value })}
                 placeholder="3174..."
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Tanggal Kunjungan</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Tanggal Kunjungan</label>
               <input 
                 type="date" required
                 value={surveyForm.date}
                 onChange={(e) => setSurveyForm({ ...surveyForm, date: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Slot Jam Kunjungan</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Slot Jam Kunjungan</label>
               <select
                 value={surveyForm.slot}
                 onChange={(e) => setSurveyForm({ ...surveyForm, slot: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-semibold cursor-pointer"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-semibold cursor-pointer outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               >
                 <option value="09:00 - 11:00">Pagi (09:00 - 11:00)</option>
                 <option value="13:00 - 15:00">Siang (13:00 - 15:00)</option>
@@ -162,39 +162,39 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Nomor Handphone (WhatsApp)</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nomor Handphone (WhatsApp)</label>
               <input 
                 type="tel" required
                 value={surveyForm.phone}
                 onChange={(e) => setSurveyForm({ ...surveyForm, phone: e.target.value })}
                 placeholder="0812..."
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Email Utama</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Email Utama</label>
               <input 
                 type="email" required
                 value={surveyForm.email}
                 onChange={(e) => setSurveyForm({ ...surveyForm, email: e.target.value })}
                 placeholder="yogi@gmail.com"
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               />
             </div>
           </div>
         </div>
       ) : (
         // Regular direct booking direct fields
-        <div className="space-y-3">
+        <div className="space-y-3 text-left">
           {/* Quick toggle mode buttons for Pemesan */}
-          <div className="flex gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+          <div className="flex gap-2 p-1 bg-slate-50 rounded-xl border border-[#E2E8F0]">
             <button
               type="button"
               onClick={() => setBookingForm({ ...bookingForm, isForOther: false })}
               className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer text-center ${
                 !bookingForm.isForOther
-                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/10 font-black'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  ? 'bg-[#2E6F40] text-white shadow-xs font-black'
+                  : 'text-[#64748B] hover:text-[#1E293B] hover:bg-slate-100'
               }`}
             >
               👤 Booking Sendiri
@@ -204,8 +204,8 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               onClick={() => setBookingForm({ ...bookingForm, isForOther: true })}
               className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer text-center ${
                 bookingForm.isForOther
-                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/10 font-black'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  ? 'bg-[#2E6F40] text-white shadow-xs font-black'
+                  : 'text-[#64748B] hover:text-[#1E293B] hover:bg-slate-100'
               }`}
             >
               👥 Booking Orang Lain (Ketiga)
@@ -214,114 +214,114 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Nama Tenant Utama</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Tenant Utama</label>
               <input 
                 type="text" required
                 value={bookingForm.fullName}
                 onChange={(e) => setBookingForm({ ...bookingForm, fullName: e.target.value })}
                 placeholder="Nama sesuai identitas"
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 focus:border-amber-500 outline-none capitalize"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 outline-none capitalize transition-all"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">No. WhatsApp Aktif</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">No. WhatsApp Aktif</label>
               <input 
                 type="tel" required
                 value={bookingForm.phone}
                 onChange={(e) => setBookingForm({ ...bookingForm, phone: e.target.value })}
                 placeholder="0812..."
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               />
             </div>
           </div>
 
           <div className={bookingForm.isForOther ? "grid grid-cols-1" : "grid grid-cols-2 gap-3"}>
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Email</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Email</label>
               <input 
                 type="email" required
                 value={bookingForm.email}
                 onChange={(e) => setBookingForm({ ...bookingForm, email: e.target.value })}
                 placeholder="alamat@email.com"
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 focus:border-amber-500 outline-none"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 outline-none transition-all"
               />
             </div>
             {!bookingForm.isForOther && (
               <div className="space-y-1">
-                <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">NIK KTP (16 digit)</label>
+                <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">NIK KTP (16 digit)</label>
                 <input 
                   type="text" required={!bookingForm.isForOther} maxLength={16}
                   value={bookingForm.nik}
                   onChange={(e) => setBookingForm({ ...bookingForm, nik: e.target.value })}
                   placeholder="NIK KTP"
-                  className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono focus:border-amber-500 outline-none"
+                  className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 outline-none transition-all"
                 />
               </div>
             )}
           </div>
 
           {/* Booking untuk orang lain toggle & form */}
-          <div className="bg-slate-900/40 p-3.5 rounded-2xl border border-slate-800/80 space-y-3">
+          <div className="bg-slate-50 p-4 rounded-2xl border border-[#E2E8F0] space-y-3">
             <label className="flex items-center gap-2.5 cursor-pointer select-none">
               <input 
                 type="checkbox"
                 checked={!!bookingForm.isForOther}
                 onChange={(e) => setBookingForm({ ...bookingForm, isForOther: e.target.checked })}
-                className="w-4 h-4 rounded border-slate-800 bg-slate-950 text-amber-500 focus:ring-0 cursor-pointer"
+                className="w-4 h-4 rounded border-[#E2E8F0] bg-white text-[#2E6F40] focus:ring-0 cursor-pointer"
               />
-              <span className="font-bold text-[11px] text-amber-500 hover:text-amber-400 transition-colors">
+              <span className="font-bold text-[11px] text-[#2E6F40] hover:text-[#1e4b2b] transition-colors">
                 Saya memesan / booking Kamar ini untuk Orang Lain (Tamu/Penghuni Baru)
               </span>
             </label>
 
             {bookingForm.isForOther && (
-              <div className="pt-2.5 border-t border-slate-800/60 space-y-3">
-                <div className="bg-amber-500/10 text-amber-400 p-2.5 rounded-xl text-[10px] leading-relaxed border border-amber-500/10">
+              <div className="pt-2.5 border-t border-[#E2E8F0] space-y-3">
+                <div className="bg-amber-50 text-amber-800 p-2.5 rounded-xl text-[10px] leading-relaxed border border-amber-200/50">
                   <strong>Catatan Pemesanan Pihak Ketiga:</strong> Masukkan data lengkap orang yang akan menempati kamar (Si B). Kamar akan otomatis terbooking lunas aman di sistem setelah pembayaran selesai. Admin akan memverifikasi NIK KTP mereka saat kedatangan/check-in.
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Nama Lengkap Penghuni</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap Penghuni</label>
                     <input 
                       type="text" required={bookingForm.isForOther}
                       value={bookingForm.occupantName || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantName: e.target.value })}
                       placeholder="Nama lengkap penghuni"
-                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 focus:border-amber-500 outline-none capitalize"
+                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 outline-none capitalize transition-all"
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">No. WhatsApp Penghuni</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">No. WhatsApp Penghuni</label>
                     <input 
                       type="tel" required={bookingForm.isForOther}
                       value={bookingForm.occupantPhone || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantPhone: e.target.value })}
                       placeholder="Contoh: 0812..."
-                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono outline-none focus:border-amber-500"
+                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Email Penghuni</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Email Penghuni</label>
                     <input 
                       type="email" required={bookingForm.isForOther}
                       value={bookingForm.occupantEmail || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantEmail: e.target.value })}
                       placeholder="email.penghuni@gmail.com"
-                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 outline-none focus:border-amber-500"
+                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">NIK KTP Penghuni (16 digit)</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">NIK KTP Penghuni (16 digit)</label>
                     <input 
                       type="text" required={bookingForm.isForOther} maxLength={16}
                       value={bookingForm.occupantNik || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantNik: e.target.value })}
                       placeholder="NIK KTP Penghuni"
-                      className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono outline-none focus:border-amber-500"
+                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                     />
                   </div>
                 </div>
@@ -331,22 +331,22 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Rencana Check-In</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Rencana Check-In</label>
               <input 
                 type="date" required
                 value={bookingCheckInDate}
                 onChange={(e) => setBookingCheckInDate(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono"
+                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
               />
             </div>
 
             {checkoutFlow === 'monthly' ? (
               <div className="space-y-1">
-                <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Durasi Sewa (Bulan)</label>
+                <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Durasi Sewa (Bulan)</label>
                 <select
                   value={bookingPeriodMonths}
                   onChange={(e) => setBookingPeriodMonths(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-bold cursor-pointer"
+                  className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-bold cursor-pointer outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                 >
                   {[1, 3, 6, 12].map(m => (
                     <option key={m} value={m}>{m} Bulan</option>
@@ -355,21 +355,21 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               </div>
             ) : (
               <div className="space-y-1">
-                <label className="text-[9px] uppercase font-bold text-slate-400 font-mono">Durasi Sewa (Hari)</label>
+                <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Durasi Sewa (Hari)</label>
                 <input 
                   type="number" min={1} max={30}
                   value={bookingPeriodDays}
                   onChange={(e) => setBookingPeriodDays(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-205 font-mono font-bold"
+                  className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono font-bold outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                 />
               </div>
             )}
           </div>
 
           {/* Promotional Coupon Validation code */}
-          <div className="space-y-1 bg-slate-955 p-3 rounded-2xl border border-slate-850/80">
-            <label className="text-[9px] uppercase font-bold text-slate-400 font-mono flex items-center gap-1.5">
-              <Tag size={12} className="text-amber-500 animate-pulse" />
+          <div className="space-y-1 bg-slate-50 p-3 rounded-2xl border border-[#E2E8F0]">
+            <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1.5">
+              <Tag size={12} className="text-[#2E6F40] animate-pulse" />
               Gunakan Kode Promo Diskon
             </label>
             <div className="flex gap-2 mt-1">
@@ -378,19 +378,19 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                 placeholder="CONTOH: COVENAN20"
                 value={couponInput}
                 onChange={(e) => setCouponInput(e.target.value)}
-                className="flex-1 bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none uppercase font-mono font-bold text-[10px]"
+                className="flex-1 bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] outline-none uppercase font-mono font-bold text-[10px] focus:border-[#2E6F40]"
               />
               <button
                 type="button"
                 onClick={onApplyCoupon}
-                className="bg-slate-800 hover:bg-slate-700 hover:text-white px-3 py-1.5 rounded-xl border border-slate-750 text-slate-300 font-bold transition-all text-[10px] cursor-pointer"
+                className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl border border-slate-200 text-[#3A444D] font-bold transition-all text-[10px] cursor-pointer"
               >
                 Gunakan
               </button>
             </div>
             {couponError && <p className="text-[9px] text-red-500 font-mono mt-1">{couponError}</p>}
             {appliedCoupon && (
-              <p className="text-[9px] text-emerald-400 font-mono mt-1 font-bold">
+              <p className="text-[9px] text-emerald-600 font-mono mt-1 font-bold">
                 PROMO AKTIF: Potongan {appliedCoupon.discount_type === 'percentage' ? `${appliedCoupon.discount_value}%` : formatRupiah(appliedCoupon.discount_value)} Berhasil Terpasang!
               </p>
             )}
@@ -399,45 +399,45 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       )}
 
       {/* Structured Price breakdowns summary */}
-      <div className="bg-slate-950/60 p-4 rounded-3xl border border-slate-850 space-y-2 font-sans font-medium text-xs">
-        <h4 className="text-[10px] uppercase font-bold text-slate-400 font-mono border-b border-slate-850 pb-1">Detail Rincian Biaya</h4>
+      <div className="bg-slate-50 p-4 rounded-3xl border border-[#E2E8F0] space-y-2.5 font-sans font-medium text-xs text-left">
+        <h4 className="text-[10px] uppercase font-bold text-[#64748B] font-mono border-b border-[#E2E8F0] pb-1">Detail Rincian Biaya</h4>
         
         {checkoutFlow === 'survey' ? (
-          <div className="flex justify-between items-center text-slate-300">
+          <div className="flex justify-between items-center text-[#475569]">
             <span>Commitment Payment DP Survey</span>
-            <span className="font-mono font-bold text-amber-500">Rp 500.000</span>
+            <span className="font-mono font-bold text-[#2E6F40]">Rp 500.000</span>
           </div>
         ) : (
           <div className="space-y-2 pt-1 text-[11px]">
-            <div className="flex justify-between items-center text-slate-400">
+            <div className="flex justify-between items-center text-[#64748B]">
               <span>Sewa Kamar {room.room_number} ({checkoutFlow === 'monthly' ? `${bookingPeriodMonths} bulan` : `${bookingPeriodDays} hari`})</span>
-              <span className="font-mono text-slate-300">{formatRupiah(calcs.rent)}</span>
+              <span className="font-mono text-[#3A444D]">{formatRupiah(calcs.rent)}</span>
             </div>
 
             {calcs.discount > 0 && (
-              <div className="flex justify-between items-center text-[#10b981]/80">
+              <div className="flex justify-between items-center text-emerald-600 font-bold">
                 <span>Diskon Promo Kupon</span>
-                <span className="font-mono font-bold">-{formatRupiah(calcs.discount)}</span>
+                <span className="font-mono">-{formatRupiah(calcs.discount)}</span>
               </div>
             )}
 
-            <div className="flex justify-between items-center text-slate-400">
+            <div className="flex justify-between items-center text-[#64748B]">
               <span>Pajak Daerah PBJT (10%)</span>
-              <span className="font-mono text-slate-300">{formatRupiah(calcs.tax)}</span>
+              <span className="font-mono text-[#3A444D]">{formatRupiah(calcs.tax)}</span>
             </div>
 
             {calcs.deposit > 0 && (
-              <div className="flex justify-between items-center text-slate-400">
+              <div className="flex justify-between items-center text-[#64748B]">
                 <span>Deposit Jaminan Kerusakan (Refundable)</span>
-                <span className="font-mono text-slate-300">{formatRupiah(calcs.deposit)}</span>
+                <span className="font-mono text-[#3A444D]">{formatRupiah(calcs.deposit)}</span>
               </div>
             )}
           </div>
         )}
 
-        <div className="border-t border-slate-850 pt-2 flex justify-between items-center text-xs">
-          <span className="font-bold text-slate-200">TOTAL PEMBAYARAN LUNAS</span>
-          <span className="text-amber-500 font-black font-mono text-sm leading-none animate-pulse">
+        <div className="border-t border-[#E2E8F0] pt-2 flex justify-between items-center text-xs">
+          <span className="font-bold text-[#1E293B]">TOTAL PEMBAYARAN LUNAS</span>
+          <span className="text-[#2E6F40] font-black font-mono text-sm leading-none">
             {formatRupiah(calcs.total)}
           </span>
         </div>
@@ -445,7 +445,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
       <button
         type="submit"
-        className="w-full py-2.5 bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-black uppercase text-[11px] rounded-2xl shadow-xl transition-all tracking-wider cursor-pointer"
+        className="w-full py-3 bg-[#2E6F40] hover:bg-[#1f4b2b] text-white font-black uppercase text-[11px] rounded-2xl shadow-sm transition-all tracking-wider cursor-pointer text-center"
       >
         Bayar Online Sekarang via Midtrans SNAP
       </button>

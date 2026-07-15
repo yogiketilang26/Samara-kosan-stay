@@ -48,13 +48,24 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         const settings = await database.fetchSettings();
         if (settings && settings.standard_facilities) {
           const parsed = JSON.parse(settings.standard_facilities);
-          if (Array.isArray(parsed)) {
+          if (Array.isArray(parsed) && parsed.length > 0) {
             setMasterFacilities(parsed);
+            return;
           }
         }
       } catch (err) {
         console.error('Error loading master facilities in PropertyForm:', err);
       }
+      setMasterFacilities([
+        { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
+        { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
+        { icon: "Shield", title: "Security", subtitle: "24 Jam" },
+        { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
+        { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
+        { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
+        { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
+        { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
+      ]);
     }
     loadMasterFacilities();
   }, []);
@@ -293,7 +304,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         {formData.image_url ? (
           <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
             <img 
-              src={formData.image_url} 
+              src={formData.image_url || null} 
               alt="Pratinjau Sampul" 
               className="w-full h-40 object-cover rounded-xl"
             />
@@ -369,7 +380,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           {formData.images.map((img, idx) => (
             <div key={idx} className="relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950 aspect-video group">
               <img 
-                src={img} 
+                src={img || null} 
                 alt={`Galeri ${idx + 1}`} 
                 className="w-full h-full object-cover"
               />
