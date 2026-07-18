@@ -5,21 +5,15 @@ import ProtectedRoute from './ProtectedRoute';
 
 interface MainRouterProps {
   currentView: 'user' | 'admin';
-  refreshTrigger: number;
-  triggerAppRefresh: () => void;
 }
 
-export const MainRouter: React.FC<MainRouterProps> = ({
-  currentView,
-  refreshTrigger,
-  triggerAppRefresh
-}) => {
+export const MainRouter: React.FC<MainRouterProps> = ({ currentView }) => {
   if (currentView === 'admin') {
     return (
       <ProtectedRoute>
         <Admin 
-          refreshTrigger={refreshTrigger} 
-          triggerAppRefresh={triggerAppRefresh} 
+           
+           
         />
       </ProtectedRoute>
     );
@@ -27,8 +21,8 @@ export const MainRouter: React.FC<MainRouterProps> = ({
 
   return (
     <Home 
-      refreshTrigger={refreshTrigger} 
-      triggerAppRefresh={triggerAppRefresh} 
+       
+       
     />
   );
 };

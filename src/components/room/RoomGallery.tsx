@@ -36,7 +36,7 @@ export default function RoomGallery({ rooms, properties }: RoomGalleryProps) {
   // 1. Fetch images from Supabase Storage on load
   useEffect(() => {
     async function fetchStorageImages() {
-      if (!isSupabaseConfigured || !supabase) return;
+      if (!isSupabaseConfigured) return;
       setLoadingStorage(true);
       try {
         console.log('[ROOM GALLERY] Fetching images from Supabase Storage...');

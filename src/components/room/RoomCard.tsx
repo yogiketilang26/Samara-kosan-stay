@@ -50,9 +50,9 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect }) => {
       </div>
 
       <div className="flex flex-wrap gap-1">
-        {room.facilities.slice(0, 3).map((f, idx) => (
-          <span key={idx} className="bg-slate-850 text-slate-350 text-[9px] px-1.5 py-0.5 rounded border border-slate-750">
-            {f}
+        {(room.facilities || []).slice(0, 3).map((f: any, idx) => (
+          <span key={f.id || idx} className="bg-slate-850 text-slate-350 text-[9px] px-1.5 py-0.5 rounded border border-slate-750">
+            {f.name}
           </span>
         ))}
       </div>

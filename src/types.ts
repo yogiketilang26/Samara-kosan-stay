@@ -3,6 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export interface Facility {
+  id: number;
+  name: string;
+  icon: string;
+  category: string;
+  description?: string;
+  created_at?: string;
+}
+
 export interface Property {
   id: number;
   name: string;
@@ -11,7 +20,7 @@ export interface Property {
   type: 'putra' | 'putri' | 'campur';
   total_rooms: number;
   available_rooms: number;
-  facilities: string[];
+  facilities: Facility[];
   image_url: string;
   images: string[];
   lat?: number;
@@ -34,7 +43,7 @@ export interface Room {
   floor: number;
   status: 'available' | 'occupied' | 'maintenance' | 'reserved';
   current_tenant_name?: string | null;
-  facilities: string[];
+  facilities: Facility[];
   image_url?: string;
   images?: string[];
   discount_percent?: number | null;
@@ -270,3 +279,72 @@ export interface Coupon {
   description?: string;
   created_at?: string;
 }
+
+export interface PettyCashRequest {
+  id: number;
+  applicant: string;
+  amount: number;
+  purpose: string;
+  status: 'pending' | 'approved' | 'rejected';
+  date: string;
+  created_at?: string;
+}
+
+export interface FixedAsset {
+  id: number;
+  name: string;
+  cost: number;
+  lifeYears: number;
+  residual: number;
+  deprRate: number;
+  accumDepr: number;
+  created_at?: string;
+}
+
+export interface Budget {
+  id: number;
+  category: string;
+  limit: number;
+  spent: number;
+  created_at?: string;
+}
+
+export interface Vendor {
+  id: number;
+  name: string;
+  phone: string;
+  category: string;
+  created_at?: string;
+}
+
+export interface PurchaseOrder {
+  id: number;
+  vendor: string;
+  items: string;
+  amount: number;
+  status: 'pending' | 'approved' | 'completed' | 'pending_approval';
+  date: string;
+  created_at?: string;
+}
+
+export interface InventoryItem {
+  id: number;
+  name: string;
+  stock: number;
+  unit: string;
+  minStock: number;
+  category: string;
+  created_at?: string;
+}
+
+export interface BankStatementItem {
+  id: number;
+  date: string;
+  desc: string;
+  amount: number;
+  type: 'credit' | 'debit';
+  matched: boolean;
+  matchedRef: string;
+  created_at?: string;
+}
+

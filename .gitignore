@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+test_*.cjs
+query_*.cjs
+*.local.cjs

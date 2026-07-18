@@ -14,10 +14,10 @@ import { NotificationProvider } from './context/NotificationContext';
 
 export default function App() {
   const [viewState, setViewState] = useState<'user' | 'admin'>('user');
-  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+  
 
   const handleRefreshData = useCallback(() => {
-    setRefreshTrigger(prev => prev + 1);
+    window.location.reload();
   }, []);
 
   return (
@@ -38,8 +38,6 @@ export default function App() {
               <div className="flex-1">
                 <MainRouter 
                   currentView={viewState}
-                  refreshTrigger={refreshTrigger}
-                  triggerAppRefresh={handleRefreshData}
                 />
               </div>
 

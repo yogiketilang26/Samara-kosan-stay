@@ -1,5 +1,9 @@
 import React from 'react';
-import { Search, MapPin, Calendar, Compass, SlidersHorizontal, Info } from 'lucide-react';
+import { 
+  Search, MapPin, Calendar, Compass, SlidersHorizontal, Info,
+  Clock, LogIn, Shield, Wifi, Droplet, Car, Shirt, Sparkles, Utensils, Tv, Grid
+} from 'lucide-react';
+import { StandardFacility } from '../../types';
 
 interface PremiumSearchFilterProps {
   searchLocation: string;
@@ -10,9 +14,28 @@ interface PremiumSearchFilterProps {
   setSearchDurationType: (val: 'monthly' | 'daily') => void;
   searchMode: 'building' | 'room';
   setSearchMode: (val: 'building' | 'room') => void;
+  selectedFacilities: string[];
+  setSelectedFacilities: (facilities: string[]) => void;
+  masterFacilities: StandardFacility[];
   onClearFilters?: () => void;
   resultsCount: number;
 }
+
+const renderFacilityIcon = (iconName: string) => {
+  switch (iconName) {
+    case 'Clock': return <Clock size={14} />;
+    case 'LogIn': return <LogIn size={14} />;
+    case 'Shield': return <Shield size={14} />;
+    case 'Wifi': return <Wifi size={14} />;
+    case 'Droplet': return <Droplet size={14} />;
+    case 'Car': return <Car size={14} />;
+    case 'Shirt': return <Shirt size={14} />;
+    case 'Sparkles': return <Sparkles size={14} />;
+    case 'Utensils': return <Utensils size={14} />;
+    case 'Tv': return <Tv size={14} />;
+    default: return <Info size={14} />;
+  }
+};
 
 export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
   searchLocation,
@@ -23,6 +46,9 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
   setSearchDurationType,
   searchMode,
   setSearchMode,
+  selectedFacilities,
+  setSelectedFacilities,
+  masterFacilities,
   onClearFilters,
   resultsCount
 }) => {
@@ -146,6 +172,66 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
         </div>
       </div>
 
+      {/* Advanced Facilities Filter */}
+      <div className="border-t border-[#F1F5F9] pt-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans flex items-center gap-1.5">
+            <SlidersHorizontal size={14} className="text-[#2E6F40]" />
+            Saring Berdasarkan Fasilitas Master
+          </label>
+          {selectedFacilities.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedFacilities([])}
+              className="text-[11px] text-[#2E6F40] font-bold hover:underline cursor-pointer"
+            >
+              Bersihkan Fasilitas ({selectedFacilities.length})
+            </button>
+          )}
+        </div>
+        
+        <div className="flex flex-wrap gap-2">
+          {masterFacilities.map((facility) => {
+            const isSelected = selectedFacilities.some(
+              (f) => f.toLowerCase() === facility.title.trim().toLowerCase()
+            );
+            return (
+              <button
+                key={facility.title}
+                type="button"
+                onClick={() => {
+                  if (isSelected) {
+                    setSelectedFacilities(
+                      selectedFacilities.filter(
+                        (f) => f.toLowerCase() !== facility.title.trim().toLowerCase()
+                      )
+                    );
+                  } else {
+                    setSelectedFacilities([
+                      ...selectedFacilities,
+                      facility.title.trim().toLowerCase(),
+                    ]);
+                  }
+                }}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-semibold tracking-tight transition-all duration-300 border cursor-pointer ${
+                  isSelected
+                    ? 'bg-[#2E6F40] border-[#2E6F40] text-white shadow-sm shadow-[#2E6F40]/10'
+                    : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#64748B] hover:border-[#2E6F40] hover:text-[#2E6F40] hover:bg-white'
+                }`}
+              >
+                {renderFacilityIcon(facility.icon)}
+                <span>{facility.title}</span>
+                {facility.subtitle && (
+                  <span className={`text-[9px] font-medium opacity-80 ${isSelected ? 'text-green-100' : 'text-slate-400'}`}>
+                    ({facility.subtitle})
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Footer Info / Filter Reset Actions */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-4 border-t border-[#F1F5F9] gap-3">
         <div className="flex items-center gap-2 text-xs text-[#64748B]">
@@ -153,7 +239,7 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
           <span>Fasilitas All-Inclusive termasuk Wi-Fi, laundry, token listrik, & AC.</span>
         </div>
 
-        {onClearFilters && (searchLocation || selectedType !== 'all' || searchDurationType !== 'monthly') && (
+        {onClearFilters && (searchLocation || selectedType !== 'all' || searchDurationType !== 'monthly' || selectedFacilities.length > 0) && (
           <button
             type="button"
             onClick={onClearFilters}

@@ -7,7 +7,8 @@ import { createClient } from '@supabase/supabase-js';
 import { 
   Property, Room, Tenant, Booking, PaymentInvoice, Maintenance, 
   UserSystem, ActivityLog, Survey, AccountCOA, FinancialTransaction, 
-  JournalEntry, SystemSettings, Coupon 
+  JournalEntry, SystemSettings, Coupon, PettyCashRequest, FixedAsset,
+  Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, Facility
 } from '../types';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
@@ -16,10 +17,11 @@ let activeSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
 
 export let isSupabaseConfigured = Boolean(activeSupabaseUrl && activeSupabaseAnonKey && activeSupabaseUrl !== 'undefined' && activeSupabaseAnonKey !== 'undefined');
 
-// Real Supabase Client Instance (wrapped with null-safe triggers to prevent app loading crash if keys are raw placeholder text)
-export let supabase = isSupabaseConfigured 
-  ? createClient(activeSupabaseUrl, activeSupabaseAnonKey) 
-  : null;
+// Standardize Auth Client: Always initialize one client instance using safe placeholders to prevent GoTrue/client creation crashes
+export let supabase = createClient(
+  activeSupabaseUrl || 'https://placeholder-project.supabase.co',
+  activeSupabaseAnonKey || 'placeholder-anon-key'
+);
 
 // Realtime listeners state to avoid duplicate subscriptions
 export type RealtimeCallback = (payload: any) => void;
@@ -30,8 +32,6 @@ class SupabaseRealtimeManager {
   private globalChannel: any = null;
   private listeners: Map<string, Set<RealtimeCallback>> = new Map();
   private connectionStatus: 'CONNECTED' | 'DISCONNECTED' = 'DISCONNECTED';
-  private globalPollingInterval: any = null;
-  private fallbackCallbacks: Set<() => void> = new Set();
   private retryTimeout: any = null;
   private retryCount = 0;
 
@@ -43,9 +43,6 @@ class SupabaseRealtimeManager {
     if (this.isConfigured && this.client) {
       this.connectionStatus = 'DISCONNECTED'; // Wait for SUBSCRIBED to mark CONNECTED
       this.establishGlobalChannel();
-    } else {
-      this.connectionStatus = 'DISCONNECTED';
-      this.startGlobalPolling();
     }
   }
 
@@ -75,9 +72,6 @@ class SupabaseRealtimeManager {
         .on('postgres_changes', { event: '*', schema: 'public' }, (payload: any) => {
           console.log('[REALTIME MANAGER] Realtime change event received:', payload);
           
-          // Trigger the global state update (notifies any state-change listeners)
-          this.triggerStateChanged();
-
           // Route to specific table listeners
           if (payload && payload.table) {
             const tableListeners = this.listeners.get(payload.table);
@@ -121,63 +115,17 @@ class SupabaseRealtimeManager {
 
   private handleRealtimeConnected() {
     if (this.connectionStatus === 'CONNECTED') return;
-    console.log('[REALTIME MANAGER] Realtime connection fully established. Stopping fallback polling.');
+    console.log('[REALTIME MANAGER] Realtime connection fully established.');
     this.connectionStatus = 'CONNECTED';
-    this.stopGlobalPolling();
   }
 
   private handleRealtimeDisconnected() {
     if (this.connectionStatus === 'DISCONNECTED') return;
-    console.warn('[REALTIME MANAGER] Realtime connection lost. Activating fallback polling.');
+    console.warn('[REALTIME MANAGER] Realtime connection lost.');
     this.connectionStatus = 'DISCONNECTED';
-    this.startGlobalPolling();
-  }
-
-  private triggerStateChanged() {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('samara_state_changed'));
-    }
-    this.fallbackCallbacks.forEach((cb) => {
-      try { cb(); } catch (e) { console.error(e); }
-    });
-  }
-
-  private startGlobalPolling() {
-    if (this.globalPollingInterval) return;
-    if (typeof window !== 'undefined') {
-      console.log('[REALTIME MANAGER] Starting global fallback polling (15s interval).');
-      this.globalPollingInterval = setInterval(() => {
-        console.log('[SUPABASE REALTIME FALLBACK] Polling refresh triggered.');
-        this.triggerStateChanged();
-        
-        // Also trigger table-specific listeners for components that rely on them
-        this.listeners.forEach((tableListeners, tableName) => {
-          tableListeners.forEach((cb) => {
-            try { cb({ eventType: 'POLLING_REFRESH', table: tableName }); } catch (e) { console.error(e); }
-          });
-        });
-      }, 15000);
-    }
-  }
-
-  private stopGlobalPolling() {
-    if (this.globalPollingInterval) {
-      console.log('[REALTIME MANAGER] Stopping global fallback polling.');
-      clearInterval(this.globalPollingInterval);
-      this.globalPollingInterval = null;
-    }
-  }
-
-  public registerFallbackCallback(cb: () => void) {
-    this.fallbackCallbacks.add(cb);
-    return () => {
-      this.fallbackCallbacks.delete(cb);
-    };
   }
 
   public cleanupAll() {
-    this.stopGlobalPolling();
-    
     if (this.retryTimeout) {
       clearTimeout(this.retryTimeout);
       this.retryTimeout = null;
@@ -206,15 +154,6 @@ class SupabaseRealtimeManager {
     tableListeners.add(callback);
 
     console.log(`[REALTIME MANAGER] Centralized subscription registered for table: ${tableName}. Total listeners: ${tableListeners.size}`);
-
-    // If we are currently disconnected/offline, trigger an initial callback with POLLING_REFRESH to ensure sync
-    if (this.connectionStatus === 'DISCONNECTED') {
-      setTimeout(() => {
-        try {
-          callback({ eventType: 'POLLING_REFRESH', table: tableName });
-        } catch (e) {}
-      }, 50);
-    }
 
     return () => {
       const currentListeners = this.listeners.get(tableName);
@@ -341,7 +280,7 @@ const tableSchemas: Record<string, string[]> = {
 };
 
 export async function safeSupabaseUpsert(table: string, payload: any, id?: any) {
-  if (!isSupabaseConfigured || !supabase) return { error: new Error('Supabase not configured') };
+  if (!isSupabaseConfigured) return { error: new Error('Supabase not configured') };
   let activePayload = { ...payload };
 
   // Database Constraint Shield: Ensure room_type matches the CHECK constraint in remote DB ('Standard', 'Deluxe', 'Premium')
@@ -404,41 +343,139 @@ function logSupabaseError(context: string, error: any, isException = false) {
 export const database = {
   // --- PROPERTIES ---
   async fetchProperties(options?: { limit?: number; offset?: number }): Promise<Property[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
         .from('properties')
-        .select('*')
+        .select(`
+          *,
+          property_facilities (
+            facility_id,
+            facilities (
+              id,
+              name,
+              icon,
+              category,
+              description
+            )
+          )
+        `)
         .order('id', { ascending: true })
         .range(offset, offset + limit - 1);
       if (error) {
         logSupabaseError('fetchProperties', error);
         return [];
       }
-      return data as Property[];
+      
+      const mapped = (data || []).map((p: any) => {
+        const resolvedFacilities = (p.property_facilities || [])
+          .map((pf: any) => pf.facilities)
+          .filter((f: any) => f !== null)
+          .map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            icon: f.icon,
+            category: f.category,
+            description: f.description
+          }));
+        
+        const cleanProperty = { ...p, facilities: resolvedFacilities };
+        delete cleanProperty.property_facilities;
+        return cleanProperty;
+      });
+      return mapped as Property[];
     } catch (err) {
       logSupabaseError('fetchProperties', err, true);
       return [];
     }
   },
 
-  async saveProperty(prop: Partial<Property>): Promise<Property> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+  async saveProperty(prop: Partial<Property> & { facilities?: Facility[] | number[] | any[] }): Promise<Property> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = prop.id;
       const payload = { ...prop };
+      
+      // Extract facilities from payload so they are not written to properties table
+      const facilitiesToSync = payload.facilities;
+      delete (payload as any).facilities;
       delete (payload as any).id;
 
+      // Save/Update the main property record
       const { data, error } = await safeSupabaseUpsert('properties', payload, id);
       if (error) {
         logSupabaseError('saveProperty', error);
         throw new Error(`Gagal menyimpan properti: ${error.message}`);
       }
       const updated = (data && data.length > 0 ? data[0] : prop) as Property;
+      const propertyId = updated.id;
+
+      // Synchronize join table
+      if (facilitiesToSync !== undefined) {
+        const targetFacilityIds: number[] = [];
+        for (const item of facilitiesToSync) {
+          if (typeof item === 'number') {
+            targetFacilityIds.push(item);
+          } else if (item && typeof item === 'object') {
+            const fid = item.id || item.facility_id;
+            if (fid) targetFacilityIds.push(Number(fid));
+          }
+        }
+
+        if (id) {
+          // UPDATE MODE: Compare old facility IDs vs new facility IDs
+          const { data: currentAssociations, error: assocErr } = await supabase
+            .from('property_facilities')
+            .select('facility_id')
+            .eq('property_id', propertyId);
+          
+          if (assocErr) {
+            console.error('Error fetching current property facilities associations:', assocErr);
+          } else {
+            const currentFacilityIds = (currentAssociations || []).map(a => Number(a.facility_id));
+            const toDelete = currentFacilityIds.filter(fid => !targetFacilityIds.includes(fid));
+            const toInsert = targetFacilityIds.filter(fid => !currentFacilityIds.includes(fid));
+
+            if (toDelete.length > 0) {
+              await supabase
+                .from('property_facilities')
+                .delete()
+                .eq('property_id', propertyId)
+                .in('facility_id', toDelete);
+            }
+
+            if (toInsert.length > 0) {
+              const insertRows = toInsert.map(fid => ({
+                property_id: propertyId,
+                facility_id: fid
+              }));
+              await supabase
+                .from('property_facilities')
+                .insert(insertRows);
+            }
+          }
+        } else {
+          // CREATE MODE: Insert associations directly
+          if (targetFacilityIds.length > 0) {
+            const insertRows = targetFacilityIds.map(fid => ({
+              property_id: propertyId,
+              facility_id: fid
+            }));
+            await supabase
+              .from('property_facilities')
+              .insert(insertRows);
+          }
+        }
+      }
+
       await this.logActivity("System", prop.id ? "UPDATE_PROPERTY" : "CREATE_PROPERTY", `Properti ${updated.name} berhasil disimpan.`);
-      return updated;
+      
+      // Return fully populated property
+      const refreshedProps = await this.fetchProperties();
+      const refreshedProp = refreshedProps.find(p => p.id === propertyId);
+      return refreshedProp || updated;
     } catch (err: any) {
       console.error('saveProperty failed:', err);
       throw err;
@@ -446,7 +483,7 @@ export const database = {
   },
 
   async deleteProperty(id: number): Promise<boolean> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const { error } = await supabase.from('properties').delete().eq('id', id);
       if (error) {
@@ -463,42 +500,139 @@ export const database = {
 
   // --- ROOMS ---
   async fetchRooms(options?: { limit?: number; offset?: number }): Promise<Room[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
         .from('rooms')
-        .select('*')
+        .select(`
+          *,
+          room_facilities (
+            facility_id,
+            facilities (
+              id,
+              name,
+              icon,
+              category,
+              description
+            )
+          )
+        `)
         .order('room_number', { ascending: true })
         .range(offset, offset + limit - 1);
       if (error) {
         logSupabaseError('fetchRooms', error);
         return [];
       }
-      return data as Room[];
+      
+      const mapped = (data || []).map((r: any) => {
+        const resolvedFacilities = (r.room_facilities || [])
+          .map((rf: any) => rf.facilities)
+          .filter((f: any) => f !== null)
+          .map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            icon: f.icon,
+            category: f.category,
+            description: f.description
+          }));
+        const cleanRoom = { ...r, facilities: resolvedFacilities };
+        delete cleanRoom.room_facilities;
+        return cleanRoom;
+      });
+      return mapped as Room[];
     } catch (err) {
       logSupabaseError('fetchRooms', err, true);
       return [];
     }
   },
 
-  async saveRoom(room: Partial<Room>): Promise<Room> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+  async saveRoom(room: Partial<Room> & { facilities?: Facility[] | number[] | any[] }): Promise<Room> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = room.id;
       const payload = { ...room };
+      
+      // Extract facilities
+      const facilitiesToSync = payload.facilities;
+      delete (payload as any).facilities;
       delete (payload as any).id;
 
+      // Save/Update main room record
       const { data, error } = await safeSupabaseUpsert('rooms', payload, id);
       if (error) {
         logSupabaseError('saveRoom', error);
         throw new Error(`Gagal menyimpan kamar: ${error.message}`);
       }
       const updated = (data && data.length > 0 ? data[0] : room) as Room;
+      const roomId = updated.id;
+
+      // Sync join table
+      if (facilitiesToSync !== undefined) {
+        const targetFacilityIds: number[] = [];
+        for (const item of facilitiesToSync) {
+          if (typeof item === 'number') {
+            targetFacilityIds.push(item);
+          } else if (item && typeof item === 'object') {
+            const fid = item.id || item.facility_id;
+            if (fid) targetFacilityIds.push(Number(fid));
+          }
+        }
+
+        if (id) {
+          // UPDATE MODE: Compare old facility IDs vs new facility IDs
+          const { data: currentAssociations, error: assocErr } = await supabase
+            .from('room_facilities')
+            .select('facility_id')
+            .eq('room_id', roomId);
+          
+          if (assocErr) {
+            console.error('Error fetching current room facilities associations:', assocErr);
+          } else {
+            const currentFacilityIds = (currentAssociations || []).map(a => Number(a.facility_id));
+            const toDelete = currentFacilityIds.filter(fid => !targetFacilityIds.includes(fid));
+            const toInsert = targetFacilityIds.filter(fid => !currentFacilityIds.includes(fid));
+
+            if (toDelete.length > 0) {
+              await supabase
+                .from('room_facilities')
+                .delete()
+                .eq('room_id', roomId)
+                .in('facility_id', toDelete);
+            }
+
+            if (toInsert.length > 0) {
+              const insertRows = toInsert.map(fid => ({
+                room_id: roomId,
+                facility_id: fid
+              }));
+              await supabase
+                .from('room_facilities')
+                .insert(insertRows);
+            }
+          }
+        } else {
+          // CREATE MODE: Insert directly
+          if (targetFacilityIds.length > 0) {
+            const insertRows = targetFacilityIds.map(fid => ({
+              room_id: roomId,
+              facility_id: fid
+            }));
+            await supabase
+              .from('room_facilities')
+              .insert(insertRows);
+          }
+        }
+      }
+
       await this.syncPropertyRoomCount(updated.property_id);
       await this.logActivity("System", room.id ? "UPDATE_ROOM" : "CREATE_ROOM", `Unit ${updated.room_number} disimpan.`);
-      return updated;
+      
+      // Return fully populated room
+      const refreshedRooms = await this.fetchRooms();
+      const refreshedRoom = refreshedRooms.find(r => r.id === roomId);
+      return refreshedRoom || updated;
     } catch (err: any) {
       console.error('saveRoom failed:', err);
       throw err;
@@ -506,7 +640,7 @@ export const database = {
   },
 
   async deleteRoom(id: number): Promise<boolean> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const { data: targeted } = await supabase.from('rooms').select('property_id').eq('id', id).maybeSingle();
       const { error } = await supabase.from('rooms').delete().eq('id', id);
@@ -527,7 +661,7 @@ export const database = {
 
   // --- BOOKINGS ---
   async fetchBookings(options?: { limit?: number; offset?: number }): Promise<Booking[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
@@ -548,7 +682,7 @@ export const database = {
   },
 
   async saveBooking(booking: Partial<Booking>): Promise<Booking> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       let existingBooking: Booking | null = null;
       if (booking.id) {
@@ -644,7 +778,7 @@ export const database = {
 
   // --- SURVEYS ---
   async fetchSurveys(options?: { limit?: number; offset?: number }): Promise<Survey[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
@@ -665,7 +799,7 @@ export const database = {
   },
 
   async saveSurvey(survey: Partial<Survey>): Promise<Survey> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       let existing: Survey | null = null;
       if (survey.id) {
@@ -770,7 +904,7 @@ export const database = {
 
   // --- COUPONS ---
   async fetchCoupons(options?: { limit?: number; offset?: number }): Promise<Coupon[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
@@ -791,7 +925,7 @@ export const database = {
   },
 
   async saveCoupon(coupon: Partial<Coupon>): Promise<Coupon> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = coupon.id;
       const payload = { ...coupon };
@@ -811,7 +945,7 @@ export const database = {
   },
 
   async deleteCoupon(id: number): Promise<boolean> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const { error } = await supabase.from('coupons').delete().eq('id', id);
       if (error) {
@@ -827,7 +961,7 @@ export const database = {
 
   // --- FINANCIAL ACCOUNTING SYSTEMS ---
   async fetchAccounts(options?: { limit?: number; offset?: number }): Promise<AccountCOA[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 200;
     const offset = options?.offset ?? 0;
     try {
@@ -848,7 +982,7 @@ export const database = {
   },
 
   async fetchFinancialTransactions(options?: { limit?: number; offset?: number }): Promise<FinancialTransaction[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 200;
     const offset = options?.offset ?? 0;
     try {
@@ -869,7 +1003,7 @@ export const database = {
   },
 
   async fetchJournalEntries(options?: { limit?: number; offset?: number }): Promise<JournalEntry[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 200;
     const offset = options?.offset ?? 0;
     try {
@@ -900,7 +1034,7 @@ export const database = {
     debit_account_id: number;
     credit_account_id: number;
   }): Promise<void> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     const {
       category,
       description,
@@ -1073,13 +1207,31 @@ export const database = {
       faqs: "[]"
     };
 
-    if (!isSupabaseConfigured || !supabase) return defaultSettings;
+    if (!isSupabaseConfigured) return defaultSettings;
     try {
       const { data, error } = await supabase.from('settings').select('*').maybeSingle();
       if (error) {
         logSupabaseError('fetchSettings', error);
       }
-      if (!error && data) return data as SystemSettings;
+      let settingsObj = data ? { ...defaultSettings, ...(data as SystemSettings) } : defaultSettings;
+
+      // Dynamically load from facilities table to maintain a single source of truth
+      const { data: facData, error: facError } = await supabase
+        .from('facilities')
+        .select('*')
+        .order('id', { ascending: true });
+
+      if (!facError && facData) {
+        const mappedFacilities = facData.map(f => ({
+          id: f.id,
+          icon: f.icon || 'Sparkles',
+          title: f.name,
+          subtitle: f.description || '',
+          category: f.category || 'general'
+        }));
+        settingsObj.standard_facilities = JSON.stringify(mappedFacilities);
+      }
+      return settingsObj;
     } catch (err) {
       logSupabaseError('fetchSettings', err, true);
     }
@@ -1087,27 +1239,85 @@ export const database = {
   },
 
   async saveSettings(settings: SystemSettings): Promise<SystemSettings> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
-    try {
-      await safeSupabaseUpsert('settings', {
-        booking_rules: settings.booking_rules,
-        survey_rules: settings.survey_rules,
-        standard_facilities: settings.standard_facilities,
-        why_choose_us: settings.why_choose_us,
-        faqs: settings.faqs
-      }, 1);
-    } catch(err) {
-      console.error(err);
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    
+    // We only save the actual settings columns, ignoring standard_facilities to avoid duplication
+    const { error: upsertErr } = await safeSupabaseUpsert('settings', {
+      booking_rules: settings.booking_rules,
+      survey_rules: settings.survey_rules,
+      why_choose_us: settings.why_choose_us,
+      faqs: settings.faqs
+    }, 1);
+
+    if (upsertErr) {
+      logSupabaseError('saveSettings', upsertErr, true);
+      throw new Error(`Gagal menyimpan pengaturan sistem: ${upsertErr.message || JSON.stringify(upsertErr)}`);
     }
-    await this.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey, sewa, fasilitas standar, why-choose-us, dan FAQ berhasil disimpan.");
+
+    await this.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey, sewa, why-choose-us, dan FAQ berhasil disimpan.");
     return settings;
+  },
+
+  async fetchMasterFacilities(): Promise<Facility[]> {
+    if (!isSupabaseConfigured) return [];
+    try {
+      const { data, error } = await supabase
+        .from('facilities')
+        .select('*')
+        .order('id', { ascending: true });
+      if (error) {
+        logSupabaseError('fetchMasterFacilities', error);
+        return [];
+      }
+      return data as Facility[];
+    } catch (err) {
+      logSupabaseError('fetchMasterFacilities', err, true);
+      return [];
+    }
+  },
+
+  async saveMasterFacility(fac: Partial<Facility>): Promise<Facility> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = fac.id;
+      const payload = { ...fac };
+      delete (payload as any).id;
+
+      const { data, error } = await safeSupabaseUpsert('facilities', payload, id);
+      if (error) {
+        logSupabaseError('saveMasterFacility', error);
+        throw new Error(`Gagal menyimpan fasilitas master: ${error.message}`);
+      }
+      const updated = (data && data.length > 0 ? data[0] : fac) as Facility;
+      await this.logActivity("System", fac.id ? "UPDATE_MASTER_FACILITY" : "CREATE_MASTER_FACILITY", `Fasilitas master ${updated.name} berhasil disimpan.`);
+      return updated;
+    } catch (err: any) {
+      console.error('saveMasterFacility failed:', err);
+      throw err;
+    }
+  },
+
+  async deleteMasterFacility(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase.from('facilities').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteMasterFacility', error);
+        throw new Error(`Gagal menghapus fasilitas master: ${error.message}`);
+      }
+      await this.logActivity("System", "DELETE_MASTER_FACILITY", `Menghapus fasilitas master ID: ${id}`);
+      return true;
+    } catch (err: any) {
+      console.error('deleteMasterFacility failed:', err);
+      throw err;
+    }
   },
 
   // --- SYSTEM LOGGERS ---
   async logActivity(adminName: string, action: string, detail: string) {
     console.log(`[ACTIVITY LOG] [${adminName}] ${action}: ${detail}`);
     
-    if (isSupabaseConfigured && supabase) {
+    if (isSupabaseConfigured) {
       try {
         await safeSupabaseUpsert('activity_logs', {
           admin_name: adminName,
@@ -1122,7 +1332,7 @@ export const database = {
   },
 
   async fetchActivityLogs(options?: { limit?: number; offset?: number }): Promise<ActivityLog[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 40;
     const offset = options?.offset ?? 0;
     try {
@@ -1143,7 +1353,7 @@ export const database = {
   },
 
   async clearActivityLogs(): Promise<boolean> {
-    if (!isSupabaseConfigured || !supabase) return true;
+    if (!isSupabaseConfigured) return true;
     try {
       const { error } = await supabase.from('activity_logs').delete().neq('id', 0);
       if (error) {
@@ -1159,7 +1369,7 @@ export const database = {
 
   // --- TENANTS ---
   async fetchTenants(options?: { limit?: number; offset?: number }): Promise<Tenant[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
@@ -1180,7 +1390,7 @@ export const database = {
   },
 
   async saveTenant(tenant: Partial<Tenant>): Promise<Tenant> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = tenant.id;
       const payload = { ...tenant };
@@ -1201,7 +1411,7 @@ export const database = {
 
   // --- PAYMENTS ---
   async fetchPayments(options?: { limit?: number; offset?: number }): Promise<PaymentInvoice[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
@@ -1222,7 +1432,7 @@ export const database = {
   },
 
   async savePayment(payment: PaymentInvoice): Promise<PaymentInvoice> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = payment.id;
       const payload = { ...payment };
@@ -1243,7 +1453,7 @@ export const database = {
 
   // --- USERS ---
   async fetchUsers(options?: { limit?: number; offset?: number }): Promise<UserSystem[]> {
-    if (!isSupabaseConfigured || !supabase) return [];
+    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
@@ -1264,7 +1474,7 @@ export const database = {
   },
 
   async saveUser(user: Partial<UserSystem>): Promise<UserSystem> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = user.id;
       const payload = { ...user };
@@ -1285,7 +1495,7 @@ export const database = {
   },
 
   async deleteUser(id: string): Promise<boolean> {
-    if (!isSupabaseConfigured || !supabase) throw new Error('Supabase not configured');
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const { error } = await supabase.from('users').delete().eq('id', id);
       if (error) {
@@ -1302,7 +1512,7 @@ export const database = {
 
   // --- SYNC HELPERS ---
   async syncPropertyRoomCount(propertyId: number) {
-    if (!isSupabaseConfigured || !supabase) return;
+    if (!isSupabaseConfigured) return;
     try {
       const { data: rooms, error: roomErr } = await supabase.from('rooms').select('*').eq('property_id', propertyId);
       if (roomErr) throw roomErr;
@@ -1322,6 +1532,397 @@ export const database = {
       }
     } catch (err) {
       console.error('Error syncing property room count in Supabase:', err);
+    }
+  },
+
+  // --- PETTY CASH REQUESTS ---
+  async fetchPettyCashRequests(options?: { limit?: number; offset?: number }): Promise<PettyCashRequest[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('petty_cash_requests')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: true });
+      if (error) {
+        logSupabaseError('fetchPettyCashRequests', error);
+        return [];
+      }
+      return data as PettyCashRequest[];
+    } catch (err) {
+      logSupabaseError('fetchPettyCashRequests', err, true);
+      return [];
+    }
+  },
+
+  async savePettyCashRequest(request: Partial<PettyCashRequest>): Promise<PettyCashRequest> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = request.id;
+      const payload = {
+        applicant: request.applicant,
+        amount: request.amount,
+        purpose: request.purpose,
+        status: request.status,
+        date: request.date
+      };
+      const { data, error } = id
+        ? await supabase.from('petty_cash_requests').update(payload).eq('id', id).select().single()
+        : await supabase.from('petty_cash_requests').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('savePettyCashRequest', error);
+        throw error;
+      }
+      return data as PettyCashRequest;
+    } catch (err) {
+      logSupabaseError('savePettyCashRequest', err, true);
+      throw err;
+    }
+  },
+
+  // --- FIXED ASSETS ---
+  async fetchFixedAssets(options?: { limit?: number; offset?: number }): Promise<FixedAsset[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('fixed_assets')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: true });
+      if (error) {
+        logSupabaseError('fetchFixedAssets', error);
+        return [];
+      }
+      return (data || []).map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        cost: Number(item.cost),
+        lifeYears: Number(item.life_years),
+        residual: Number(item.residual),
+        deprRate: Number(item.depr_rate),
+        accumDepr: Number(item.accum_depr),
+        created_at: item.created_at
+      }));
+    } catch (err) {
+      logSupabaseError('fetchFixedAssets', err, true);
+      return [];
+    }
+  },
+
+  async saveFixedAsset(asset: Partial<FixedAsset>): Promise<FixedAsset> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = asset.id;
+      const payload = {
+        name: asset.name,
+        cost: asset.cost,
+        life_years: asset.lifeYears,
+        residual: asset.residual,
+        depr_rate: asset.deprRate,
+        accum_depr: asset.accumDepr
+      };
+      const { data, error } = id
+        ? await supabase.from('fixed_assets').update(payload).eq('id', id).select().single()
+        : await supabase.from('fixed_assets').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('saveFixedAsset', error);
+        throw error;
+      }
+      return {
+        id: data.id,
+        name: data.name,
+        cost: Number(data.cost),
+        lifeYears: Number(data.life_years),
+        residual: Number(data.residual),
+        deprRate: Number(data.depr_rate),
+        accumDepr: Number(data.accum_depr),
+        created_at: data.created_at
+      };
+    } catch (err) {
+      logSupabaseError('saveFixedAsset', err, true);
+      throw err;
+    }
+  },
+
+  // --- BUDGETS ---
+  async fetchBudgets(options?: { limit?: number; offset?: number }): Promise<Budget[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('budgets')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: true });
+      if (error) {
+        logSupabaseError('fetchBudgets', error);
+        return [];
+      }
+      return (data || []).map((item: any) => ({
+        id: item.id,
+        category: item.category,
+        limit: Number(item.limit_amount || 0),
+        spent: Number(item.spent || 0),
+        created_at: item.created_at
+      }));
+    } catch (err) {
+      logSupabaseError('fetchBudgets', err, true);
+      return [];
+    }
+  },
+
+  async saveBudget(budget: Partial<Budget>): Promise<Budget> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = budget.id;
+      const payload = {
+        category: budget.category,
+        limit_amount: budget.limit,
+        spent: budget.spent
+      };
+      const { data, error } = id
+        ? await supabase.from('budgets').update(payload).eq('id', id).select().single()
+        : await supabase.from('budgets').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('saveBudget', error);
+        throw error;
+      }
+      return {
+        id: data.id,
+        category: data.category,
+        limit: Number(data.limit_amount || 0),
+        spent: Number(data.spent || 0),
+        created_at: data.created_at
+      };
+    } catch (err) {
+      logSupabaseError('saveBudget', err, true);
+      throw err;
+    }
+  },
+
+  // --- VENDORS ---
+  async fetchVendors(options?: { limit?: number; offset?: number }): Promise<Vendor[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('vendors')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: true });
+      if (error) {
+        logSupabaseError('fetchVendors', error);
+        return [];
+      }
+      return data as Vendor[];
+    } catch (err) {
+      logSupabaseError('fetchVendors', err, true);
+      return [];
+    }
+  },
+
+  async saveVendor(vendor: Partial<Vendor>): Promise<Vendor> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = vendor.id;
+      const payload = {
+        name: vendor.name,
+        phone: vendor.phone,
+        category: vendor.category
+      };
+      const { data, error } = id
+        ? await supabase.from('vendors').update(payload).eq('id', id).select().single()
+        : await supabase.from('vendors').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('saveVendor', error);
+        throw error;
+      }
+      return data as Vendor;
+    } catch (err) {
+      logSupabaseError('saveVendor', err, true);
+      throw err;
+    }
+  },
+
+  // --- PURCHASE ORDERS ---
+  async fetchPurchaseOrders(options?: { limit?: number; offset?: number }): Promise<PurchaseOrder[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('purchase_orders')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: false });
+      if (error) {
+        logSupabaseError('fetchPurchaseOrders', error);
+        return [];
+      }
+      return data as PurchaseOrder[];
+    } catch (err) {
+      logSupabaseError('fetchPurchaseOrders', err, true);
+      return [];
+    }
+  },
+
+  async savePurchaseOrder(po: Partial<PurchaseOrder>): Promise<PurchaseOrder> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = po.id;
+      const payload = {
+        vendor: po.vendor,
+        items: po.items,
+        amount: po.amount,
+        status: po.status,
+        date: po.date
+      };
+      const { data, error } = id
+        ? await supabase.from('purchase_orders').update(payload).eq('id', id).select().single()
+        : await supabase.from('purchase_orders').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('savePurchaseOrder', error);
+        throw error;
+      }
+      return data as PurchaseOrder;
+    } catch (err) {
+      logSupabaseError('savePurchaseOrder', err, true);
+      throw err;
+    }
+  },
+
+  // --- INVENTORY ITEMS ---
+  async fetchInventoryItems(options?: { limit?: number; offset?: number }): Promise<InventoryItem[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('inventory_items')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: true });
+      if (error) {
+        logSupabaseError('fetchInventoryItems', error);
+        return [];
+      }
+      return (data || []).map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        stock: Number(item.stock),
+        unit: item.unit,
+        minStock: Number(item.min_stock),
+        category: item.category,
+        created_at: item.created_at
+      }));
+    } catch (err) {
+      logSupabaseError('fetchInventoryItems', err, true);
+      return [];
+    }
+  },
+
+  async saveInventoryItem(item: Partial<InventoryItem>): Promise<InventoryItem> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = item.id;
+      const payload = {
+        name: item.name,
+        stock: item.stock,
+        unit: item.unit,
+        min_stock: item.minStock,
+        category: item.category
+      };
+      const { data, error } = id
+        ? await supabase.from('inventory_items').update(payload).eq('id', id).select().single()
+        : await supabase.from('inventory_items').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('saveInventoryItem', error);
+        throw error;
+      }
+      return {
+        id: data.id,
+        name: data.name,
+        stock: Number(data.stock),
+        unit: data.unit,
+        minStock: Number(data.min_stock),
+        category: data.category,
+        created_at: data.created_at
+      };
+    } catch (err) {
+      logSupabaseError('saveInventoryItem', err, true);
+      throw err;
+    }
+  },
+
+  // --- BANK STATEMENT ITEMS ---
+  async fetchBankStatementItems(options?: { limit?: number; offset?: number }): Promise<BankStatementItem[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('bank_statement_items')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: true });
+      if (error) {
+        logSupabaseError('fetchBankStatementItems', error);
+        return [];
+      }
+      return (data || []).map((item: any) => ({
+        id: item.id,
+        date: item.date,
+        desc: item.desc,
+        amount: Number(item.amount),
+        type: item.type,
+        matched: item.matched,
+        matchedRef: item.matched_ref,
+        created_at: item.created_at
+      }));
+    } catch (err) {
+      logSupabaseError('fetchBankStatementItems', err, true);
+      return [];
+    }
+  },
+
+  async saveBankStatementItem(stmt: Partial<BankStatementItem>): Promise<BankStatementItem> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = stmt.id;
+      const payload = {
+        date: stmt.date,
+        desc: stmt.desc,
+        amount: stmt.amount,
+        type: stmt.type,
+        matched: stmt.matched,
+        matched_ref: stmt.matchedRef
+      };
+      const { data, error } = id
+        ? await supabase.from('bank_statement_items').update(payload).eq('id', id).select().single()
+        : await supabase.from('bank_statement_items').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('saveBankStatementItem', error);
+        throw error;
+      }
+      return {
+        id: data.id,
+        date: data.date,
+        desc: data.desc,
+        amount: Number(data.amount),
+        type: data.type,
+        matched: data.matched,
+        matchedRef: data.matched_ref,
+        created_at: data.created_at
+      };
+    } catch (err) {
+      logSupabaseError('saveBankStatementItem', err, true);
+      throw err;
     }
   },
 

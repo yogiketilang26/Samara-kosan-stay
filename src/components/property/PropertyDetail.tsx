@@ -2,6 +2,7 @@ import React from 'react';
 import { Property, Room } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
 import { MapPin, Shield, Map, Wifi, Sparkles, ChevronLeft, Building2 } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
 import PremiumRoomCard from '../premium/PremiumRoomCard';
 import EmptyState from '../common/EmptyState';
 
@@ -66,12 +67,15 @@ export const PropertyDetail: React.FC<PropertyDetailProps> = ({
             <div className="space-y-2 border-b border-slate-850 pb-4">
               <h3 className="text-xs font-bold text-slate-450 uppercase tracking-wider font-mono">Fasilitas Kompleks Kosan</h3>
               <div className="flex flex-wrap gap-2 pt-1 font-medium text-xs">
-                {property.facilities.map((f, idx) => (
-                  <span key={idx} className="bg-slate-900 border border-slate-800 text-slate-200 px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 capitalize font-semibold shadow-sm">
-                    <Wifi size={12} className="text-amber-500" />
-                    {f}
-                  </span>
-                ))}
+                {(property.facilities || []).map((f: any, idx) => {
+                  const IconComp = (LucideIcons as any)[f.icon] || LucideIcons.Sparkles;
+                  return (
+                    <span key={f.id || idx} className="bg-slate-900 border border-slate-800 text-slate-200 px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 capitalize font-semibold shadow-sm">
+                      <IconComp size={12} className="text-amber-500" />
+                      {f.name}
+                    </span>
+                  );
+                })}
               </div>
             </div>
 

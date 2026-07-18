@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
 import { Button } from '../common/Button';
-import { UploadCloud, Trash2, Image } from 'lucide-react';
+import { UploadCloud, Trash2, Image, RotateCw } from 'lucide-react';
 import { PRESETS } from '../../utils/imagePresets';
 import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
@@ -16,19 +16,20 @@ interface PropertyFormProps {
   property?: Property | null;
   onSave: (prop: Partial<Property>) => void;
   onCancel: () => void;
+  isSaving?: boolean;
 }
 
 export const PropertyForm: React.FC<PropertyFormProps> = ({
   property,
   onSave,
-  onCancel
+  onCancel,
+  isSaving = false
 }) => {
   const [formData, setFormData] = useState({
     name: '',
     address: '',
     price: 1500000,
     type: 'campur' as 'putra' | 'putri' | 'campur',
-    facilitiesInput: '',
     image_url: '',
     images: [] as string[],
     lat: -6.2,
@@ -40,32 +41,17 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     regulations: ''
   });
 
-  const [masterFacilities, setMasterFacilities] = useState<{ icon: string; title: string; subtitle: string }[]>([]);
+  const [masterFacilities, setMasterFacilities] = useState<any[]>([]);
+  const [selectedFacilityIds, setSelectedFacilityIds] = useState<number[]>([]);
 
   useEffect(() => {
     async function loadMasterFacilities() {
       try {
-        const settings = await database.fetchSettings();
-        if (settings && settings.standard_facilities) {
-          const parsed = JSON.parse(settings.standard_facilities);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setMasterFacilities(parsed);
-            return;
-          }
-        }
+        const facs = await database.fetchMasterFacilities();
+        setMasterFacilities(facs);
       } catch (err) {
         console.error('Error loading master facilities in PropertyForm:', err);
       }
-      setMasterFacilities([
-        { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
-        { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
-        { icon: "Shield", title: "Security", subtitle: "24 Jam" },
-        { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
-        { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
-        { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
-        { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
-        { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
-      ]);
     }
     loadMasterFacilities();
   }, []);
@@ -77,7 +63,6 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         address: property.address,
         price: property.price,
         type: property.type,
-        facilitiesInput: property.facilities.join(', '),
         image_url: property.image_url,
         images: property.images || [],
         lat: property.lat || -6.2,
@@ -88,6 +73,9 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         terms: property.terms || '',
         regulations: property.regulations || ''
       });
+      setSelectedFacilityIds((property.facilities || []).map((f: any) => f.id));
+    } else {
+      setSelectedFacilityIds([]);
     }
   }, [property]);
 
@@ -165,10 +153,6 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const facilitiesList = formData.facilitiesInput
-      .split(',')
-      .map(f => f.trim())
-      .filter(f => f.length > 0);
 
     onSave({
       id: property?.id,
@@ -176,7 +160,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       address: formData.address,
       price: Number(formData.price),
       type: formData.type,
-      facilities: facilitiesList,
+      facilities: selectedFacilityIds as any,
       image_url: formData.image_url,
       images: formData.images,
       lat: Number(formData.lat),
@@ -242,58 +226,40 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       </div>
 
       <div className="space-y-2">
-        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Fasilitas Keunggulan (Pisahkan Koma)</label>
-        <input 
-          type="text" 
-          value={formData.facilitiesInput}
-          onChange={(e) => setFormData({ ...formData, facilitiesInput: e.target.value })}
-          placeholder="WiFi, Ac, Kamar Mandi Dalam, Garasi"
-          className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500"
-        />
-        {masterFacilities.length > 0 && (
-          <div className="pt-1.5 space-y-1">
-            <span className="text-[9px] text-slate-500 font-mono uppercase block">Pilih Cepat dari Master Fasilitas:</span>
-            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 bg-slate-950/45 rounded-xl border border-slate-900">
-              {masterFacilities.map((fac, idx) => {
-                const currentList = formData.facilitiesInput
-                  .split(',')
-                  .map(f => f.trim().toLowerCase())
-                  .filter(f => f.length > 0);
-                const isSelected = currentList.includes(fac.title.toLowerCase());
-                
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => {
-                      const list = formData.facilitiesInput
-                        .split(',')
-                        .map(f => f.trim())
-                        .filter(f => f.length > 0);
-                      const index = list.findIndex(f => f.toLowerCase() === fac.title.toLowerCase());
-                      let newList: string[];
-                      if (index > -1) {
-                        newList = list.filter((_, i) => i !== index);
-                      } else {
-                        newList = [...list, fac.title];
-                      }
-                      setFormData(prev => ({
-                        ...prev,
-                        facilitiesInput: newList.join(', ')
-                      }));
-                    }}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold border transition-all cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#0D9488]/20 text-[#0D9488] border-[#0D9488]/50'
-                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    {renderIcon(fac.icon)}
-                    <span>{fac.title}</span>
-                  </button>
-                );
-              })}
-            </div>
+        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Fasilitas Properti (Pilih Master Fasilitas)</label>
+        {masterFacilities.length > 0 ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-slate-950/45 rounded-2xl border border-slate-900 max-h-48 overflow-y-auto">
+            {masterFacilities.map((fac) => {
+              const isSelected = selectedFacilityIds.includes(fac.id);
+              return (
+                <button
+                  key={fac.id}
+                  type="button"
+                  onClick={() => {
+                    if (isSelected) {
+                      setSelectedFacilityIds(prev => prev.filter(id => id !== fac.id));
+                    } else {
+                      setSelectedFacilityIds(prev => [...prev, fac.id]);
+                    }
+                  }}
+                  className={`flex items-center gap-2 p-2 rounded-xl text-[10px] font-semibold border transition-all cursor-pointer text-left ${
+                    isSelected
+                      ? 'bg-[#0D9488]/20 text-[#0D9488] border-[#0D9488]/50 shadow-sm'
+                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="shrink-0">{renderIcon(fac.icon)}</div>
+                  <div className="truncate">
+                    <div className="font-bold">{fac.name}</div>
+                    <div className="text-[8px] opacity-60 truncate">{fac.description}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-slate-500 text-[10px] italic font-mono p-3 bg-slate-950/45 rounded-2xl border border-slate-900">
+            Memuat daftar master fasilitas...
           </div>
         )}
       </div>
@@ -533,16 +499,25 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       <div className="flex gap-2 pt-2">
         <button
           type="button"
+          disabled={isSaving}
           onClick={onCancel}
-          className="flex-1 py-2 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all duration-200 cursor-pointer"
+          className="flex-1 py-2 rounded-xl border border-white/10 hover:bg-white/5 text-slate-300 font-bold transition-all duration-200 cursor-pointer disabled:opacity-50"
         >
           Batalkan
         </button>
         <button
           type="submit"
-          className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all duration-200 cursor-pointer text-[11px]"
+          disabled={isSaving}
+          className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all duration-200 cursor-pointer text-[11px] disabled:opacity-50 flex items-center justify-center gap-1.5"
         >
-          {property ? 'Simpan Perubahan' : 'Buat Baru'}
+          {isSaving ? (
+            <>
+              <RotateCw className="animate-spin animate-infinite" size={14} />
+              <span>Menyimpan...</span>
+            </>
+          ) : (
+            property ? 'Simpan Perubahan' : 'Buat Baru'
+          )}
         </button>
       </div>
     </form>

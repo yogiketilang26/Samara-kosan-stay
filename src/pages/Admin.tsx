@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import * as LucideIcons from 'lucide-react';
 import { database, getIsSupabaseConfigured } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
-import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings } from '../types';
+import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem } from '../types';
 import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
 import { Loader } from '../components/common/Loader';
@@ -23,82 +23,56 @@ import {
   TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle
 } from 'lucide-react';
 
-interface AdminProps {
-  refreshTrigger: number;
-  triggerAppRefresh: () => void;
-}
+interface AdminProps {}
 
-export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps) {
+export default function Admin({}: AdminProps) {
   // Use granular real-time table hooks to fetch data and receive live changes
   const { data: propertiesData, loading: propertiesLoading } = useRealtimeTable<Property>(
     'properties',
-    () => database.fetchProperties(),
-    refreshTrigger
-  );
+    () => database.fetchProperties());
   const { data: roomsData, loading: roomsLoading } = useRealtimeTable<Room>(
     'rooms',
-    () => database.fetchRooms(),
-    refreshTrigger
-  );
+    () => database.fetchRooms());
   const { data: bookingsData, loading: bookingsLoading } = useRealtimeTable<Booking>(
     'bookings',
-    () => database.fetchBookings(),
-    refreshTrigger
-  );
+    () => database.fetchBookings());
   const { data: surveysData, loading: surveysLoading } = useRealtimeTable<Survey>(
     'surveys',
-    () => database.fetchSurveys(),
-    refreshTrigger
-  );
+    () => database.fetchSurveys());
   const { data: couponsData, loading: couponsLoading } = useRealtimeTable<Coupon>(
     'coupons',
-    () => database.fetchCoupons(),
-    refreshTrigger
-  );
+    () => database.fetchCoupons());
   const { data: transactionsData, loading: transactionsLoading } = useRealtimeTable<FinancialTransaction>(
     'financial_transactions',
-    () => database.fetchFinancialTransactions(),
-    refreshTrigger
-  );
+    () => database.fetchFinancialTransactions());
   const { data: activityLogsData, loading: activityLogsLoading } = useRealtimeTable<ActivityLog>(
     'activity_logs',
-    () => database.fetchActivityLogs(),
-    refreshTrigger
-  );
+    () => database.fetchActivityLogs());
   const { data: usersData, loading: usersLoading } = useRealtimeTable<UserSystem>(
     'users',
-    () => database.fetchUsers(),
-    refreshTrigger
-  );
+    () => database.fetchUsers());
   const { data: tenantsData, loading: tenantsLoading } = useRealtimeTable<Tenant>(
     'tenants',
-    () => database.fetchTenants(),
-    refreshTrigger
-  );
+    () => database.fetchTenants());
   const { data: accountsData, loading: accountsLoading } = useRealtimeTable<AccountCOA>(
     'accounts',
-    () => database.fetchAccounts(),
-    refreshTrigger
-  );
+    () => database.fetchAccounts());
   const { data: journalEntriesData, loading: journalEntriesLoading } = useRealtimeTable<JournalEntry>(
     'journal_entries',
-    () => database.fetchJournalEntries(),
-    refreshTrigger
-  );
+    () => database.fetchJournalEntries());
   const { data: paymentsData, loading: paymentsLoading } = useRealtimeTable<PaymentInvoice>(
     'payments',
-    () => database.fetchPayments(),
-    refreshTrigger
-  );
+    () => database.fetchPayments());
   const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
     'settings',
-    () => database.fetchSettings().then(res => [res]),
-    refreshTrigger
-  );
+    () => database.fetchSettings().then(res => [res]));
+  const { data: masterFacilitiesData, loading: masterFacilitiesLoading } = useRealtimeTable<any>(
+    'facilities',
+    () => database.fetchMasterFacilities());
 
   const hooksLoading = propertiesLoading || roomsLoading || bookingsLoading || surveysLoading || couponsLoading ||
     transactionsLoading || activityLogsLoading || usersLoading || tenantsLoading || accountsLoading ||
-    journalEntriesLoading || paymentsLoading || settingsLoading;
+    journalEntriesLoading || paymentsLoading || settingsLoading || masterFacilitiesLoading;
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [properties, setProperties] = useState<Property[]>([]);
@@ -125,8 +99,9 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
   // System Settings & Master Facilities states
   const [settings, setSettingsState] = useState<SystemSettings | null>(null);
-  const [facilitiesList, setFacilitiesList] = useState<{ icon: string, title: string, subtitle: string }[]>([]);
+  const [facilitiesList, setFacilitiesList] = useState<{ id: number, icon: string, title: string, subtitle: string, category?: string }[]>([]);
   const [showFacilityModal, setShowFacilityModal] = useState(false);
+  const [isSavingFacility, setIsSavingFacility] = useState(false);
   const [editingFacilityIndex, setEditingFacilityIndex] = useState<number | null>(null);
   const [facilityForm, setFacilityForm] = useState({
     title: '',
@@ -286,54 +261,67 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
     approvalStatus: 'pending' // pending -> approved
   });
 
-  // Petty cash requests state (seeded)
-  const [pettyCashRequests, setPettyCashRequests] = useState([
-    { id: 1, applicant: 'Doni (Staff)', amount: 150000, purpose: 'Beli Air Galon & Gas Dapur Bersama', status: 'approved', date: '2026-06-25' },
-    { id: 2, applicant: 'Lina (Staff)', amount: 200000, purpose: 'Alat Pembersih Lantai & Kamar Mandi', status: 'pending', date: '2026-06-27' }
-  ]);
+  // Realtime granular hooks for administrative modules
+  const { data: pettyCashRequestsData } = useRealtimeTable<PettyCashRequest>(
+    'petty_cash_requests',
+    () => database.fetchPettyCashRequests());
+  const { data: assetsData } = useRealtimeTable<FixedAsset>(
+    'fixed_assets',
+    () => database.fetchFixedAssets());
+  const { data: budgetsData } = useRealtimeTable<Budget>(
+    'budgets',
+    () => database.fetchBudgets());
+  const { data: vendorsData } = useRealtimeTable<Vendor>(
+    'vendors',
+    () => database.fetchVendors());
+  const { data: purchaseOrdersData } = useRealtimeTable<PurchaseOrder>(
+    'purchase_orders',
+    () => database.fetchPurchaseOrders());
+  const { data: inventoryData } = useRealtimeTable<InventoryItem>(
+    'inventory_items',
+    () => database.fetchInventoryItems());
+  const { data: bankStatementData } = useRealtimeTable<BankStatementItem>(
+    'bank_statement_items',
+    () => database.fetchBankStatementItems());
 
-  // Asset list state (seeded)
-  const [assetsState, setAssetsState] = useState([
-    { id: 1, name: 'Gedung Kost Samara Premium', cost: 1200000000, lifeYears: 20, residual: 200000000, deprRate: 5000000, accumDepr: 50000000 },
-    { id: 2, name: 'AC Daikin 1 PK (12 Unit)', cost: 48000000, lifeYears: 5, residual: 3000000, deprRate: 750000, accumDepr: 15000000 },
-    { id: 3, name: 'Genset Honda Silent 5kVA', cost: 18000000, lifeYears: 8, residual: 2000000, deprRate: 166000, accumDepr: 3320000 }
-  ]);
+  // Component states synchronized with Supabase
+  const [pettyCashRequests, setPettyCashRequests] = useState<PettyCashRequest[]>([]);
+  const [assetsState, setAssetsState] = useState<FixedAsset[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [bankStatement, setBankStatement] = useState<BankStatementItem[]>([]);
+  const [reconciliationCandidates, setReconciliationCandidates] = useState<Record<number, PaymentInvoice[]>>({});
 
-  // Budget state (seeded)
-  const [budgets, setBudgets] = useState([
-    { id: 1, category: 'Beban Pemeliharaan & Perbaikan Gedung', limit: 5000000, spent: 1500000 },
-    { id: 2, category: 'Gaji & Bonus Karyawan', limit: 12000000, spent: 10000000 },
-    { id: 3, category: 'Listrik & Air (Utilities)', limit: 6000000, spent: 5800000 },
-    { id: 4, category: 'Marketing & Voucher', limit: 3000000, spent: 3200000 } // Exceeded variance alert!
-  ]);
+  // Synchronize component state with real-time data
+  useEffect(() => {
+    if (pettyCashRequestsData) setPettyCashRequests(pettyCashRequestsData);
+  }, [pettyCashRequestsData]);
 
-  // Vendors state
-  const [vendors, setVendors] = useState([
-    { id: 1, name: 'Depo Bangunan Jaya', phone: '0811223344', category: 'Material Pemeliharaan' },
-    { id: 2, name: 'PDAM / PLN Solusi', phone: '0812345678', category: 'Utilitas' },
-    { id: 3, name: 'Sinar Mandiri AC', phone: '0815556667', category: 'Servis Elektronik' }
-  ]);
+  useEffect(() => {
+    if (assetsData) setAssetsState(assetsData);
+  }, [assetsData]);
 
-  // Supply chain purchase orders
-  const [purchaseOrders, setPurchaseOrders] = useState([
-    { id: 101, vendor: 'Depo Bangunan Jaya', items: 'Cat Tembok Nippon Paint (5 Pail)', amount: 1250000, status: 'completed', date: '2026-06-20' },
-    { id: 102, vendor: 'Sinar Mandiri AC', items: 'Suku cadang Kapasitor AC & Freon R32', amount: 850000, status: 'approved', date: '2026-06-26' }
-  ]);
+  useEffect(() => {
+    if (budgetsData) setBudgets(budgetsData);
+  }, [budgetsData]);
 
-  // Inventory Stock items (Seeded for Module 5)
-  const [inventoryItems, setInventoryItems] = useState([
-    { id: 1, name: 'Sabun Cair Handwash', stock: 15, unit: 'Botol', minStock: 5, category: 'Cleaning Supplies' },
-    { id: 2, name: 'Lampu LED Philips 12W', stock: 2, unit: 'Pcs', minStock: 5, category: 'Spare Parts' }, // Warning low stock!
-    { id: 3, name: 'Tabung Gas Elpiji 12kg', stock: 4, unit: 'Tabung', minStock: 1, category: 'Kitchen Supplies' },
-    { id: 4, name: 'Sprei Kasur Standard', stock: 8, unit: 'Pcs', minStock: 2, category: 'Amenities' }
-  ]);
+  useEffect(() => {
+    if (vendorsData) setVendors(vendorsData);
+  }, [vendorsData]);
 
-  // Bank Statement Items (Seeded for Module 9 Reconciliation)
-  const [bankStatement, setBankStatement] = useState([
-    { id: 1, date: '2026-06-26', desc: 'Settle Midtrans INV-001', amount: 1800000, type: 'credit', matched: true, matchedRef: 'INV-001' },
-    { id: 2, date: '2026-06-27', desc: 'Transfer VA Siska Wardani', amount: 2600000, type: 'credit', matched: false, matchedRef: '' },
-    { id: 3, date: '2026-06-27', desc: 'Pembayaran Biaya Token Listrik', amount: 350000, type: 'debit', matched: false, matchedRef: '' }
-  ]);
+  useEffect(() => {
+    if (purchaseOrdersData) setPurchaseOrders(purchaseOrdersData);
+  }, [purchaseOrdersData]);
+
+  useEffect(() => {
+    if (inventoryData) setInventoryItems(inventoryData);
+  }, [inventoryData]);
+
+  useEffect(() => {
+    if (bankStatementData) setBankStatement(bankStatementData);
+  }, [bankStatementData]);
 
   // AI Insights text state
   const [aiInsightText, setAiInsightText] = useState<string>('');
@@ -373,6 +361,9 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   // Property modal triggers
   const [showPropertyModal, setShowPropertyModal] = useState(false);
   const [activePropertyEdit, setActivePropertyEdit] = useState<Property | null>(null);
+  const [isSavingProperty, setIsSavingProperty] = useState(false);
+  const [isSavingCoupon, setIsSavingCoupon] = useState(false);
+  const [isSavingUser, setIsSavingUser] = useState(false);
 
   // Room modal triggers
   const [showRoomModal, setShowRoomModal] = useState(false);
@@ -516,35 +507,10 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   }, [activeTab, autoRefreshLogs]);
 
   useEffect(() => {
-    let activeFacilitiesList: string[] = [];
     const sett = settingsData && settingsData.length > 0 ? settingsData[0] : null;
-    if (sett && sett.standard_facilities) {
-      try {
-        const parsed = JSON.parse(sett.standard_facilities);
-        if (Array.isArray(parsed)) {
-          activeFacilitiesList = parsed.map((f: any) => f.title.trim().toLowerCase());
-        }
-      } catch (e) {
-        console.error("Error parsing standard_facilities in Admin:", e);
-      }
-    } else {
-      activeFacilitiesList = [
-        "jam operasional", "check in", "security", "wifi", "air", "parkir", "laundry", "cleaning"
-      ];
-    }
 
-    const filteredP = (propertiesData || []).map((item: any) => ({
-      ...item,
-      facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
-    }));
-
-    const filteredR = (roomsData || []).map((item: any) => ({
-      ...item,
-      facilities: (item.facilities || []).filter((f: string) => activeFacilitiesList.includes(f.trim().toLowerCase()))
-    }));
-
-    setProperties(filteredP);
-    setRooms(filteredR);
+    setProperties(propertiesData || []);
+    setRooms(roomsData || []);
     setBookings(bookingsData || []);
     setSurveys(surveysData || []);
     setCoupons(couponsData || []);
@@ -570,29 +536,17 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
   }, [hooksLoading]);
 
   useEffect(() => {
-    if (settings && settings.standard_facilities) {
-      try {
-        const parsed = JSON.parse(settings.standard_facilities);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setFacilitiesList(parsed);
-          return;
-        }
-      } catch (e) {
-        console.error("Error parsing standard_facilities:", e);
-      }
+    if (masterFacilitiesData) {
+      const mapped = masterFacilitiesData.map((f: any) => ({
+        id: f.id,
+        icon: f.icon || 'Sparkles',
+        title: f.name,
+        subtitle: f.description || '',
+        category: f.category || 'general'
+      }));
+      setFacilitiesList(mapped);
     }
-    // Default facilities fallback
-    setFacilitiesList([
-      { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
-      { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
-      { icon: "Shield", title: "Security", subtitle: "24 Jam" },
-      { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
-      { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
-      { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
-      { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
-      { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
-    ]);
-  }, [settings]);
+  }, [masterFacilitiesData]);
 
   useEffect(() => {
     if (editingOccupantBooking) {
@@ -631,7 +585,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
 
     database.logActivity("System", "UPDATE_OCCUPANT_DATA", `Mengubah data penghuni untuk kamar ${editingOccupantBooking.room_number}`);
     setEditingOccupantBooking(null);
-    triggerAppRefresh();
+    
   };
 
   const handleConfirmArrival = async (b: Booking) => {
@@ -658,7 +612,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         }
 
         database.logActivity("System", "ARRIVAL_CONFIRMATION", `Kedatangan penghuni ${b.occupant_name || b.tenant_name} dikonfirmasi`);
-        triggerAppRefresh();
+        
       }
     );
   };
@@ -671,7 +625,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         const updated = { ...b, status: 'approved' as const };
         await database.saveBooking(updated);
         database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
-        triggerAppRefresh();
+        
       }
     );
   };
@@ -683,61 +637,47 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       return;
     }
 
-    let newList = [...facilitiesList];
-    const newFacility = {
-      title: facilityForm.title.trim(),
-      subtitle: facilityForm.subtitle.trim(),
-      icon: facilityForm.icon
-    };
-
-    if (editingFacilityIndex !== null) {
-      newList[editingFacilityIndex] = newFacility;
-      database.logActivity("System", "UPDATE_FACILITY", `Mengubah fasilitas ${newFacility.title}`);
-    } else {
-      newList.push(newFacility);
-      database.logActivity("System", "CREATE_FACILITY", `Menambahkan fasilitas ${newFacility.title}`);
-    }
-
-    if (settings) {
-      const updatedSettings = {
-        ...settings,
-        standard_facilities: JSON.stringify(newList)
+    setIsSavingFacility(true);
+    try {
+      const facilityPayload = {
+        name: facilityForm.title.trim(),
+        icon: facilityForm.icon,
+        description: facilityForm.subtitle.trim(),
+        category: facilityForm.title.toLowerCase().includes('ac') || facilityForm.title.toLowerCase().includes('mandi') ? 'room' : 'general'
       };
-      const saved = await database.saveSettings(updatedSettings);
-      setSettingsState(saved);
-      triggerAppRefresh();
+
+      if (editingFacilityIndex !== null) {
+        const existingFac = facilitiesList[editingFacilityIndex];
+        await database.saveMasterFacility({
+          id: existingFac.id,
+          ...facilityPayload
+        });
+      } else {
+        await database.saveMasterFacility(facilityPayload);
+      }
+      
       setShowFacilityModal(false);
-    } else {
-      const updatedSettings = {
-        id: 1,
-        booking_rules: '',
-        survey_rules: '',
-        standard_facilities: JSON.stringify(newList)
-      };
-      const saved = await database.saveSettings(updatedSettings);
-      setSettingsState(saved);
-      triggerAppRefresh();
-      setShowFacilityModal(false);
+    } catch (error: any) {
+      console.error("Gagal menyimpan fasilitas:", error);
+      alert(`Gagal menyimpan fasilitas ke database.\n\nDetail Error: ${error.message || 'Terjadi kesalahan pada server.'}`);
+    } finally {
+      setIsSavingFacility(false);
     }
   };
 
   const handleDeleteFacility = async (index: number) => {
-    const facilityTitle = facilitiesList[index]?.title;
+    const facility = facilitiesList[index];
+    if (!facility) return;
+    
     customConfirm(
       'Hapus Fasilitas',
-      `Apakah Anda yakin ingin menghapus fasilitas "${facilityTitle}" dari sistem master?`,
+      `Apakah Anda yakin ingin menghapus fasilitas "${facility.title}" dari sistem master?`,
       async () => {
-        const newList = facilitiesList.filter((_, idx) => idx !== index);
-        database.logActivity("System", "DELETE_FACILITY", `Menghapus fasilitas ${facilityTitle}`);
-        
-        if (settings) {
-          const updatedSettings = {
-            ...settings,
-            standard_facilities: JSON.stringify(newList)
-          };
-          const saved = await database.saveSettings(updatedSettings);
-          setSettingsState(saved);
-          triggerAppRefresh();
+        try {
+          await database.deleteMasterFacility(facility.id);
+        } catch (error: any) {
+          console.error("Gagal menghapus fasilitas:", error);
+          alert(`Gagal menghapus fasilitas dari database.\n\nDetail Error: ${error.message || 'Terjadi kesalahan pada server.'}`);
         }
       }
     );
@@ -751,7 +691,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         const updated = { ...b, status: 'rejected' as const };
         await database.saveBooking(updated);
         database.logActivity("System", "BOOKING_REJECT", `Sewa kamar ${b.room_number} ditolak`);
-        triggerAppRefresh();
+        
       }
     );
   };
@@ -764,7 +704,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         const updated = { ...s, status: 'survey_completed' as const };
         await database.saveSurvey(updated);
         database.logActivity("System", "SURVEY_COMPLETED", `Survey untuk kamar ${s.room_number} selesai`);
-        triggerAppRefresh();
+        
       }
     );
   };
@@ -791,7 +731,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         });
         
         database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
-        triggerAppRefresh();
+        
       }
     );
   };
@@ -804,7 +744,7 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         const updated = { ...s, status: 'survey_confirmed' as const };
         await database.saveSurvey(updated);
         database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
-        triggerAppRefresh();
+        
       }
     );
   };
@@ -817,15 +757,21 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
         const updated = { ...s, status: 'expired' as const };
         await database.saveSurvey(updated);
         database.logActivity("System", "SURVEY_CANCEL", `Pengajuan survey kamar ${s.room_number} dibatalkan`);
-        triggerAppRefresh();
+        
       }
     );
   };
 
   const handleAddProperty = async (payload: Partial<Property>) => {
-    await database.saveProperty(payload);
-    setShowPropertyModal(false);
-    triggerAppRefresh();
+    setIsSavingProperty(true);
+    try {
+      await database.saveProperty(payload);
+      setShowPropertyModal(false);
+    } catch (err) {
+      console.error('[Admin] Error saving property:', err);
+    } finally {
+      setIsSavingProperty(false);
+    }
   };
 
   const handleDeleteProperty = async (id: number) => {
@@ -833,16 +779,22 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       'Hapus Properti',
       'Apakah Anda yakin ingin menghapus properti kos ini? Semua metadata kamar di dalamnya juga akan terhapus.',
       async () => {
-        await database.deleteProperty(id);
-        triggerAppRefresh();
+        try {
+          await database.deleteProperty(id);
+        } catch (err) {
+          console.error('[Admin] Error deleting property:', err);
+        }
       }
     );
   };
 
   const handleAddRoom = async (payload: Partial<Room>) => {
-    await database.saveRoom(payload);
-    setShowRoomModal(false);
-    triggerAppRefresh();
+    try {
+      await database.saveRoom(payload);
+      setShowRoomModal(false);
+    } catch (err) {
+      console.error('[Admin] Error saving room:', err);
+    }
   };
 
   const handleDeleteRoom = async (id: number) => {
@@ -850,8 +802,11 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       'Hapus Kamar',
       'Ingin menghapus unit kamar ini?',
       async () => {
-        await database.deleteRoom(id);
-        triggerAppRefresh();
+        try {
+          await database.deleteRoom(id);
+        } catch (err) {
+          console.error('[Admin] Error deleting room:', err);
+        }
       }
     );
   };
@@ -867,9 +822,15 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       description: couponForm.description,
       min_duration_months: 1
     };
-    await database.saveCoupon(payload);
-    setShowCouponModal(false);
-    triggerAppRefresh();
+    setIsSavingCoupon(true);
+    try {
+      await database.saveCoupon(payload);
+      setShowCouponModal(false);
+    } catch (err) {
+      console.error('[Admin] Error saving coupon:', err);
+    } finally {
+      setIsSavingCoupon(false);
+    }
   };
 
   const handleSaveUser = async (e: React.FormEvent) => {
@@ -883,11 +844,17 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       access: userForm.role === 'super' ? 'Akses penuh sistem, log audit & database' : userForm.role === 'admin' ? 'Akses kontrol panel asrama & inventaris' : userForm.role === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas',
       active: userForm.active
     };
-    await database.saveUser(payload);
-    setShowUserModal(false);
-    setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true });
-    setActiveUserEdit(null);
-    triggerAppRefresh();
+    setIsSavingUser(true);
+    try {
+      await database.saveUser(payload);
+      setShowUserModal(false);
+      setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true });
+      setActiveUserEdit(null);
+    } catch (err) {
+      console.error('[Admin] Error saving user:', err);
+    } finally {
+      setIsSavingUser(false);
+    }
   };
 
   const handleDeleteUser = async (id: string) => {
@@ -895,8 +862,11 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       'Cabut Hak Akses',
       'Apakah Anda yakin ingin mencabut seluruh hak akses fungsionaris ini?',
       async () => {
-        await database.deleteUser(id);
-        triggerAppRefresh();
+        try {
+          await database.deleteUser(id);
+        } catch (err) {
+          console.error('[Admin] Error deleting user:', err);
+        }
       }
     );
   };
@@ -906,8 +876,11 @@ export default function Admin({ refreshTrigger, triggerAppRefresh }: AdminProps)
       'Hapus Kupon Promo',
       'Apakah Anda yakin ingin menghapus kupon promo ini secara permanen?',
       async () => {
-        await database.deleteCoupon(id);
-        triggerAppRefresh();
+        try {
+          await database.deleteCoupon(id);
+        } catch (err) {
+          console.error('[Admin] Error deleting coupon:', err);
+        }
       }
     );
   };
@@ -1212,11 +1185,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {facilitiesList
-                .filter(fac => fac.title.toLowerCase().includes(facilitySearchQuery.toLowerCase()))
-                .map((fac, idx) => {
+                .map((fac, originalIdx) => ({ fac, originalIdx }))
+                .filter(item => item.fac.title.toLowerCase().includes(facilitySearchQuery.toLowerCase()))
+                .map(({ fac, originalIdx }) => {
                   const IconComp = (LucideIcons as any)[fac.icon] || LucideIcons.HelpCircle;
                   return (
-                    <div key={idx} className="bg-white border border-[#E2E8F0] p-4 rounded-[20px] flex flex-col justify-between gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
+                    <div key={originalIdx} className="bg-white border border-[#E2E8F0] p-4 rounded-[20px] flex flex-col justify-between gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
                       <div className="flex items-start gap-3">
                         <div className="w-10 h-10 rounded-xl bg-[#0D9488]/10 text-[#0D9488] flex items-center justify-center shrink-0">
                           <IconComp size={18} />
@@ -1230,7 +1204,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <div className="flex gap-2 border-t border-[#F1F5F9] pt-3">
                         <button
                           onClick={() => {
-                            setEditingFacilityIndex(idx);
+                            setEditingFacilityIndex(originalIdx);
                             setFacilityForm({
                               title: fac.title,
                               subtitle: fac.subtitle || '',
@@ -1244,7 +1218,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           Ubah
                         </button>
                         <button
-                          onClick={() => handleDeleteFacility(idx)}
+                          onClick={() => handleDeleteFacility(originalIdx)}
                           className="flex-1 p-2 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
                         >
                           <Trash2 size={12} />
@@ -1912,7 +1886,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                   database.logActivity("System Finance", "POST_JOURNAL_MANUAL", "Debit " + journalForm.debitAccount + " Kredit " + journalForm.creditAccount + " Nominal Rp " + journalForm.amount);
                                   alert("Jurnal double-entry manual berhasil di-posting ke Ledger!");
                                   setJournalForm({ debitAccount: 1010, creditAccount: 4000, amount: 0, description: '' });
-                                  triggerAppRefresh();
+                                  
                                 } catch(err) {
                                   alert("Gagal mem-posting jurnal: " + err.message);
                                 }
@@ -1999,7 +1973,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                          await database.recordFinancialExpense(5100, 1100, p.amount, `Penghapusan Piutang Usaha - Tenant ${p.tenant_name} Inv ${p.id}`, "Penyesuaian Piutang");
                                          database.logActivity("System Finance", "WRITE_OFF_PIUTANG", `Write-off piutang tenant ${p.tenant_name} nominal Rp ${p.amount}`);
                                          alert("Sukses! Piutang berhasil di-Write-off dan dicatat sebagai beban operasional kos.");
-                                         triggerAppRefresh();
+                                         
                                        } catch(err: any) {
                                          alert("Gagal menghapus piutang: " + err.message);
                                        }
@@ -2117,31 +2091,44 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
  
                                if (expenseForm.approvalRequired) {
                                  // Add as a pending purchase order workflow (requires approval before posting journal)
-                                 const newPo = {
-                                   id: purchaseOrders.length ? Math.max(...purchaseOrders.map(p => p.id)) + 1 : 101,
-                                   vendor: expenseForm.vendor || 'Supplier Umum',
-                                   items: expenseForm.description,
-                                   amount: expenseForm.amount,
-                                   status: 'pending_approval',
-                                   date: new Date().toISOString().split('T')[0]
-                                 };
-                                 setPurchaseOrders([newPo, ...purchaseOrders]);
-                                 database.logActivity("System Finance", "REQUEST_PO_APPROVAL", `Pengajuan pembelian ${expenseForm.description} sebesar Rp ${expenseForm.amount}`);
-                                 alert("Pengajuan PO / Belanja berhasil dikirim ke antrean otorisasi Direksi.");
-                                 setExpenseForm({ category: 'Biaya Operasional', debitAccount: 5100, creditAccount: 1010, amount: 0, description: '', vendor: '', approvalRequired: false, approvalStatus: 'pending' });
+                                 try {
+                                   const newPo = {
+                                     vendor: expenseForm.vendor || 'Supplier Umum',
+                                     items: expenseForm.description,
+                                     amount: expenseForm.amount,
+                                     status: 'pending_approval' as const,
+                                     date: new Date().toISOString().split('T')[0]
+                                   };
+                                   const savedPo = await database.savePurchaseOrder(newPo);
+                                   setPurchaseOrders([savedPo, ...purchaseOrders]);
+                                   database.logActivity("System Finance", "REQUEST_PO_APPROVAL", `Pengajuan pembelian ${expenseForm.description} sebesar Rp ${expenseForm.amount}`);
+                                   alert("Pengajuan PO / Belanja berhasil dikirim ke antrean otorisasi Direksi.");
+                                   setExpenseForm({ category: 'Biaya Operasional', debitAccount: 5100, creditAccount: 1010, amount: 0, description: '', vendor: '', approvalRequired: false, approvalStatus: 'pending' });
+                                   
+                                 } catch (err: any) {
+                                   alert("Gagal mengajukan PO: " + err.message);
+                                 }
                                } else {
                                  // Post immediately (No approval required)
                                  try {
                                    await database.recordFinancialExpense(5100, 1010, expenseForm.amount, `${expenseForm.description} - Vendor: ${expenseForm.vendor || 'Umum'}`, expenseForm.category);
                                    
                                    // Update budgets spent!
+                                   const targetBudget = budgets.find(b => b.category.includes("Lain-lain") || b.category.includes("Operasional"));
+                                   if (targetBudget) {
+                                     await database.saveBudget({
+                                       ...targetBudget,
+                                       spent: targetBudget.spent + expenseForm.amount
+                                     });
+                                   }
+
                                    const updatedBudgets = budgets.map(b => b.category.includes("Lain-lain") || b.category.includes("Operasional") ? { ...b, spent: b.spent + expenseForm.amount } : b);
                                    setBudgets(updatedBudgets);
                                    
                                    database.logActivity("System Finance", "POST_EXPENSE", `Pencatatan beban ${expenseForm.description} Rp ${expenseForm.amount}`);
                                    alert("Pengeluaran operasional instan sukses di-posting ke Ledger!");
                                    setExpenseForm({ category: 'Biaya Operasional', debitAccount: 5100, creditAccount: 1010, amount: 0, description: '', vendor: '', approvalRequired: false, approvalStatus: 'pending' });
-                                   triggerAppRefresh();
+                                   
                                  } catch(err: any) {
                                    alert("Gagal mencatat belanja: " + err.message);
                                  }
@@ -2183,13 +2170,16 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                          // Approve and Post Double-entry journal entry!
                                          await database.recordFinancialExpense(5000, 1010, po.amount, `[PR PERSIDANGAN OK] PO #${po.id} - ${po.items}`, "Pemeliharaan Gedung");
                                          
+                                         // Update status in database
+                                         await database.savePurchaseOrder({ ...po, status: 'approved' });
+
                                          // Update status in local PO state
                                          const updatedPos = purchaseOrders.map(p => p.id === po.id ? { ...p, status: 'approved' } : p);
                                          setPurchaseOrders(updatedPos);
                                          
                                          database.logActivity("Director", "APPROVE_PO", `Menyetujui PO #${po.id} nominal Rp ${po.amount}`);
                                          alert("PO Berhasil Disetujui! Jurnal pengeluaran otomatis di-posting.");
-                                         triggerAppRefresh();
+                                         
                                        } catch(err: any) {
                                          alert("Gagal menyetujui PO: " + err.message);
                                        }
@@ -2239,7 +2229,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                <div className="flex justify-between items-center pt-1 border-t border-slate-200/50">
                                  <span className="text-[9px] text-[#64748B] font-sans">Min: {item.minStock} {item.unit}</span>
                                  <button
-                                   onClick={() => {
+                                   onClick={async () => {
                                      const rawAdjustment = prompt(`Stock Opname untuk ${item.name}. Masukkan stock real sekarang:`, item.stock.toString());
                                      if (rawAdjustment === null) return;
                                      const val = Number(rawAdjustment);
@@ -2253,17 +2243,21 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                        const cost = Math.abs(diff) * 25000; // standard item cost
                                        if (diff < 0) {
                                          // Stock down: post adjustment expense!
-                                         database.recordFinancialExpense(5100, 1010, cost, `[STOK OPNAME SELISIH] Pengurangan stock ${item.name} sebanyak ${Math.abs(diff)} unit`, "Kerugian Selisih Persediaan");
+                                         await database.recordFinancialExpense(5100, 1010, cost, `[STOK OPNAME SELISIH] Pengurangan stock ${item.name} sebanyak ${Math.abs(diff)} unit`, "Kerugian Selisih Persediaan");
                                        } else {
                                          // Stock up
-                                         database.recordFinancialExpense(1010, 4300, cost, `[STOK OPNAME SELISIH] Kelebihan penemuan persediaan ${item.name} sebanyak ${diff} unit`, "Pendapatan Operasional Lainnya");
+                                         await database.recordFinancialExpense(1010, 4300, cost, `[STOK OPNAME SELISIH] Kelebihan penemuan persediaan ${item.name} sebanyak ${diff} unit`, "Pendapatan Operasional Lainnya");
                                        }
+                                       
+                                       // Save to database
+                                       await database.saveInventoryItem({ ...item, stock: val });
+
                                        database.logActivity("System Finance", "STOCK_OPNAME", `Stock opname ${item.name} disesuaikan dari ${item.stock} ke ${val}`);
                                        alert("Stock Opname tersimpan! Jurnal selisih inventaris ter-posting otomatis.");
                                        
                                        const updatedItems = inventoryItems.map(i => i.id === item.id ? { ...i, stock: val } : i);
                                        setInventoryItems(updatedItems);
-                                       triggerAppRefresh();
+                                       
                                      }
                                    }}
                                    className="text-[9px] text-[#10b981] font-bold border border-emerald-200 bg-emerald-50/50 px-2 py-0.5 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer font-sans"
@@ -2316,6 +2310,14 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                  // Post double-entry journal entry: Debit Beban Penyusutan (5100), Credit Accumulated Depreciation (asset reduction)
                                  await database.recordFinancialExpense(5100, 1010, totalDepr, `Depresiasi Bulanan Otomatis Aset Tetap Kos - Juni 2026`, "Beban Penyusutan Aset");
                                  
+                                 // Persist updated accumDepr for each asset in database
+                                 for (const asset of assetsState) {
+                                   await database.saveFixedAsset({
+                                     ...asset,
+                                     accumDepr: asset.accumDepr + asset.deprRate
+                                   });
+                                 }
+
                                  // Adjust asset list accumulated values
                                  const updatedAssets = assetsState.map(asset => ({
                                    ...asset,
@@ -2325,7 +2327,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                  
                                  database.logActivity("System Finance", "ASSET_DEPRECIATION", `Menyusutkan aset tetap bulan ini senilai Rp ${totalDepr}`);
                                  alert(`Sukses! Penyusutan senilai Rp ${totalDepr.toLocaleString('id-ID')} berhasil didepresiasikan dan dicatat di Buku Jurnal Umum.`);
-                                 triggerAppRefresh();
+                                 
                                } catch(err: any) {
                                  alert("Gagal mendepresiasi aset: " + err.message);
                                }
@@ -2384,7 +2386,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                    await database.recordFinancialExpense(5000, 1010, 75000, "Pembayaran bahan WO-092 pipa bocor kamar R201", "Pemeliharaan Gedung");
                                    database.logActivity("System Finance", "RESOLVE_WO_COST", "Pembebanan biaya WO-092 pipa bocor kamar R201");
                                    alert("Biaya Work-Order pipa bocor berhasil di-posting ke Jurnal Pemeliharaan!");
-                                   triggerAppRefresh();
+                                   
                                  } catch(e: any) {
                                    alert(e.message);
                                  }
@@ -2410,7 +2412,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                    await database.recordFinancialExpense(5000, 1010, 150000, "Pembayaran invoice WO-089 service AC F102", "Pemeliharaan Gedung");
                                    database.logActivity("System Finance", "RESOLVE_WO_COST", "Pembebanan biaya WO-089 service AC F102");
                                    alert("Biaya service AC telah dicatat sebagai beban pemeliharaan!");
-                                   triggerAppRefresh();
+                                   
                                  } catch(e: any) {
                                    alert(e.message);
                                  }
@@ -2466,13 +2468,16 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                        // Debit Beban Operasional Lain-lain (5100), Credit Kas Kecil/Petty Cash (1000)
                                        await database.recordFinancialExpense(5100, 1000, req.amount, `[PETTY CASH OK] Reimbursement ${req.applicant} - ${req.purpose}`, "Beban Operasional");
                                        
+                                       // Save to database
+                                       await database.savePettyCashRequest({ ...req, status: 'approved' });
+                                       
                                        // Update local status
                                        const updatedPetty = pettyCashRequests.map(p => p.id === req.id ? { ...p, status: 'approved' } : p);
                                        setPettyCashRequests(updatedPetty);
                                        
                                        database.logActivity("System Finance", "APPROVE_REIMBURSEMENT", `Setuju Kas Kecil ${req.applicant} Rp ${req.amount}`);
                                        alert("Permohonan Kas Kecil disetujui dan dicairkan otomatis dari Petty Cash!");
-                                       triggerAppRefresh();
+                                       
                                      } catch(err: any) {
                                        alert("Gagal mem-proses kas kecil: " + err.message);
                                      }
@@ -2496,17 +2501,83 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                            <h3 className="text-sm font-bold text-slate-800 font-display">Siklus Rekonsiliasi Bank Mandiri VA</h3>
                          </div>
                          <button
-                           onClick={() => {
-                             // Run Bank Auto-matching
-                             const updatedStatements = bankStatement.map(stmt => {
-                               if (!stmt.matched) {
-                                 return { ...stmt, matched: true, matchedRef: stmt.desc.includes("Siska") ? "INV-002" : "M-TOKEN" };
-                               }
-                               return stmt;
-                             });
-                             setBankStatement(updatedStatements);
-                             database.logActivity("System Finance", "BANK_RECONCILIATION", "Otomatisasi kliring & rekonsiliasi laporan rekening koran Bank Mandiri");
-                             alert("Sukses! 3 baris mutasi koran bank berhasil dicocokkan otomatis dengan record transaksi piutang dan invoice.");
+                           onClick={async () => {
+                             try {
+                               const getDaysDiff = (d1Str: string, d2Str: string) => {
+                                 try {
+                                   const d1 = new Date(d1Str.split('T')[0]);
+                                   const d2 = new Date(d2Str.split('T')[0]);
+                                   if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return 999;
+                                   return Math.abs((d1.getTime() - d2.getTime()) / (1000 * 60 * 60 * 24));
+                                 } catch {
+                                   return 999;
+                                 }
+                               };
+
+                               let autoMatchedCount = 0;
+                               let manualNeedsCount = 0;
+                               const newCandidates: Record<number, PaymentInvoice[]> = {};
+
+                               const updatedStatements = await Promise.all(bankStatement.map(async stmt => {
+                                 if (stmt.matched) return stmt;
+
+                                 // Find all payment candidates with the exact amount
+                                 const possiblePayments = payments.filter(p => p.amount === stmt.amount);
+
+                                 if (possiblePayments.length === 0) {
+                                   return stmt;
+                                 }
+
+                                 // Filter by date range (<= 3 days difference)
+                                 const dateClosePayments = possiblePayments.filter(p => {
+                                   const diff = getDaysDiff(stmt.date, p.payment_date || p.created_at || '');
+                                   return diff <= 3;
+                                 });
+
+                                 if (dateClosePayments.length === 0) {
+                                   newCandidates[stmt.id] = possiblePayments;
+                                   manualNeedsCount++;
+                                   return stmt;
+                                 }
+
+                                 // Check for strong reference matches: invoice id or tenant name in description
+                                 const strongMatches = dateClosePayments.filter(p => {
+                                   const descLower = stmt.desc.toLowerCase();
+                                   const idMatch = p.id && descLower.includes(p.id.toLowerCase());
+                                   const tenantMatch = p.tenant_name && descLower.includes(p.tenant_name.toLowerCase());
+                                   return idMatch || tenantMatch;
+                                 });
+
+                                 if (strongMatches.length === 1) {
+                                   const matchedPayment = strongMatches[0];
+                                   const updatedStmt = { ...stmt, matched: true, matchedRef: matchedPayment.id };
+                                   autoMatchedCount++;
+                                   
+                                   await database.logActivity(
+                                     "System Finance", 
+                                     "BANK_RECONCILIATION_MATCH", 
+                                     `Pencocokan otomatis mutasi ${stmt.desc} dengan invoice ${matchedPayment.id} (${matchedPayment.tenant_name})`
+                                   );
+                                   
+                                   return await database.saveBankStatementItem(updatedStmt);
+                                 } else {
+                                   newCandidates[stmt.id] = dateClosePayments;
+                                   manualNeedsCount++;
+                                   return stmt;
+                                 }
+                               }));
+
+                               setBankStatement(updatedStatements);
+                               setReconciliationCandidates(newCandidates);
+
+                               if (autoMatchedCount > 0 || manualNeedsCount > 0) {
+                                 alert(`Hasil rekonsiliasi otomatis:\n- ${autoMatchedCount} mutasi berhasil dicocokkan otomatis (exact match).\n- ${manualNeedsCount} mutasi membutuhkan konfirmasi manual Anda karena ambigu/tidak ada rujukan langsung.`);
+                               } else {
+                                 alert("Tidak ditemukan mutasi baru yang cocok dengan data pembayaran saat ini.");
+                                }
+                             } catch (err: any) {
+                               alert("Gagal melakukan rekonsiliasi bank: " + err.message);
+                             }
                            }}
                            className="bg-slate-900 hover:bg-[#0D9488]/10 text-[#0D9488] text-white text-[10px] font-bold px-3 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs font-sans"
                          >
@@ -2517,24 +2588,70 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
  
                        <div className="space-y-3">
                          {bankStatement.map((stmt) => (
-                           <div key={stmt.id} className="p-3 bg-slate-50 border border-slate-100 rounded-2xl flex justify-between gap-4 font-sans">
-                             <div className="space-y-1">
-                               <div className="flex items-center gap-2">
-                                 <span className="font-mono text-[9px] text-[#64748B]">{stmt.date}</span>
-                                 <span className={`text-[8px] px-1.5 py-0.5 rounded font-extrabold uppercase font-mono ${
-                                   stmt.matched ? 'bg-emerald-50 text-brand-green' : 'bg-red-50 text-red-500 animate-pulse'
-                                 }`}>
-                                   {stmt.matched ? 'Reconciled / Kliring' : 'Unmatched'}
-                                 </span>
+                           <div key={stmt.id} className="p-3 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col gap-2 font-sans">
+                             <div className="flex justify-between gap-4">
+                               <div className="space-y-1">
+                                 <div className="flex items-center gap-2">
+                                   <span className="font-mono text-[9px] text-[#64748B]">{stmt.date}</span>
+                                   <span className={`text-[8px] px-1.5 py-0.5 rounded font-extrabold uppercase font-mono ${
+                                     stmt.matched ? 'bg-emerald-50 text-brand-green' : 'bg-red-50 text-red-500 animate-pulse'
+                                   }`}>
+                                     {stmt.matched ? 'Reconciled / Kliring' : 'Unmatched'}
+                                   </span>
+                                 </div>
+                                 <p className="text-xs font-bold text-slate-800">{stmt.desc}</p>
+                                 {stmt.matched && (
+                                   <span className="text-[9px] text-slate-500 block">Tautan Ref: **{stmt.matchedRef || 'INV-001'}**</span>
+                                 )}
                                </div>
-                               <p className="text-xs font-bold text-slate-800">{stmt.desc}</p>
-                               {stmt.matched && (
-                                 <span className="text-[9px] text-slate-500 block">Tautan Ref: **{stmt.matchedRef || 'INV-001'}**</span>
-                               )}
+                               <span className={`font-mono text-xs font-bold shrink-0 self-start ${stmt.type === 'debit' ? 'text-red-500' : 'text-emerald-500'}`}>
+                                 {stmt.type === 'debit' ? '-' : '+'}{formatRupiah(stmt.amount)}
+                                </span>
                              </div>
-                             <span className={`font-mono text-xs font-bold shrink-0 self-start ${stmt.type === 'debit' ? 'text-red-500' : 'text-emerald-500'}`}>
-                               {stmt.type === 'debit' ? '-' : '+'}{formatRupiah(stmt.amount)}
-                             </span>
+
+                             {!stmt.matched && reconciliationCandidates[stmt.id] && reconciliationCandidates[stmt.id].length > 0 && (
+                               <div className="mt-1 p-2.5 bg-amber-50/50 border border-amber-100 rounded-xl space-y-2">
+                                 <span className="text-[9px] font-bold text-amber-800 block">💡 Kandidat Pencocokan ({reconciliationCandidates[stmt.id].length}):</span>
+                                 <div className="space-y-1.5">
+                                   {reconciliationCandidates[stmt.id].map(cand => (
+                                     <div key={cand.id} className="flex justify-between items-center bg-white p-2 rounded-lg border border-amber-200/60 shadow-2xs gap-3">
+                                       <div>
+                                         <span className="text-[10px] font-extrabold text-slate-800 font-mono block">{cand.id}</span>
+                                         <span className="text-[8px] text-[#64748B] block">Tenant: {cand.tenant_name} | Tanggal: {cand.payment_date}</span>
+                                       </div>
+                                       <button
+                                         onClick={async () => {
+                                           try {
+                                             const updatedStmt = { ...stmt, matched: true, matchedRef: cand.id };
+                                             const saved = await database.saveBankStatementItem(updatedStmt);
+                                             
+                                             setBankStatement(prev => prev.map(s => s.id === stmt.id ? saved : s));
+                                             
+                                             setReconciliationCandidates(prev => {
+                                               const copy = { ...prev };
+                                               delete copy[stmt.id];
+                                               return copy;
+                                             });
+
+                                             await database.logActivity(
+                                               "System Finance",
+                                               "BANK_RECONCILIATION_CONFIRM",
+                                               `Konfirmasi manual mutasi ${stmt.desc} dicocokkan dengan invoice ${cand.id}`
+                                             );
+                                             alert(`Sukses mencocokkan mutasi bank dengan ${cand.id}!`);
+                                           } catch (err: any) {
+                                             alert("Gagal mencatat pencocokan: " + err.message);
+                                           }
+                                         }}
+                                         className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[8px] px-2 py-1 rounded transition-colors cursor-pointer"
+                                       >
+                                         Pilih & Kliring
+                                       </button>
+                                     </div>
+                                   ))}
+                                 </div>
+                               </div>
+                             )}
                            </div>
                          ))}
                        </div>
@@ -2576,7 +2693,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                  await database.recordFinancialReclassification(2100, 1010, taxBalance, "Penyetoran SSPD Pajak PBJT Daerah 10% Masa Pajak Juni 2026");
                                  database.logActivity("System Finance", "PAY_TAX_PBJT", `Penyetoran pajak daerah Rp ${taxBalance}`);
                                  alert("Sukses! Pajak daerah PBJT berhasil disetorkan dan Jurnal double-entry penyesuaian pajak ter-posting.");
-                                 triggerAppRefresh();
+                                 
                                } catch(err: any) {
                                  alert("Gagal menyetorkan pajak: " + err.message);
                                }
@@ -2981,7 +3098,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       database.saveRoom({ ...matchedRoom, status: 'occupied', current_tenant_name: nameInput });
                     }
                     database.logActivity("System", "MANUAL_TENANT_ADD", `Menambah penghuni manual: ${nameInput} di kamar ${roomInput}`);
-                    triggerAppRefresh();
+                    
                   }
                 }}
                 className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all shadow-sm focus:outline-none cursor-pointer"
@@ -3086,7 +3203,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                   }
 
                                   database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name} (Status: Checkout)`);
-                                  triggerAppRefresh();
+                                  
                                 }
                               );
                             }}
@@ -3212,7 +3329,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     'Apakah Anda yakin ingin mematikan / membersihkan semua log aktivitas sistem penampungan?',
                     async () => {
                       await database.clearActivityLogs();
-                      triggerAppRefresh();
+                      
                     }
                   );
                 }}
@@ -3652,6 +3769,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           property={activePropertyEdit}
           onSave={handleAddProperty}
           onCancel={() => setShowPropertyModal(false)}
+          isSaving={isSavingProperty}
         />
       </Modal>
 
@@ -3744,16 +3862,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
+              disabled={isSavingFacility}
               onClick={() => setShowFacilityModal(false)}
-              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all duration-200 cursor-pointer"
+              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Batal
             </button>
             <button
               type="submit"
-              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all duration-200 cursor-pointer"
+              disabled={isSavingFacility}
+              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {editingFacilityIndex !== null ? 'Simpan Perubahan' : 'Tambah Fasilitas'}
+              {isSavingFacility ? 'Menyimpan...' : (editingFacilityIndex !== null ? 'Simpan Perubahan' : 'Tambah Master Fasilitas')}
             </button>
           </div>
         </form>
@@ -3898,16 +4018,25 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
+              disabled={isSavingCoupon}
               onClick={() => setShowCouponModal(false)}
-              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-[#3A444D] font-bold transition-all cursor-pointer"
+              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-[#3A444D] font-bold transition-all cursor-pointer disabled:opacity-50"
             >
               Batalkan
             </button>
             <button
               type="submit"
-              className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all cursor-pointer text-[11px]"
+              disabled={isSavingCoupon}
+              className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all cursor-pointer text-[11px] disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
-              Terbitkan Sekarang
+              {isSavingCoupon ? (
+                <>
+                  <RotateCw size={13} className="animate-spin" />
+                  <span>Menerbitkan...</span>
+                </>
+              ) : (
+                'Terbitkan Sekarang'
+              )}
             </button>
           </div>
         </form>
@@ -3986,16 +4115,25 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
+              disabled={isSavingUser}
               onClick={() => setShowUserModal(false)}
-              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-[#3A444D] font-bold transition-all text-xs cursor-pointer"
+              className="flex-1 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-[#3A444D] font-bold transition-all text-xs cursor-pointer disabled:opacity-50"
             >
               Batalkan
             </button>
             <button
               type="submit"
-              className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all text-xs cursor-pointer"
+              disabled={isSavingUser}
+              className="flex-1 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-450 border border-amber-500 text-black font-extrabold transition-all text-xs cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
-              Simpan Otorisasi
+              {isSavingUser ? (
+                <>
+                  <RotateCw size={13} className="animate-spin" />
+                  <span>Menyimpan...</span>
+                </>
+              ) : (
+                'Simpan Otorisasi'
+              )}
             </button>
           </div>
         </form>

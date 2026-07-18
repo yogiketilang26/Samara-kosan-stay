@@ -853,6 +853,509 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // 3. AUTHENTICATION API (SUPABASE BACKEND PROXY WITH COOKIES & TOKEN)
+  // =========================================================================
+
+  function getSupabaseServerClient(token?: string) {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error('Supabase URL atau Anon Key tidak dikonfigurasi di server');
+    }
+    const options: any = {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      }
+    };
+    if (token) {
+      options.global = {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      };
+    }
+    return createClient(supabaseUrl, supabaseAnonKey, options);
+  }
+
+  function getCookie(req: any, name: string): string | null {
+    const cookieHeader = req.headers.cookie;
+    if (!cookieHeader) return null;
+    const list: Record<string, string> = {};
+    cookieHeader.split(';').forEach((cookie: string) => {
+      const parts = cookie.split('=');
+      const key = parts.shift()?.trim();
+      if (key) {
+        list[key] = decodeURIComponent(parts.join('='));
+      }
+    });
+    return list[name] || null;
+  }
+
+  function setAuthCookies(res: any, accessToken: string, refreshToken: string, expiresInSec: number) {
+    const secure = process.env.NODE_ENV === 'production' ? 'Secure;' : '';
+    const cookies = [
+      `sb-access-token=${accessToken}; Path=/; HttpOnly; SameSite=Lax; ${secure} Max-Age=${expiresInSec}`,
+      `sb-refresh-token=${refreshToken}; Path=/; HttpOnly; SameSite=Lax; ${secure} Max-Age=31536000`
+    ];
+    res.setHeader('Set-Cookie', cookies);
+  }
+
+  function clearAuthCookies(res: any) {
+    const secure = process.env.NODE_ENV === 'production' ? 'Secure;' : '';
+    res.setHeader('Set-Cookie', [
+      `sb-access-token=; Path=/; HttpOnly; SameSite=Lax; ${secure} Max-Age=0`,
+      `sb-refresh-token=; Path=/; HttpOnly; SameSite=Lax; ${secure} Max-Age=0`
+    ]);
+  }
+
+  async function getOrMigrateUserProfile(client: any, user: any) {
+    if (!user) return null;
+    let { data: userData, error: userError } = await client
+      .from('users')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (userError) {
+      console.error('[AUTH API] Error fetching user profile:', userError);
+    }
+
+    // Self-healing fallback: Synthesize user profile if missing or blocked by RLS
+    if (!userData) {
+      const email = (user.email || '').trim().toLowerCase();
+      const isSuper = email === 'admin@samarastay.co.id' || email === 'yogiketilang33@gmail.com';
+      userData = {
+        id: user.id,
+        full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+        email: email,
+        role: isSuper ? 'super' : 'staff',
+        role_id: isSuper ? 1 : 4,
+        access: isSuper ? 'Semua Properti' : 'Staff akses terbatas',
+        active: true,
+        created_at: new Date().toISOString()
+      };
+      console.log(`[AUTH API] Synthesized profile for user ${email} (isSuper: ${isSuper})`);
+    }
+
+    return userData;
+  }
+
+  // POST /api/auth/login
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ success: false, error: 'Email dan password wajib diisi' });
+      }
+
+      const client = getSupabaseServerClient();
+      const { data, error } = await client.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password: password.trim()
+      });
+
+      if (error || !data.session) {
+        let errMsg = error?.message || 'Gagal masuk sesi';
+        const lowerMsg = errMsg.toLowerCase();
+        if (lowerMsg.includes('email not confirmed')) {
+          errMsg = 'Email Anda belum dikonfirmasi. Silakan periksa kotak masuk (atau folder spam) email Anda untuk melakukan verifikasi akun sebelum masuk.';
+        } else if (lowerMsg.includes('invalid login credentials') || lowerMsg.includes('invalid_grant')) {
+          errMsg = 'Email atau kata sandi yang Anda masukkan salah. Silakan coba lagi.';
+        }
+        return res.status(401).json({ success: false, error: errMsg });
+      }
+
+      const { session, user } = data;
+
+      // Create an authenticated client on behalf of the logged-in user
+      const authClient = getSupabaseServerClient(session.access_token);
+
+      // Fetch user profile from public.users table using authenticated client
+      const userData = await getOrMigrateUserProfile(authClient, user);
+
+      let profile: any;
+      if (userData) {
+        if (!userData.active) {
+          return res.status(403).json({ success: false, error: 'Akun Anda dinonaktifkan' });
+        }
+        const appRole = (userData.role === 'admin' || userData.role === 'super' || userData.role === 'finance') ? 'admin' : 'user';
+        profile = {
+          id: user.id,
+          email: user.email || '',
+          name: userData.full_name || user.email?.split('@')[0] || 'User',
+          role: appRole,
+          raw_role: userData.role
+        };
+      } else {
+        // Auto-create profile in public.users if missing
+        const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+        const defaultRole = 'staff'; // default to staff (lowest privilege)
+        const newUserRecord = {
+          id: user.id,
+          email: user.email || '',
+          full_name: fullName,
+          role: defaultRole,
+          role_id: 4,
+          active: true,
+          created_at: new Date().toISOString()
+        };
+
+        const { error: insertErr } = await authClient.from('users').insert(newUserRecord);
+        if (insertErr) {
+          console.error('[AUTH API] Failed to auto-create user profile:', insertErr);
+        }
+
+        profile = {
+          id: user.id,
+          email: user.email || '',
+          name: fullName,
+          role: 'user',
+          raw_role: defaultRole
+        };
+      }
+
+      setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
+      return res.json({
+        success: true,
+        user: profile,
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in
+      });
+    } catch (err: any) {
+      console.error('[AUTH API ERROR] Login exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan sistem' });
+    }
+  });
+
+  // POST /api/auth/register
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const { email, password, fullName } = req.body;
+      if (!email || !password || !fullName) {
+        return res.status(400).json({ success: false, error: 'Email, password, dan nama lengkap wajib diisi' });
+      }
+
+      const client = getSupabaseServerClient();
+      const cleanEmail = email.trim().toLowerCase();
+      
+      const { data, error } = await client.auth.signUp({
+        email: cleanEmail,
+        password: password.trim(),
+        options: {
+          data: {
+            full_name: fullName.trim()
+          }
+        }
+      });
+
+      if (error) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+
+      if (data.user) {
+        const newUserRecord = {
+          id: data.user.id,
+          email: cleanEmail,
+          full_name: fullName.trim(),
+          role: 'staff', // default to staff (lowest privilege)
+          role_id: 4,
+          active: true,
+          created_at: new Date().toISOString()
+        };
+
+        // If signUp returned a session immediately, use it to insert authenticated
+        if (data.session) {
+          const authClient = getSupabaseServerClient(data.session.access_token);
+          const { error: insertErr } = await authClient.from('users').insert(newUserRecord);
+          if (insertErr) {
+            console.warn('[AUTH API] Error inserting user profile with signup session:', insertErr);
+          }
+
+          setAuthCookies(res, data.session.access_token, data.session.refresh_token, data.session.expires_in);
+          return res.json({
+            success: true,
+            user: {
+              id: data.user.id,
+              email: cleanEmail,
+              name: fullName.trim(),
+              role: 'user',
+              raw_role: 'staff'
+            },
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token,
+            expires_in: data.session.expires_in
+          });
+        }
+
+        // Try unauthenticated insert if no session yet (might fail under RLS, but we retry on sign-in fallback)
+        const { error: initialInsertErr } = await client.from('users').insert(newUserRecord);
+        if (initialInsertErr) {
+          console.log('[AUTH API] Unauthenticated initial profile insert skipped or failed (will retry after sign-in):', initialInsertErr.message);
+        }
+
+        // Attempt instant sign-in with password as fallback to get valid session
+        try {
+          const { data: signInData, error: signInErr } = await client.auth.signInWithPassword({
+            email: cleanEmail,
+            password: password.trim()
+          });
+
+          if (!signInErr && signInData.session) {
+            // Re-attempt profile insertion with authenticated client now that we have a valid session
+            const authClient = getSupabaseServerClient(signInData.session.access_token);
+            const { error: insertRetryErr } = await authClient.from('users').insert(newUserRecord);
+            if (insertRetryErr) {
+              console.warn('[AUTH API] Error inserting user profile on retry:', insertRetryErr);
+            }
+
+            setAuthCookies(res, signInData.session.access_token, signInData.session.refresh_token, signInData.session.expires_in);
+            return res.json({
+              success: true,
+              user: {
+                id: signInData.user.id,
+                email: cleanEmail,
+                name: fullName.trim(),
+                role: 'user',
+                raw_role: 'staff'
+              },
+              access_token: signInData.session.access_token,
+              refresh_token: signInData.session.refresh_token,
+              expires_in: signInData.session.expires_in
+            });
+          }
+        } catch (e) {}
+
+        return res.json({
+          success: true,
+          message: 'Pendaftaran berhasil! Silakan periksa kotak masuk (atau folder spam) email Anda untuk melakukan verifikasi akun sebelum masuk.'
+        });
+      }
+
+      return res.status(400).json({ success: false, error: 'Gagal mendaftarkan akun' });
+    } catch (err: any) {
+      console.error('[AUTH API ERROR] Register exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan sistem' });
+    }
+  });
+
+  // POST /api/auth/logout
+  app.post('/api/auth/logout', async (req, res) => {
+    try {
+      const accessToken = getCookie(req, 'sb-access-token');
+      if (accessToken) {
+        const client = getSupabaseServerClient(accessToken);
+        await client.auth.signOut().catch(() => {});
+      }
+    } catch (e) {}
+    clearAuthCookies(res);
+    return res.json({ success: true });
+  });
+
+  // GET /api/auth/me
+  app.get('/api/auth/me', async (req, res) => {
+    try {
+      let accessToken = getCookie(req, 'sb-access-token');
+      let refreshToken = getCookie(req, 'sb-refresh-token');
+
+      // Check Authorization header fallback
+      if (!accessToken && req.headers.authorization) {
+        const parts = req.headers.authorization.split(' ');
+        if (parts[0] === 'Bearer') {
+          accessToken = parts[1];
+        }
+      }
+
+      if (!accessToken) {
+        // If we have a refresh token, try to refresh immediately
+        if (refreshToken) {
+          const client = getSupabaseServerClient();
+          const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
+          if (!error && data.session) {
+            const { session, user } = data;
+            setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
+            
+            const userData = await getOrMigrateUserProfile(client, user);
+            const appRole = (userData?.role === 'admin' || userData?.role === 'super' || userData?.role === 'finance') ? 'admin' : 'user';
+            
+            return res.json({
+              success: true,
+              user: {
+                id: user.id,
+                email: user.email || '',
+                name: userData?.full_name || user.email?.split('@')[0] || 'User',
+                role: appRole,
+                raw_role: userData?.role || 'admin'
+              },
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+              expires_in: session.expires_in
+            });
+          }
+        }
+        return res.status(401).json({ success: false, error: 'Tidak terotentikasi' });
+      }
+
+      const client = getSupabaseServerClient(accessToken);
+      const { data: { user }, error } = await client.auth.getUser(accessToken);
+
+      if (error || !user) {
+        // Access token might be expired. Try to refresh if we have a refresh token
+        if (refreshToken) {
+          const freshClient = getSupabaseServerClient();
+          const { data, error: refreshErr } = await freshClient.auth.refreshSession({ refresh_token: refreshToken });
+          if (!refreshErr && data.session) {
+            const { session, user: refreshedUser } = data;
+            setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
+            
+            const userData = await getOrMigrateUserProfile(freshClient, refreshedUser);
+            const appRole = (userData?.role === 'admin' || userData?.role === 'super' || userData?.role === 'finance') ? 'admin' : 'user';
+            
+            return res.json({
+              success: true,
+              user: {
+                id: refreshedUser.id,
+                email: refreshedUser.email || '',
+                name: userData?.full_name || refreshedUser.email?.split('@')[0] || 'User',
+                role: appRole,
+                raw_role: userData?.role || 'admin'
+              },
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+              expires_in: session.expires_in
+            });
+          }
+        }
+        clearAuthCookies(res);
+        return res.status(401).json({ success: false, error: 'Sesi kedaluwarsa atau tidak valid' });
+      }
+
+      // Fetch user profile from public.users table
+      const userData = await getOrMigrateUserProfile(client, user);
+
+      if (userData && !userData.active) {
+        clearAuthCookies(res);
+        return res.status(403).json({ success: false, error: 'Akun Anda dinonaktifkan' });
+      }
+
+      const appRole = (userData?.role === 'admin' || userData?.role === 'super' || userData?.role === 'finance') ? 'admin' : 'user';
+      return res.json({
+        success: true,
+        user: {
+          id: user.id,
+          email: user.email || '',
+          name: userData?.full_name || user.email?.split('@')[0] || 'User',
+          role: appRole,
+          raw_role: userData?.role || 'admin'
+        },
+        access_token: accessToken,
+        refresh_token: refreshToken
+      });
+    } catch (err: any) {
+      console.error('[AUTH API ERROR] GetMe exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan sistem' });
+    }
+  });
+
+  // POST /api/auth/refresh
+  app.post('/api/auth/refresh', async (req, res) => {
+    try {
+      let refreshToken = req.body.refresh_token || getCookie(req, 'sb-refresh-token');
+      if (!refreshToken) {
+        return res.status(400).json({ success: false, error: 'Refresh token tidak ditemukan' });
+      }
+
+      const client = getSupabaseServerClient();
+      const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
+
+      if (error || !data.session) {
+        clearAuthCookies(res);
+        return res.status(401).json({ success: false, error: error?.message || 'Gagal menyegarkan sesi' });
+      }
+
+      const { session, user } = data;
+      setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
+
+      const userData = await getOrMigrateUserProfile(client, user);
+      const appRole = (userData?.role === 'admin' || userData?.role === 'super' || userData?.role === 'finance') ? 'admin' : 'user';
+
+      return res.json({
+        success: true,
+        user: {
+          id: user.id,
+          email: user.email || '',
+          name: userData?.full_name || user.email?.split('@')[0] || 'User',
+          role: appRole,
+          raw_role: userData?.role || 'admin'
+        },
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in
+      });
+    } catch (err: any) {
+      console.error('[AUTH API ERROR] Refresh exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan sistem' });
+    }
+  });
+
+  // POST /api/auth/reset-password
+  app.post('/api/auth/reset-password', async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ success: false, error: 'Email wajib diisi' });
+      }
+
+      const client = getSupabaseServerClient();
+      const { error } = await client.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+        redirectTo: `${req.protocol}://${req.get('host')}/reset-password-callback`
+      });
+
+      if (error) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, message: 'Email pemulihan kata sandi telah dikirim' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan sistem' });
+    }
+  });
+
+  // POST /api/auth/change-password
+  app.post('/api/auth/change-password', async (req, res) => {
+    try {
+      const { password } = req.body;
+      if (!password) {
+        return res.status(400).json({ success: false, error: 'Password baru wajib diisi' });
+      }
+
+      let accessToken = getCookie(req, 'sb-access-token');
+      if (!accessToken && req.headers.authorization) {
+        const parts = req.headers.authorization.split(' ');
+        if (parts[0] === 'Bearer') {
+          accessToken = parts[1];
+        }
+      }
+
+      if (!accessToken) {
+        return res.status(401).json({ success: false, error: 'Tidak terotentikasi' });
+      }
+
+      const client = getSupabaseServerClient(accessToken);
+      const { error } = await client.auth.updateUser({ password: password.trim() });
+
+      if (error) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, message: 'Kata sandi berhasil diperbarui' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan sistem' });
+    }
+  });
+
   // API Health Indicator
   app.get('/api/health', (req, res) => {
     res.json({

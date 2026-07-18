@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { database, supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 
 export interface UserProfile {
   id: string;
@@ -12,6 +12,7 @@ interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signup: (email: string, password: string, fullName: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
 }
 
@@ -21,98 +22,126 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Check backend session on mount
   useEffect(() => {
-    // Check local storage for persistent session
-    const storedUser = localStorage.getItem('samara_auth_session');
-    if (storedUser) {
+    const checkSession = async () => {
       try {
-        setUser(JSON.parse(storedUser));
-      } catch (e) {
-        localStorage.removeItem('samara_auth_session');
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.user) {
+            if (data.access_token && data.refresh_token) {
+              await supabase.auth.setSession({
+                access_token: data.access_token,
+                refresh_token: data.refresh_token
+              }).catch((e) => console.error('[AUTH] Failed to set client-side supabase session on mount:', e));
+            }
+            setUser(data.user);
+          } else {
+            setUser(null);
+          }
+        } else {
+          setUser(null);
+        }
+      } catch (err) {
+        console.error('[AUTH] Failed to fetch current session:', err);
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
-    }
-    setLoading(false);
+    };
+
+    checkSession();
   }, []);
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    setLoading(true);
     try {
-      const cleanEmail = email.trim().toLowerCase();
-      const cleanPassword = password.trim();
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password: password.trim()
+        }),
+      });
 
-      // Standard / Sandbox secure default credentials
-      if (
-        (cleanEmail === 'admin@samarastay.co.id' || cleanEmail === 'yogiketilang33@gmail.com') && 
-        cleanPassword === 'samarastay2026'
-      ) {
-        const adminUser: UserProfile = {
-          id: cleanEmail === 'yogiketilang33@gmail.com' ? 'admin-root-01' : 'admin-001',
-          name: cleanEmail === 'yogiketilang33@gmail.com' ? 'Super Admin Utama' : 'Samara Admin Operator',
-          email: cleanEmail,
-          role: 'admin'
-        };
-        setUser(adminUser);
-        localStorage.setItem('samara_auth_session', JSON.stringify(adminUser));
-        database.logActivity("System", "ADMIN_LOGIN", `Admin ${adminUser.name} berhasil masuk via Secure Auth`);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || 'Email atau password salah.' };
+      }
+
+      if (data.user) {
+        if (data.access_token && data.refresh_token) {
+          await supabase.auth.setSession({
+            access_token: data.access_token,
+            refresh_token: data.refresh_token
+          }).catch((e) => console.error('[AUTH] Failed to set client-side supabase session during login:', e));
+        }
+        setUser(data.user);
         return { success: true };
       }
 
-      // If Supabase Auth is configured, let's also allow authenticating via real Supabase Auth
-      if (isSupabaseConfigured && supabase) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password: cleanPassword
-        });
+      return { success: false, error: 'Format respon dari server tidak valid' };
+    } catch (err: any) {
+      console.error('[AUTH] Login exception:', err);
+      return { success: false, error: err.message || 'Terjadi kesalahan jaringan' };
+    }
+  };
 
-        if (!error && data.user) {
-          // Check role from users table
-          const { data: userData } = await supabase
-            .from('users')
-            .select('*')
-            .eq('email', cleanEmail)
-            .maybeSingle();
+  const signup = async (email: string, password: string, fullName: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password: password.trim(),
+          fullName: fullName.trim()
+        }),
+      });
 
-          const role = userData?.role === 'admin' || userData?.role === 'super' || userData?.role === 'finance' ? 'admin' : 'user';
-          
-          const profile: UserProfile = {
-            id: data.user.id,
-            name: userData?.full_name || data.user.email?.split('@')[0] || 'User',
-            email: data.user.email || cleanEmail,
-            role: role as 'admin' | 'user'
-          };
-
-          setUser(profile);
-          localStorage.setItem('samara_auth_session', JSON.stringify(profile));
-          database.logActivity("System", "ADMIN_LOGIN", `User ${profile.name} masuk via Supabase Auth`);
-          return { success: true };
-        } else if (error) {
-          return { success: false, error: error.message };
-        }
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || 'Pendaftaran gagal.' };
       }
 
-      // If credentials do not match, return error
+      if (data.user) {
+        if (data.access_token && data.refresh_token) {
+          await supabase.auth.setSession({
+            access_token: data.access_token,
+            refresh_token: data.refresh_token
+          }).catch((e) => console.error('[AUTH] Failed to set client-side supabase session during signup:', e));
+        }
+        setUser(data.user);
+        return { success: true };
+      }
+
       return { 
-        success: false, 
-        error: 'Email atau password salah. Coba gunakan default: admin@samarastay.co.id / samarastay2026' 
+        success: true, 
+        error: data.message || 'Pendaftaran berhasil! Silakan masuk menggunakan email dan password tersebut.' 
       };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Terjadi kesalahan sistem' };
-    } finally {
-      setLoading(false);
+      console.error('[AUTH] Register exception:', err);
+      return { success: false, error: err.message || 'Terjadi kesalahan jaringan' };
     }
   };
 
   const logout = async () => {
-    setUser(null);
-    localStorage.removeItem('samara_auth_session');
-    if (isSupabaseConfigured && supabase) {
-      await supabase.auth.signOut();
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+      await supabase.auth.signOut().catch(() => {});
+    } catch (e) {
+      console.error('[AUTH] Logout request error:', e);
     }
-    database.logActivity("System", "LOGOUT", "Sesi aktif berhasil diakhiri");
+    setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );

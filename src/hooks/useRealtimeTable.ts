@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { realtimeManager, getIsSupabaseConfigured, getSupabaseClient } from '../lib/supabase';
+import { realtimeManager } from '../lib/supabase';
 
 export function useRealtimeTable<T>(
   tableName: string, 
@@ -16,16 +16,23 @@ export function useRealtimeTable<T>(
     fetchFnRef.current = fetchFn;
   }, [fetchFn]);
 
-  const loadData = async () => {
+  const isFirstLoadRef = useRef(true);
+
+  const loadData = async (isSilent = false) => {
     try {
-      setLoading(true);
+      if (!isSilent && isFirstLoadRef.current) {
+        setLoading(true);
+      }
       const res = await fetchFnRef.current();
       setData(res);
       setError(null);
     } catch (err) {
       setError(err);
     } finally {
-      setLoading(false);
+      if (!isSilent && isFirstLoadRef.current) {
+        setLoading(false);
+        isFirstLoadRef.current = false;
+      }
     }
   };
 
@@ -33,55 +40,43 @@ export function useRealtimeTable<T>(
     // Initial fetch
     loadData();
 
-    const isConfigured = getIsSupabaseConfigured();
-    const client = getSupabaseClient();
-
-    if (isConfigured && client) {
-      const handleRealtimeEvent = (payload: any) => {
-        if (payload.eventType === 'POLLING_REFRESH') {
-          console.log(`[useRealtimeTable] Backup polling triggered loadData for ${tableName}`);
-          loadData();
-          return;
-        }
-
-        console.log(`[useRealtimeTable Event] Received differential update for ${tableName}:`, payload);
+    const handleRealtimeEvent = (payload: any) => {
+      console.log(`[useRealtimeTable Event] Received differential update for ${tableName}:`, payload);
+      
+      // Relational tables with joined data must do a full refetch to resolve nested relationships accurately
+      if (['properties', 'rooms', 'settings', 'facilities'].includes(tableName.toLowerCase())) {
+        loadData(true);
+        return;
+      }
+      
+      setData((currentData) => {
+        const { eventType, new: newRow, old: oldRow } = payload;
         
-        setData((currentData) => {
-          const { eventType, new: newRow, old: oldRow } = payload;
-          
-          if (eventType === 'INSERT') {
-            const exists = currentData.some((item: any) => (item as any).id === newRow.id);
-            if (exists) return currentData;
-            return [...currentData, newRow];
-          }
-          
-          if (eventType === 'UPDATE') {
-            return currentData.map((item: any) => (item as any).id === newRow.id ? { ...item, ...newRow } : item);
-          }
-          
-          if (eventType === 'DELETE') {
-            const targetId = oldRow?.id || newRow?.id;
-            return currentData.filter((item: any) => (item as any).id !== targetId);
-          }
-          
-          return currentData;
-        });
-      };
+        if (eventType === 'INSERT') {
+          const exists = currentData.some((item: any) => (item as any).id === newRow.id);
+          if (exists) return currentData;
+          return [...currentData, newRow];
+        }
+        
+        if (eventType === 'UPDATE') {
+          return currentData.map((item: any) => (item as any).id === newRow.id ? { ...item, ...newRow } : item);
+        }
+        
+        if (eventType === 'DELETE') {
+          const targetId = oldRow?.id || newRow?.id;
+          return currentData.filter((item: any) => (item as any).id !== targetId);
+        }
+        
+        return currentData;
+      });
+    };
 
-      // Subscribe via central manager to prevent duplicate websocket channels and leak-free lifecycle
-      const unsubscribe = realtimeManager.subscribe(tableName, {}, handleRealtimeEvent);
+    // Subscribe via central manager to prevent duplicate websocket channels and leak-free lifecycle
+    const unsubscribe = realtimeManager.subscribe(tableName, {}, handleRealtimeEvent);
 
-      return () => {
-        unsubscribe();
-      };
-    } else {
-      // Offline fallback: if Supabase is completely unavailable, run a local timer
-      console.log(`[useRealtimeTable Fallback] Offline/unconfigured. Polling locally for table: ${tableName}`);
-      const timer = setInterval(() => {
-        loadData();
-      }, 15000);
-      return () => clearInterval(timer);
-    }
+    return () => {
+      unsubscribe();
+    };
   }, [tableName, dependencyTrigger]);
 
   return { data, loading, error, refetch: loadData };

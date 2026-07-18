@@ -1,17 +1,20 @@
 import React, { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import Loader from '../components/common/Loader';
-import { Lock, Mail, ShieldAlert } from 'lucide-react';
+import { Lock, Mail, ShieldAlert, User, CheckCircle2 } from 'lucide-react';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { user, loading, login } = useAuth();
+  const { user, loading, login, signup } = useAuth();
+  const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('yogiketilang33@gmail.com');
   const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   if (loading) {
@@ -25,11 +28,28 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setInfo(null);
     setSubmitting(true);
     try {
-      const res = await login(email, password);
-      if (!res.success) {
-        setError(res.error || 'Email atau password salah.');
+      if (isSignUp) {
+        if (!fullName.trim()) {
+          setError('Nama lengkap wajib diisi.');
+          setSubmitting(false);
+          return;
+        }
+        const res = await signup(email, password, fullName);
+        if (res.success) {
+          setInfo(res.error || 'Pendaftaran berhasil! Akun Anda siap digunakan.');
+          setIsSignUp(false); // Switch to sign in
+          setPassword('');
+        } else {
+          setError(res.error || 'Gagal mendaftarkan akun.');
+        }
+      } else {
+        const res = await login(email, password);
+        if (!res.success) {
+          setError(res.error || 'Email atau password salah.');
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Terjadi kesalahan sistem.');
@@ -46,9 +66,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
             <div className="mx-auto w-12 h-12 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center justify-center text-amber-500">
               <Lock size={20} />
             </div>
-            <h2 className="text-lg font-black text-white uppercase tracking-wider font-display">SAMARA STAY OPERATOR</h2>
+            <h2 className="text-lg font-black text-white uppercase tracking-wider font-display">
+              {isSignUp ? 'DAFTAR AKUN BARU' : 'SAMARA STAY OPERATOR'}
+            </h2>
             <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
-              Silakan masuk menggunakan kredensial pengurus / fungsionaris kos untuk mengakses dashboard manajemen.
+              {isSignUp
+                ? 'Daftarkan akun operator/admin baru untuk mengelola properti Samara Stay.'
+                : 'Silakan masuk menggunakan kredensial pengurus / fungsionaris kos untuk mengakses dashboard manajemen.'}
             </p>
           </div>
 
@@ -60,9 +84,35 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
               </div>
             )}
 
+            {info && (
+              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 flex items-start gap-2.5 text-[10px] text-emerald-400 font-medium">
+                <CheckCircle2 size={14} className="shrink-0 mt-0.5" />
+                <span>{info}</span>
+              </div>
+            )}
+
+            {isSignUp && (
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  Nama Lengkap
+                </label>
+                <div className="relative">
+                  <User size={13} className="absolute left-3.5 top-3.5 text-slate-500" />
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Nama Lengkap Anda"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-white text-xs font-medium focus:border-amber-500 focus:outline-none transition-all"
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                Alamat Email Resmi
+                Alamat Email
               </label>
               <div className="relative">
                 <Mail size={13} className="absolute left-3.5 top-3.5 text-slate-500" />
@@ -79,7 +129,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
 
             <div className="space-y-1.5">
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                Kata Sandi Sesi (Password)
+                Kata Sandi (Password)
               </label>
               <div className="relative">
                 <Lock size={13} className="absolute left-3.5 top-3.5 text-slate-500" />
@@ -99,24 +149,29 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
               disabled={submitting}
               className="w-full bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase py-3.5 rounded-xl transition-all shadow-md focus:outline-none cursor-pointer flex items-center justify-center gap-2"
             >
-              {submitting ? 'Memproses Masuk Sesi...' : 'Verifikasi & Masuk Dashboard'}
+              {submitting
+                ? (isSignUp ? 'Mendaftarkan Akun...' : 'Memproses Masuk Sesi...')
+                : (isSignUp ? 'Daftar Akun Operator' : 'Verifikasi & Masuk Dashboard')}
             </button>
           </form>
 
+          <div className="pt-4 text-center">
+            <button
+              onClick={() => {
+                setIsSignUp(!isSignUp);
+                setError(null);
+                setInfo(null);
+              }}
+              className="text-[10px] text-amber-500 hover:underline font-bold uppercase tracking-wider"
+            >
+              {isSignUp ? 'Sudah punya akun? Masuk Sesi' : 'Belum punya akun? Daftar Akun Baru'}
+            </button>
+          </div>
+
           <div className="border-t border-slate-800/60 pt-4 text-center space-y-1">
-            <div>
-              <span className="text-[9px] text-slate-500 font-medium">
-                Super Admin Utama: <code className="text-slate-400 bg-slate-950 px-1 py-0.5 rounded font-mono">yogiketilang33@gmail.com</code>
-              </span>
-            </div>
-            <div>
-              <span className="text-[9px] text-slate-500 font-medium">
-                Operator Default: <code className="text-slate-400 bg-slate-950 px-1 py-0.5 rounded font-mono">admin@samarastay.co.id</code>
-              </span>
-            </div>
-            <div className="text-[9px] text-slate-500 font-medium">
-              Sandi Sesi: <code className="text-slate-400 bg-slate-950 px-1 py-0.5 rounded font-mono">samarastay2026</code>
-            </div>
+            <p className="text-[9px] text-slate-500">
+              Mendaftarkan akun baru akan mengotorisasi email Anda sebagai Staff (Akses Terbatas). Hubungi Administrator Utama untuk peningkatan hak akses.
+            </p>
           </div>
         </div>
       </div>

@@ -52,14 +52,14 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({ property, onSelect }
 
         {/* Facilities badge pills */}
         <div className="flex flex-wrap gap-1">
-          {property.facilities.slice(0, 3).map((f, idx) => (
-            <span key={idx} className="bg-slate-850 text-slate-300 text-[8px] font-semibold px-2 py-0.5 rounded-md border border-slate-750 font-sans">
-              {f}
+          {(property.facilities || []).slice(0, 3).map((f: any, idx) => (
+            <span key={f.id || idx} className="bg-slate-850 text-slate-300 text-[8px] font-semibold px-2 py-0.5 rounded-md border border-slate-750 font-sans">
+              {f.name}
             </span>
           ))}
-          {property.facilities.length > 3 && (
+          {(property.facilities || []).length > 3 && (
             <span className="bg-slate-850 text-slate-400 text-[8px] font-semibold px-1.5 py-0.5 rounded-md border border-slate-750 font-sans">
-              +{property.facilities.length - 3}
+              +{(property.facilities || []).length - 3}
             </span>
           )}
         </div>

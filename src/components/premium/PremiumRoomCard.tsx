@@ -1,7 +1,7 @@
 import React from 'react';
 import { Room } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
-import { Layers, Maximize, Wifi, Shield, Wind, Sparkles, Tv, HelpCircle } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
 
 interface PremiumRoomCardProps {
   room: Room;
@@ -10,21 +10,6 @@ interface PremiumRoomCardProps {
 
 export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect }) => {
   const isAvailable = room.status === 'available';
-
-  // Facility icon selector for clean visuals
-  const getFacilityIcon = (facilityName: string) => {
-    const name = facilityName.toLowerCase();
-    if (name.includes('wi-fi') || name.includes('wifi') || name.includes('internet')) {
-      return <Wifi className="w-3.5 h-3.5 text-[#0D9488]" />;
-    }
-    if (name.includes('ac') || name.includes('pendingin') || name.includes('air conditioner')) {
-      return <Wind className="w-3.5 h-3.5 text-[#0D9488]" />;
-    }
-    if (name.includes('tv') || name.includes('televisi')) {
-      return <Tv className="w-3.5 h-3.5 text-[#0D9488]" />;
-    }
-    return <Shield className="w-3.5 h-3.5 text-[#0D9488]" />;
-  };
 
   return (
     <div 
@@ -56,7 +41,7 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
         {/* Room Type Badge */}
         <div className="absolute top-4 right-4">
           <span className="bg-[#3A444D]/80 backdrop-blur-md text-white text-[10px] font-semibold px-3 py-1 rounded-full flex items-center gap-1">
-            <Sparkles className="w-3 h-3 text-amber-400" />
+            <LucideIcons.Sparkles className="w-3 h-3 text-amber-400" />
             {room.room_type}
           </span>
         </div>
@@ -98,11 +83,11 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
         {/* Room Details Block */}
         <div className="grid grid-cols-2 gap-3 py-3 border-y border-[#F1F5F9] text-xs text-[#64748B]">
           <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-[#0D9488] opacity-80" />
+            <LucideIcons.Layers className="w-4 h-4 text-[#0D9488] opacity-80" />
             <span>Lantai {room.floor}</span>
           </div>
           <div className="flex items-center gap-2">
-            <Maximize className="w-4 h-4 text-[#0D9488] opacity-80" />
+            <LucideIcons.Maximize className="w-4 h-4 text-[#0D9488] opacity-80" />
             <span>Luas {room.size_sqm} m²</span>
           </div>
         </div>
@@ -111,18 +96,21 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
         <div className="space-y-1.5 pt-1">
           <span className="text-[10px] font-bold text-[#3A444D] uppercase tracking-wider block">Fasilitas Unit:</span>
           <div className="flex flex-wrap gap-1.5">
-            {room.facilities.slice(0, 3).map((f, idx) => (
-              <div 
-                key={idx} 
-                className="flex items-center gap-1 bg-[#F8FAFC] border border-[#E2E8F0] px-2.5 py-1 rounded-xl text-xs text-[#64748B] font-medium"
-              >
-                {getFacilityIcon(f)}
-                <span>{f}</span>
-              </div>
-            ))}
-            {room.facilities.length > 3 && (
+            {(room.facilities || []).slice(0, 3).map((f: any, idx) => {
+              const IconComp = (LucideIcons as any)[f.icon] || LucideIcons.Sparkles;
+              return (
+                <div 
+                  key={f.id || idx} 
+                  className="flex items-center gap-1 bg-[#F8FAFC] border border-[#E2E8F0] px-2.5 py-1 rounded-xl text-xs text-[#64748B] font-medium"
+                >
+                  <IconComp className="w-3.5 h-3.5 text-[#0D9488]" />
+                  <span>{f.name}</span>
+                </div>
+              );
+            })}
+            {(room.facilities || []).length > 3 && (
               <div className="bg-[#F8FAFC] border border-[#E2E8F0] px-2 py-1 rounded-xl text-[10px] text-[#0D9488] font-bold">
-                +{room.facilities.length - 3} Lagi
+                +{(room.facilities || []).length - 3} Lagi
               </div>
             )}
           </div>

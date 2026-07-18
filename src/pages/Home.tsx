@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { database } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
+import * as LucideIcons from 'lucide-react';
 import { Property, Room, Booking, Survey, Coupon, SystemSettings, StandardFacility, FAQItem, Tenant } from '../types';
 import BookingForm from '../components/transaction/BookingForm';
 import InvoiceCard from '../components/transaction/InvoiceCard';
@@ -20,38 +21,25 @@ import {
 import PremiumSearchFilter from '../components/premium/PremiumSearchFilter';
 import PremiumRoomGrid from '../components/premium/PremiumRoomGrid';
 
-interface HomeProps {
-  refreshTrigger: number;
-  triggerAppRefresh?: () => void;
-}
+interface HomeProps {}
 
-export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
+export default function Home({}: HomeProps) {
   // Use granular real-time table hooks to fetch data and receive live changes
   const { data: propertiesData, loading: propertiesLoading } = useRealtimeTable<Property>(
     'properties',
-    () => database.fetchProperties(),
-    refreshTrigger
-  );
+    () => database.fetchProperties());
   const { data: roomsData, loading: roomsLoading } = useRealtimeTable<Room>(
     'rooms',
-    () => database.fetchRooms(),
-    refreshTrigger
-  );
+    () => database.fetchRooms());
   const { data: couponsData, loading: couponsLoading } = useRealtimeTable<Coupon>(
     'coupons',
-    () => database.fetchCoupons(),
-    refreshTrigger
-  );
+    () => database.fetchCoupons());
   const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
     'settings',
-    () => database.fetchSettings().then(res => [res]),
-    refreshTrigger
-  );
+    () => database.fetchSettings().then(res => [res]));
   const { data: tenantsData, loading: tenantsLoading } = useRealtimeTable<Tenant>(
     'tenants',
-    () => database.fetchTenants(),
-    refreshTrigger
-  );
+    () => database.fetchTenants());
 
   const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading || tenantsLoading;
 
@@ -209,33 +197,10 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
   };
 
   useEffect(() => {
-    let activeFacilitiesList: string[] = [];
     const sett = settingsData && settingsData.length > 0 ? settingsData[0] : null;
-    if (sett && sett.standard_facilities) {
-      try {
-        const parsed = JSON.parse(sett.standard_facilities);
-        if (Array.isArray(parsed)) {
-          activeFacilitiesList = parsed.map((f: any) => f.title.trim().toLowerCase());
-        }
-      } catch (e) {
-        console.error("Error parsing standard_facilities in Home:", e);
-      }
-    } else {
-      // Fallback to default master facilities if settings is not initialized yet
-      activeFacilitiesList = [
-        "jam operasional", "check in", "security", "wifi", "air", "parkir", "laundry", "cleaning"
-      ];
-    }
 
-    const filteredProps = (propertiesData || []).map(p => ({
-      ...p,
-      facilities: (p.facilities || []).filter(f => activeFacilitiesList.includes(f.trim().toLowerCase()))
-    }));
-
-    const filteredRooms = (roomsData || []).map(r => ({
-      ...r,
-      facilities: (r.facilities || []).filter(f => activeFacilitiesList.includes(f.trim().toLowerCase()))
-    }));
+    const filteredProps = propertiesData || [];
+    const filteredRooms = roomsData || [];
 
     setProperties(filteredProps);
     setRooms(filteredRooms);
@@ -723,7 +688,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
 
     setSnapOpen(false);
     setShowReceipt(true);
-    triggerAppRefresh?.();
+    
   };
 
   const handleSandboxPaymentSuccess = async (details: any) => {
@@ -818,7 +783,7 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
 
     setSnapOpen(false);
     setShowReceipt(true);
-    triggerAppRefresh?.();
+    
   };
 
   const handleSearchTrigger = (e: React.FormEvent) => {
@@ -836,20 +801,16 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
     const matchType = selectedType === 'all' || p.type === selectedType;
     const matchPrice = p.price <= priceRange;
 
-    // Advanced facilities filters
-    const matchRoomFac = selectedRoomFacilities.length === 0 ||
+    // Advanced facilities filters (connected to master facilities list from Supabase)
+    const matchFacilities = selectedRoomFacilities.length === 0 ||
       selectedRoomFacilities.every(f => 
+        (p.facilities || []).some((pf: any) => pf.name.toLowerCase().includes(f.toLowerCase())) ||
         rooms.filter(r => r.property_id === p.id).some(r => 
-          r.facilities.some(rf => rf.toLowerCase().includes(f.toLowerCase()))
+          (r.facilities || []).some((rf: any) => rf.name.toLowerCase().includes(f.toLowerCase()))
         )
       );
 
-    const matchSharedFac = selectedSharedFacilities.length === 0 ||
-      selectedSharedFacilities.every(f => 
-        p.facilities.some(pf => pf.toLowerCase().includes(f.toLowerCase()))
-      );
-
-    return matchLocation && matchType && matchPrice && matchRoomFac && matchSharedFac;
+    return matchLocation && matchType && matchPrice && matchFacilities;
   });
 
   // Filter individual rooms for direct interactive room search
@@ -865,17 +826,14 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
     const matchType = selectedType === 'all' || parentProperty.type === selectedType;
     const matchPrice = r.price <= priceRange;
 
-    const matchRoomFac = selectedRoomFacilities.length === 0 || 
+    // Advanced facilities filters (connected to master facilities list from Supabase)
+    const matchFacilities = selectedRoomFacilities.length === 0 || 
       selectedRoomFacilities.every(f => 
-        r.facilities.some(rf => rf.toLowerCase().includes(f.toLowerCase()))
+        (r.facilities || []).some((rf: any) => rf.name.toLowerCase().includes(f.toLowerCase())) ||
+        (parentProperty.facilities || []).some((pf: any) => pf.name.toLowerCase().includes(f.toLowerCase()))
       );
 
-    const matchSharedFac = selectedSharedFacilities.length === 0 ||
-      selectedSharedFacilities.every(f => 
-        parentProperty.facilities.some(pf => pf.toLowerCase().includes(f.toLowerCase()))
-      );
-
-    return matchLocation && matchType && matchPrice && matchRoomFac && matchSharedFac;
+    return matchLocation && matchType && matchPrice && matchFacilities;
   });
 
   // Leaflet map initialization and updates hook
@@ -1578,11 +1536,15 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
             setSearchDurationType={setSearchDurationType}
             searchMode={searchMode}
             setSearchMode={setSearchMode}
+            selectedFacilities={selectedRoomFacilities}
+            setSelectedFacilities={setSelectedRoomFacilities}
+            masterFacilities={standardFacilities}
             resultsCount={searchMode === 'building' ? filteredProperties.length : filteredRooms.length}
             onClearFilters={() => {
               setSearchLocation('');
               setSelectedType('all');
               setSearchDurationType('monthly');
+              setSelectedRoomFacilities([]);
             }}
           />
 
@@ -1651,9 +1613,9 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
 
                           {/* Badges */}
                           <div className="flex flex-wrap gap-1">
-                            {p.facilities.slice(0, 3).map(f => (
-                              <span key={f} className="text-[9px] bg-slate-50 border border-[#E2E8F0] text-[#475569] font-bold px-2 py-0.5 rounded-md capitalize">
-                                {f}
+                            {(p.facilities || []).slice(0, 3).map((f: any, idx) => (
+                              <span key={f.id || idx} className="text-[9px] bg-slate-50 border border-[#E2E8F0] text-[#475569] font-bold px-2 py-0.5 rounded-md capitalize">
+                                {f.name}
                               </span>
                             ))}
                           </div>
@@ -1742,9 +1704,9 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
 
                           {/* Facilities */}
                           <div className="flex flex-wrap gap-1">
-                            {r.facilities.slice(0, 4).map(f => (
-                              <span key={f} className="text-[8px] bg-slate-50 border border-[#E2E8F0] text-[#475569] px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">
-                                {f}
+                            {(r.facilities || []).slice(0, 4).map((f: any, idx) => (
+                              <span key={f.id || idx} className="text-[8px] bg-slate-50 border border-[#E2E8F0] text-[#475569] px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">
+                                {f.name}
                               </span>
                             ))}
                           </div>
@@ -2062,18 +2024,12 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
                   Fasilitas Kompleks Gedung
                 </h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {activeProperty.facilities.map((fac, idx) => {
-                    let iconNode = <Wifi size={14} className="text-[#2E6F40]" />;
-                    if (fac.toLowerCase().includes('dapur')) iconNode = <Utensils size={14} className="text-[#2E6F40]" />;
-                    if (fac.toLowerCase().includes('parkir')) iconNode = <Car size={14} className="text-[#2E6F40]" />;
-                    if (fac.toLowerCase().includes('wifi') || fac.toLowerCase().includes('internet')) iconNode = <Wifi size={14} className="text-[#2E6F40]" />;
-                    if (fac.toLowerCase().includes('ac') || fac.toLowerCase().includes('pendingin')) iconNode = <Zap size={14} className="text-[#2E6F40]" />;
-                    if (fac.toLowerCase().includes('tv') || fac.toLowerCase().includes('televisi')) iconNode = <Tv size={14} className="text-[#2E6F40]" />;
-
+                  {(activeProperty.facilities || []).map((fac: any, idx) => {
+                    const IconComp = (LucideIcons as any)[fac.icon] || LucideIcons.Sparkles;
                     return (
-                      <div key={idx} className="bg-white border border-[#E2E8F0] p-3.5 rounded-xl flex items-center gap-3 hover:border-[#2E6F40] transition-all">
-                        {iconNode}
-                        <span className="font-semibold text-[#3A444D] capitalize">{fac}</span>
+                      <div key={fac.id || idx} className="bg-white border border-[#E2E8F0] p-3.5 rounded-xl flex items-center gap-3 hover:border-[#2E6F40] transition-all">
+                        <IconComp size={14} className="text-[#2E6F40] shrink-0" />
+                        <span className="font-semibold text-[#3A444D] capitalize">{fac.name}</span>
                       </div>
                     );
                   })}
@@ -2488,9 +2444,9 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
 
                         {/* Facilities small preview */}
                         <div className="flex flex-wrap gap-1">
-                          {r.facilities.map(f => (
-                            <span key={f} className="text-[10px] bg-[#F8FAFC] border border-[#E2E8F0] text-[#64748B] px-2 py-0.5 rounded-lg">
-                              {f}
+                          {(r.facilities || []).map((f: any, idx) => (
+                            <span key={f.id || idx} className="text-[10px] bg-[#F8FAFC] border border-[#E2E8F0] text-[#64748B] px-2 py-0.5 rounded-lg">
+                              {f.name}
                             </span>
                           ))}
                         </div>
@@ -2914,10 +2870,10 @@ export default function Home({ refreshTrigger, triggerAppRefresh }: HomeProps) {
               </h4>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 {selectedRoomForDetail.facilities && selectedRoomForDetail.facilities.length > 0 ? (
-                  selectedRoomForDetail.facilities.map((fac, i) => (
-                    <div key={i} className="flex items-center gap-2 bg-[#F8F9FA] border border-[#E2E8F0] p-2.5 rounded-lg">
+                  (selectedRoomForDetail.facilities || []).map((fac: any, i) => (
+                    <div key={fac.id || i} className="flex items-center gap-2 bg-[#F8F9FA] border border-[#E2E8F0] p-2.5 rounded-lg">
                       <CheckCircle size={12} className="text-[#2E6F40]" />
-                      <span className="font-medium text-[#475569] capitalize">{fac}</span>
+                      <span className="font-medium text-[#475569] capitalize">{fac.name}</span>
                     </div>
                   ))
                 ) : (

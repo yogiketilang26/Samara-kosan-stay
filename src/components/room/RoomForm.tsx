@@ -32,14 +32,14 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     size_sqm: 15.0,
     floor: 1,
     status: 'available' as 'available' | 'occupied' | 'reserved' | 'maintenance',
-    facilitiesInput: '',
     is_daily_enabled: false,
     daily_price: 100000,
     image_url: '',
     images: [] as string[]
   });
 
-  const [masterFacilities, setMasterFacilities] = useState<{ icon: string; title: string; subtitle: string }[]>([]);
+  const [masterFacilities, setMasterFacilities] = useState<any[]>([]);
+  const [selectedFacilityIds, setSelectedFacilityIds] = useState<number[]>([]);
   const [isUploadingMain, setIsUploadingMain] = useState(false);
   const [isUploadingGallery, setIsUploadingGallery] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -47,27 +47,11 @@ export const RoomForm: React.FC<RoomFormProps> = ({
   useEffect(() => {
     async function loadMasterFacilities() {
       try {
-        const settings = await database.fetchSettings();
-        if (settings && settings.standard_facilities) {
-          const parsed = JSON.parse(settings.standard_facilities);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setMasterFacilities(parsed);
-            return;
-          }
-        }
+        const facs = await database.fetchMasterFacilities();
+        setMasterFacilities(facs);
       } catch (err) {
         console.error('Error loading master facilities in RoomForm:', err);
       }
-      setMasterFacilities([
-        { icon: "Clock", title: "Jam Operasional", subtitle: "24 Jam" },
-        { icon: "LogIn", title: "Check In", subtitle: "Fleksibel" },
-        { icon: "Shield", title: "Security", subtitle: "24 Jam" },
-        { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
-        { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
-        { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
-        { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
-        { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
-      ]);
     }
     loadMasterFacilities();
   }, []);
@@ -85,12 +69,12 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         size_sqm: room.size_sqm,
         floor: room.floor,
         status: room.status as any,
-        facilitiesInput: room.facilities.join(', '),
         is_daily_enabled: room.is_daily_enabled || false,
         daily_price: room.daily_price || 100000,
         image_url: room.image_url || '',
         images: room.images || []
       });
+      setSelectedFacilityIds((room.facilities || []).map((f: any) => f.id));
     } else {
       setFormData({
         property_id: properties[0]?.id || 1,
@@ -100,12 +84,12 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         size_sqm: 15.0,
         floor: 1,
         status: 'available',
-        facilitiesInput: '',
         is_daily_enabled: false,
         daily_price: 100000,
         image_url: '',
         images: []
       });
+      setSelectedFacilityIds([]);
     }
   }, [room, properties]);
 
@@ -191,11 +175,6 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     if (isSaving) return;
     setIsSaving(true);
     try {
-      const facilitiesList = formData.facilitiesInput
-        .split(',')
-        .map(f => f.trim())
-        .filter(f => f.length > 0);
-
       await onSave({
         id: room?.id,
         property_id: Number(formData.property_id),
@@ -205,7 +184,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         size_sqm: Number(formData.size_sqm),
         floor: Number(formData.floor),
         status: formData.status,
-        facilities: facilitiesList,
+        facilities: selectedFacilityIds as any,
         is_daily_enabled: formData.is_daily_enabled,
         daily_price: formData.is_daily_enabled ? Number(formData.daily_price) : 0,
         image_url: formData.image_url,
@@ -314,58 +293,40 @@ export const RoomForm: React.FC<RoomFormProps> = ({
       </div>
 
       <div className="space-y-2">
-        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Fasilitas Dalam Kamar (Pisahkan Koma)</label>
-        <input 
-          type="text" 
-          value={formData.facilitiesInput}
-          onChange={(e) => setFormData({ ...formData, facilitiesInput: e.target.value })}
-          placeholder="Ac, WiFi, Kasur Springbed, Kamar Mandi Dalam"
-          className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500"
-        />
-        {masterFacilities.length > 0 && (
-          <div className="pt-1.5 space-y-1">
-            <span className="text-[9px] text-slate-500 font-mono uppercase block">Pilih Cepat dari Master Fasilitas:</span>
-            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 bg-slate-950/45 rounded-xl border border-slate-900">
-              {masterFacilities.map((fac, idx) => {
-                const currentList = formData.facilitiesInput
-                  .split(',')
-                  .map(f => f.trim().toLowerCase())
-                  .filter(f => f.length > 0);
-                const isSelected = currentList.includes(fac.title.toLowerCase());
-                
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => {
-                      const list = formData.facilitiesInput
-                        .split(',')
-                        .map(f => f.trim())
-                        .filter(f => f.length > 0);
-                      const index = list.findIndex(f => f.toLowerCase() === fac.title.toLowerCase());
-                      let newList: string[];
-                      if (index > -1) {
-                        newList = list.filter((_, i) => i !== index);
-                      } else {
-                        newList = [...list, fac.title];
-                      }
-                      setFormData(prev => ({
-                        ...prev,
-                        facilitiesInput: newList.join(', ')
-                      }));
-                    }}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold border transition-all cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#0D9488]/20 text-[#0D9488] border-[#0D9488]/50'
-                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    {renderIcon(fac.icon)}
-                    <span>{fac.title}</span>
-                  </button>
-                );
-              })}
-            </div>
+        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Fasilitas Kamar (Pilih Master Fasilitas)</label>
+        {masterFacilities.length > 0 ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-slate-950/45 rounded-2xl border border-slate-900 max-h-48 overflow-y-auto">
+            {masterFacilities.map((fac) => {
+              const isSelected = selectedFacilityIds.includes(fac.id);
+              return (
+                <button
+                  key={fac.id}
+                  type="button"
+                  onClick={() => {
+                    if (isSelected) {
+                      setSelectedFacilityIds(prev => prev.filter(id => id !== fac.id));
+                    } else {
+                      setSelectedFacilityIds(prev => [...prev, fac.id]);
+                    }
+                  }}
+                  className={`flex items-center gap-2 p-2 rounded-xl text-[10px] font-semibold border transition-all cursor-pointer text-left ${
+                    isSelected
+                      ? 'bg-[#0D9488]/20 text-[#0D9488] border-[#0D9488]/50 shadow-sm'
+                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="shrink-0">{renderIcon(fac.icon)}</div>
+                  <div className="truncate">
+                    <div className="font-bold">{fac.name}</div>
+                    <div className="text-[8px] opacity-60 truncate">{fac.description}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-slate-500 text-[10px] italic font-mono p-3 bg-slate-950/45 rounded-2xl border border-slate-900">
+            Memuat daftar master fasilitas...
           </div>
         )}
       </div>
