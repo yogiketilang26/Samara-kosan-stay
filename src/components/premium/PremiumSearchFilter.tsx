@@ -1,7 +1,7 @@
 import React from 'react';
+import * as LucideIcons from 'lucide-react';
 import { 
-  Search, MapPin, Calendar, Compass, SlidersHorizontal, Info,
-  Clock, LogIn, Shield, Wifi, Droplet, Car, Shirt, Sparkles, Utensils, Tv, Grid
+  Search, SlidersHorizontal, Info
 } from 'lucide-react';
 import { StandardFacility } from '../../types';
 
@@ -22,19 +22,11 @@ interface PremiumSearchFilterProps {
 }
 
 const renderFacilityIcon = (iconName: string) => {
-  switch (iconName) {
-    case 'Clock': return <Clock size={14} />;
-    case 'LogIn': return <LogIn size={14} />;
-    case 'Shield': return <Shield size={14} />;
-    case 'Wifi': return <Wifi size={14} />;
-    case 'Droplet': return <Droplet size={14} />;
-    case 'Car': return <Car size={14} />;
-    case 'Shirt': return <Shirt size={14} />;
-    case 'Sparkles': return <Sparkles size={14} />;
-    case 'Utensils': return <Utensils size={14} />;
-    case 'Tv': return <Tv size={14} />;
-    default: return <Info size={14} />;
+  const IconComponent = (LucideIcons as any)[iconName];
+  if (IconComponent) {
+    return <IconComponent size={14} />;
   }
+  return <LucideIcons.Info size={14} />;
 };
 
 export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({

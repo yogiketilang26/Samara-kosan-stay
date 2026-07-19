@@ -14,7 +14,7 @@ import InvoiceCard from '../components/transaction/InvoiceCard';
 import { formatRupiah } from '../utils/formatCurrency';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { 
-  Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, 
+  Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, AlertCircle,
   Trash2, Edit2, PlayCircle, Plus, Eye, Check, X, FileSpreadsheet,
   History, Users, UserPlus, Download, Search, UserCheck, Activity,
   FileText, Printer, ShieldPlus, Trash, UserCog, Terminal, HelpCircle,
@@ -27,46 +27,46 @@ interface AdminProps {}
 
 export default function Admin({}: AdminProps) {
   // Use granular real-time table hooks to fetch data and receive live changes
-  const { data: propertiesData, loading: propertiesLoading } = useRealtimeTable<Property>(
+  const { data: propertiesData, loading: propertiesLoading, refetch: refetchProperties } = useRealtimeTable<Property>(
     'properties',
     () => database.fetchProperties());
-  const { data: roomsData, loading: roomsLoading } = useRealtimeTable<Room>(
+  const { data: roomsData, loading: roomsLoading, refetch: refetchRooms } = useRealtimeTable<Room>(
     'rooms',
     () => database.fetchRooms());
-  const { data: bookingsData, loading: bookingsLoading } = useRealtimeTable<Booking>(
+  const { data: bookingsData, loading: bookingsLoading, refetch: refetchBookings } = useRealtimeTable<Booking>(
     'bookings',
     () => database.fetchBookings());
-  const { data: surveysData, loading: surveysLoading } = useRealtimeTable<Survey>(
+  const { data: surveysData, loading: surveysLoading, refetch: refetchSurveys } = useRealtimeTable<Survey>(
     'surveys',
     () => database.fetchSurveys());
-  const { data: couponsData, loading: couponsLoading } = useRealtimeTable<Coupon>(
+  const { data: couponsData, loading: couponsLoading, refetch: refetchCoupons } = useRealtimeTable<Coupon>(
     'coupons',
     () => database.fetchCoupons());
-  const { data: transactionsData, loading: transactionsLoading } = useRealtimeTable<FinancialTransaction>(
+  const { data: transactionsData, loading: transactionsLoading, refetch: refetchTransactions } = useRealtimeTable<FinancialTransaction>(
     'financial_transactions',
     () => database.fetchFinancialTransactions());
-  const { data: activityLogsData, loading: activityLogsLoading } = useRealtimeTable<ActivityLog>(
+  const { data: activityLogsData, loading: activityLogsLoading, refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>(
     'activity_logs',
     () => database.fetchActivityLogs());
-  const { data: usersData, loading: usersLoading } = useRealtimeTable<UserSystem>(
+  const { data: usersData, loading: usersLoading, refetch: refetchUsers } = useRealtimeTable<UserSystem>(
     'users',
     () => database.fetchUsers());
-  const { data: tenantsData, loading: tenantsLoading } = useRealtimeTable<Tenant>(
+  const { data: tenantsData, loading: tenantsLoading, refetch: refetchTenants } = useRealtimeTable<Tenant>(
     'tenants',
     () => database.fetchTenants());
-  const { data: accountsData, loading: accountsLoading } = useRealtimeTable<AccountCOA>(
+  const { data: accountsData, loading: accountsLoading, refetch: refetchAccounts } = useRealtimeTable<AccountCOA>(
     'accounts',
     () => database.fetchAccounts());
-  const { data: journalEntriesData, loading: journalEntriesLoading } = useRealtimeTable<JournalEntry>(
+  const { data: journalEntriesData, loading: journalEntriesLoading, refetch: refetchJournalEntries } = useRealtimeTable<JournalEntry>(
     'journal_entries',
     () => database.fetchJournalEntries());
-  const { data: paymentsData, loading: paymentsLoading } = useRealtimeTable<PaymentInvoice>(
+  const { data: paymentsData, loading: paymentsLoading, refetch: refetchPayments } = useRealtimeTable<PaymentInvoice>(
     'payments',
     () => database.fetchPayments());
-  const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
+  const { data: settingsData, loading: settingsLoading, refetch: refetchSettings } = useRealtimeTable<SystemSettings>(
     'settings',
     () => database.fetchSettings().then(res => [res]));
-  const { data: masterFacilitiesData, loading: masterFacilitiesLoading } = useRealtimeTable<any>(
+  const { data: masterFacilitiesData, loading: masterFacilitiesLoading, refetch: refetchMasterFacilities } = useRealtimeTable<any>(
     'facilities',
     () => database.fetchMasterFacilities());
 
@@ -87,6 +87,37 @@ export default function Admin({}: AdminProps) {
   const [tenantFilter, setTenantFilter] = useState<'active' | 'checkout'>('active');
   const [loading, setLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+
+  // Module-specific refreshing spinners
+  const [refreshingModule, setRefreshingModule] = useState<Record<string, boolean>>({});
+
+  // Row/card processing states (contains IDs of items being updated or deleted)
+  const [processingItems, setProcessingItems] = useState<Record<string, boolean>>({});
+
+  // Toast notifications state
+  const [toasts, setToasts] = useState<{ id: string; type: 'success' | 'error'; message: string }[]>([]);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  };
+
+  const startModuleRefresh = (moduleName: string) => {
+    setRefreshingModule(prev => ({ ...prev, [moduleName]: true }));
+  };
+  const endModuleRefresh = (moduleName: string) => {
+    setRefreshingModule(prev => ({ ...prev, [moduleName]: false }));
+  };
+
+  const startItemProcessing = (itemId: string | number) => {
+    setProcessingItems(prev => ({ ...prev, [String(itemId)]: true }));
+  };
+  const endItemProcessing = (itemId: string | number) => {
+    setProcessingItems(prev => ({ ...prev, [String(itemId)]: false }));
+  };
 
   // Third-party occupant states
   const [editingOccupantBooking, setEditingOccupantBooking] = useState<Booking | null>(null);
@@ -364,6 +395,7 @@ export default function Admin({}: AdminProps) {
   const [isSavingProperty, setIsSavingProperty] = useState(false);
   const [isSavingCoupon, setIsSavingCoupon] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
+  const [isSavingOccupant, setIsSavingOccupant] = useState(false);
 
   // Room modal triggers
   const [showRoomModal, setShowRoomModal] = useState(false);
@@ -563,29 +595,43 @@ export default function Admin({}: AdminProps) {
     e.preventDefault();
     if (!editingOccupantBooking) return;
 
-    const updatedBooking = {
-      ...editingOccupantBooking,
-      occupant_name: occupantForm.name,
-      occupant_phone: occupantForm.phone,
-      occupant_email: occupantForm.email,
-      occupant_nik: occupantForm.nik
-    };
-
-    await database.saveBooking(updatedBooking);
-
-    // Also update the room's tenant name if it is currently occupied by this booking
-    const room = rooms.find(r => r.id === editingOccupantBooking.room_id);
-    if (room && room.current_tenant_name === editingOccupantBooking.occupant_name) {
-      const updatedRoom = {
-        ...room,
-        current_tenant_name: occupantForm.name
+    setIsSavingOccupant(true);
+    try {
+      const updatedBooking = {
+        ...editingOccupantBooking,
+        occupant_name: occupantForm.name,
+        occupant_phone: occupantForm.phone,
+        occupant_email: occupantForm.email,
+        occupant_nik: occupantForm.nik
       };
-      await database.saveRoom(updatedRoom);
-    }
 
-    database.logActivity("System", "UPDATE_OCCUPANT_DATA", `Mengubah data penghuni untuk kamar ${editingOccupantBooking.room_number}`);
-    setEditingOccupantBooking(null);
-    
+      await database.saveBooking(updatedBooking);
+
+      // Also update the room's tenant name if it is currently occupied by this booking
+      const room = rooms.find(r => r.id === editingOccupantBooking.room_id);
+      if (room && room.current_tenant_name === editingOccupantBooking.occupant_name) {
+        const updatedRoom = {
+          ...room,
+          current_tenant_name: occupantForm.name
+        };
+        await database.saveRoom(updatedRoom);
+      }
+
+      database.logActivity("System", "UPDATE_OCCUPANT_DATA", `Mengubah data penghuni untuk kamar ${editingOccupantBooking.room_number}`);
+      setEditingOccupantBooking(null);
+      
+      startModuleRefresh('bookings');
+      startModuleRefresh('rooms');
+      await Promise.all([refetchBookings(), refetchRooms()]);
+      showToast('Data penghuni berhasil diperbarui!');
+    } catch (err: any) {
+      console.error('[Admin] Error saving occupant details:', err);
+      showToast(err.message || 'Gagal menyimpan detail penghuni.', 'error');
+    } finally {
+      setIsSavingOccupant(false);
+      endModuleRefresh('bookings');
+      endModuleRefresh('rooms');
+    }
   };
 
   const handleConfirmArrival = async (b: Booking) => {
@@ -593,26 +639,40 @@ export default function Admin({}: AdminProps) {
       'Konfirmasi Kedatangan Penghuni',
       `Konfirmasi bahwa penghuni ${b.occupant_name || b.tenant_name} telah datang dan check-in secara fisik di kamar ${b.room_number}?`,
       async () => {
-        const updated = { 
-          ...b, 
-          occupant_arrival_status: 'checked_in' as const, 
-          is_occupant_verified: true 
-        };
-        await database.saveBooking(updated);
-        
-        // Also update the room's current tenant name and status if necessary
-        const room = rooms.find(r => r.id === b.room_id);
-        if (room) {
-          const updatedRoom = {
-            ...room,
-            status: 'occupied' as const,
-            current_tenant_name: b.occupant_name || b.tenant_name
+        startItemProcessing(b.id);
+        try {
+          const updated = { 
+            ...b, 
+            occupant_arrival_status: 'checked_in' as const, 
+            is_occupant_verified: true 
           };
-          await database.saveRoom(updatedRoom);
-        }
+          await database.saveBooking(updated);
+          
+          // Also update the room's current tenant name and status if necessary
+          const room = rooms.find(r => r.id === b.room_id);
+          if (room) {
+            const updatedRoom = {
+              ...room,
+              status: 'occupied' as const,
+              current_tenant_name: b.occupant_name || b.tenant_name
+            };
+            await database.saveRoom(updatedRoom);
+          }
 
-        database.logActivity("System", "ARRIVAL_CONFIRMATION", `Kedatangan penghuni ${b.occupant_name || b.tenant_name} dikonfirmasi`);
-        
+          database.logActivity("System", "ARRIVAL_CONFIRMATION", `Kedatangan penghuni ${b.occupant_name || b.tenant_name} dikonfirmasi`);
+          
+          startModuleRefresh('bookings');
+          startModuleRefresh('rooms');
+          await Promise.all([refetchBookings(), refetchRooms()]);
+          showToast('Kedatangan penghuni berhasil dikonfirmasi!');
+        } catch (err: any) {
+          console.error('[Admin] Error confirming arrival:', err);
+          showToast(err.message || 'Gagal mengonfirmasi kedatangan.', 'error');
+        } finally {
+          endItemProcessing(b.id);
+          endModuleRefresh('bookings');
+          endModuleRefresh('rooms');
+        }
       }
     );
   };
@@ -622,10 +682,22 @@ export default function Admin({}: AdminProps) {
       'Setujui Sewa Kamar',
       `Setujui sewa kamar ${b.room_number} untuk tenant ${b.tenant_name}?`,
       async () => {
-        const updated = { ...b, status: 'approved' as const };
-        await database.saveBooking(updated);
-        database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
-        
+        startItemProcessing(b.id);
+        try {
+          const updated = { ...b, status: 'approved' as const };
+          await database.saveBooking(updated);
+          database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
+          
+          startModuleRefresh('bookings');
+          await refetchBookings();
+          showToast('Sewa kamar berhasil disetujui!');
+        } catch (err: any) {
+          console.error('[Admin] Error approving booking:', err);
+          showToast(err.message || 'Gagal menyetujui sewa kamar.', 'error');
+        } finally {
+          endItemProcessing(b.id);
+          endModuleRefresh('bookings');
+        }
       }
     );
   };
@@ -633,7 +705,7 @@ export default function Admin({}: AdminProps) {
   const handleSaveFacility = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!facilityForm.title.trim()) {
-      alert("Nama fasilitas wajib diisi!");
+      showToast("Nama fasilitas wajib diisi!", "error");
       return;
     }
 
@@ -657,11 +729,15 @@ export default function Admin({}: AdminProps) {
       }
       
       setShowFacilityModal(false);
+      startModuleRefresh('facilities');
+      await refetchMasterFacilities();
+      showToast('Fasilitas berhasil disimpan!');
     } catch (error: any) {
       console.error("Gagal menyimpan fasilitas:", error);
-      alert(`Gagal menyimpan fasilitas ke database.\n\nDetail Error: ${error.message || 'Terjadi kesalahan pada server.'}`);
+      showToast(error.message || 'Gagal menyimpan fasilitas.', 'error');
     } finally {
       setIsSavingFacility(false);
+      endModuleRefresh('facilities');
     }
   };
 
@@ -673,11 +749,18 @@ export default function Admin({}: AdminProps) {
       'Hapus Fasilitas',
       `Apakah Anda yakin ingin menghapus fasilitas "${facility.title}" dari sistem master?`,
       async () => {
+        startItemProcessing(facility.id);
         try {
           await database.deleteMasterFacility(facility.id);
+          startModuleRefresh('facilities');
+          await refetchMasterFacilities();
+          showToast('Fasilitas berhasil dihapus!');
         } catch (error: any) {
           console.error("Gagal menghapus fasilitas:", error);
-          alert(`Gagal menghapus fasilitas dari database.\n\nDetail Error: ${error.message || 'Terjadi kesalahan pada server.'}`);
+          showToast(error.message || 'Gagal menghapus fasilitas.', 'error');
+        } finally {
+          endItemProcessing(facility.id);
+          endModuleRefresh('facilities');
         }
       }
     );
@@ -688,10 +771,22 @@ export default function Admin({}: AdminProps) {
       'Tolak / Batalkan Sewa',
       `Tolak / batalkan reservasi sewa untuk tenant ${b.tenant_name}?`,
       async () => {
-        const updated = { ...b, status: 'rejected' as const };
-        await database.saveBooking(updated);
-        database.logActivity("System", "BOOKING_REJECT", `Sewa kamar ${b.room_number} ditolak`);
-        
+        startItemProcessing(b.id);
+        try {
+          const updated = { ...b, status: 'rejected' as const };
+          await database.saveBooking(updated);
+          database.logActivity("System", "BOOKING_REJECT", `Sewa kamar ${b.room_number} ditolak`);
+          
+          startModuleRefresh('bookings');
+          await refetchBookings();
+          showToast('Sewa kamar berhasil ditolak / dibatalkan!');
+        } catch (err: any) {
+          console.error('[Admin] Error rejecting booking:', err);
+          showToast(err.message || 'Gagal menolak / membatalkan sewa.', 'error');
+        } finally {
+          endItemProcessing(b.id);
+          endModuleRefresh('bookings');
+        }
       }
     );
   };
@@ -701,10 +796,22 @@ export default function Admin({}: AdminProps) {
       'Selesaikan Survey',
       `Selesaikan janji kunjungan survey kamar ${s.room_number}? Tindakan ini memindahkan status ke Completed.`,
       async () => {
-        const updated = { ...s, status: 'survey_completed' as const };
-        await database.saveSurvey(updated);
-        database.logActivity("System", "SURVEY_COMPLETED", `Survey untuk kamar ${s.room_number} selesai`);
-        
+        startItemProcessing(s.id);
+        try {
+          const updated = { ...s, status: 'survey_completed' as const };
+          await database.saveSurvey(updated);
+          database.logActivity("System", "SURVEY_COMPLETED", `Survey untuk kamar ${s.room_number} selesai`);
+          
+          startModuleRefresh('surveys');
+          await refetchSurveys();
+          showToast('Survey berhasil diselesaikan!');
+        } catch (err: any) {
+          console.error('[Admin] Error completing survey:', err);
+          showToast(err.message || 'Gagal menyelesaikan survey.', 'error');
+        } finally {
+          endItemProcessing(s.id);
+          endModuleRefresh('surveys');
+        }
       }
     );
   };
@@ -714,24 +821,38 @@ export default function Admin({}: AdminProps) {
       'Tandai sebagai No-Show',
       'Tandai sebagai No-Show? Jaminan komitmen DP Rp 500rb akan dipindahkan langsung sebagai pendapatan hangus korporasi (transparansi PBJT).',
       async () => {
-        const updated = { ...s, status: 'no_show' as const };
-        await database.saveSurvey(updated);
-        
-        // Seed an income transaction for lost DP
-        await database.postFinancialTransaction({
-          category: "Penerimaan Sewa",
-          description: `DP Survey Hangus - ${s.tenant_name} (Unit ${s.room_number})`,
-          amount: 500000,
-          type: "income",
-          reference_type: "survey",
-          reference_id: String(s.id),
-          created_by: "Admin",
-          debit_account_id: 1010, // Kas dan Bank Mandiri
-          credit_account_id: 4200 // Pendapatan DP Survey Hangus
-        });
-        
-        database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
-        
+        startItemProcessing(s.id);
+        try {
+          const updated = { ...s, status: 'no_show' as const };
+          await database.saveSurvey(updated);
+          
+          // Seed an income transaction for lost DP
+          await database.postFinancialTransaction({
+            category: "Penerimaan Sewa",
+            description: `DP Survey Hangus - ${s.tenant_name} (Unit ${s.room_number})`,
+            amount: 500000,
+            type: "income",
+            reference_type: "survey",
+            reference_id: String(s.id),
+            created_by: "Admin",
+            debit_account_id: 1010, // Kas dan Bank Mandiri
+            credit_account_id: 4200 // Pendapatan DP Survey Hangus
+          });
+          
+          database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
+          
+          startModuleRefresh('surveys');
+          startModuleRefresh('transactions');
+          await Promise.all([refetchSurveys(), refetchTransactions()]);
+          showToast('Survey berhasil ditandai No-Show!');
+        } catch (err: any) {
+          console.error('[Admin] Error marking survey No-Show:', err);
+          showToast(err.message || 'Gagal menandai No-Show.', 'error');
+        } finally {
+          endItemProcessing(s.id);
+          endModuleRefresh('surveys');
+          endModuleRefresh('transactions');
+        }
       }
     );
   };
@@ -741,10 +862,22 @@ export default function Admin({}: AdminProps) {
       'Setujui Pembayaran DP',
       `Setujui pembayaran DP survey sebesar Rp 500.000 untuk calon tenant ${s.tenant_name}?`,
       async () => {
-        const updated = { ...s, status: 'survey_confirmed' as const };
-        await database.saveSurvey(updated);
-        database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
-        
+        startItemProcessing(s.id);
+        try {
+          const updated = { ...s, status: 'survey_confirmed' as const };
+          await database.saveSurvey(updated);
+          database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
+          
+          startModuleRefresh('surveys');
+          await refetchSurveys();
+          showToast('Pembayaran DP Survey berhasil disetujui!');
+        } catch (err: any) {
+          console.error('[Admin] Error approving survey payment:', err);
+          showToast(err.message || 'Gagal menyetujui pembayaran DP survey.', 'error');
+        } finally {
+          endItemProcessing(s.id);
+          endModuleRefresh('surveys');
+        }
       }
     );
   };
@@ -754,10 +887,22 @@ export default function Admin({}: AdminProps) {
       'Batalkan / Tolak Survey',
       `Batalkan / tolak pengajuan survey untuk calon tenant ${s.tenant_name}?`,
       async () => {
-        const updated = { ...s, status: 'expired' as const };
-        await database.saveSurvey(updated);
-        database.logActivity("System", "SURVEY_CANCEL", `Pengajuan survey kamar ${s.room_number} dibatalkan`);
-        
+        startItemProcessing(s.id);
+        try {
+          const updated = { ...s, status: 'expired' as const };
+          await database.saveSurvey(updated);
+          database.logActivity("System", "SURVEY_CANCEL", `Pengajuan survey kamar ${s.room_number} dibatalkan`);
+          
+          startModuleRefresh('surveys');
+          await refetchSurveys();
+          showToast('Survey berhasil dibatalkan / ditolak!');
+        } catch (err: any) {
+          console.error('[Admin] Error canceling survey:', err);
+          showToast(err.message || 'Gagal membatalkan survey.', 'error');
+        } finally {
+          endItemProcessing(s.id);
+          endModuleRefresh('surveys');
+        }
       }
     );
   };
@@ -767,10 +912,15 @@ export default function Admin({}: AdminProps) {
     try {
       await database.saveProperty(payload);
       setShowPropertyModal(false);
-    } catch (err) {
+      startModuleRefresh('properties');
+      await refetchProperties();
+      showToast('Properti berhasil disimpan!');
+    } catch (err: any) {
       console.error('[Admin] Error saving property:', err);
+      showToast(err.message || 'Gagal menyimpan properti.', 'error');
     } finally {
       setIsSavingProperty(false);
+      endModuleRefresh('properties');
     }
   };
 
@@ -779,10 +929,18 @@ export default function Admin({}: AdminProps) {
       'Hapus Properti',
       'Apakah Anda yakin ingin menghapus properti kos ini? Semua metadata kamar di dalamnya juga akan terhapus.',
       async () => {
+        startItemProcessing(id);
         try {
           await database.deleteProperty(id);
-        } catch (err) {
+          startModuleRefresh('properties');
+          await refetchProperties();
+          showToast('Properti berhasil dihapus!');
+        } catch (err: any) {
           console.error('[Admin] Error deleting property:', err);
+          showToast(err.message || 'Gagal menghapus properti.', 'error');
+        } finally {
+          endItemProcessing(id);
+          endModuleRefresh('properties');
         }
       }
     );
@@ -792,8 +950,15 @@ export default function Admin({}: AdminProps) {
     try {
       await database.saveRoom(payload);
       setShowRoomModal(false);
-    } catch (err) {
+      startModuleRefresh('rooms');
+      await refetchRooms();
+      showToast('Kamar berhasil disimpan!');
+    } catch (err: any) {
       console.error('[Admin] Error saving room:', err);
+      showToast(err.message || 'Gagal menyimpan kamar.', 'error');
+      throw err;
+    } finally {
+      endModuleRefresh('rooms');
     }
   };
 
@@ -802,10 +967,18 @@ export default function Admin({}: AdminProps) {
       'Hapus Kamar',
       'Ingin menghapus unit kamar ini?',
       async () => {
+        startItemProcessing(id);
         try {
           await database.deleteRoom(id);
-        } catch (err) {
+          startModuleRefresh('rooms');
+          await refetchRooms();
+          showToast('Kamar berhasil dihapus!');
+        } catch (err: any) {
           console.error('[Admin] Error deleting room:', err);
+          showToast(err.message || 'Gagal menghapus kamar.', 'error');
+        } finally {
+          endItemProcessing(id);
+          endModuleRefresh('rooms');
         }
       }
     );
@@ -826,10 +999,15 @@ export default function Admin({}: AdminProps) {
     try {
       await database.saveCoupon(payload);
       setShowCouponModal(false);
-    } catch (err) {
+      startModuleRefresh('coupons');
+      await refetchCoupons();
+      showToast('Kupon promo berhasil disimpan!');
+    } catch (err: any) {
       console.error('[Admin] Error saving coupon:', err);
+      showToast(err.message || 'Gagal menyimpan kupon promo.', 'error');
     } finally {
       setIsSavingCoupon(false);
+      endModuleRefresh('coupons');
     }
   };
 
@@ -850,10 +1028,15 @@ export default function Admin({}: AdminProps) {
       setShowUserModal(false);
       setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true });
       setActiveUserEdit(null);
-    } catch (err) {
+      startModuleRefresh('users');
+      await refetchUsers();
+      showToast('Otorisasi fungsionaris berhasil disimpan!');
+    } catch (err: any) {
       console.error('[Admin] Error saving user:', err);
+      showToast(err.message || 'Gagal menyimpan otorisasi fungsionaris.', 'error');
     } finally {
       setIsSavingUser(false);
+      endModuleRefresh('users');
     }
   };
 
@@ -862,10 +1045,18 @@ export default function Admin({}: AdminProps) {
       'Cabut Hak Akses',
       'Apakah Anda yakin ingin mencabut seluruh hak akses fungsionaris ini?',
       async () => {
+        startItemProcessing(id);
         try {
           await database.deleteUser(id);
-        } catch (err) {
+          startModuleRefresh('users');
+          await refetchUsers();
+          showToast('Hak akses fungsionaris berhasil dicabut!');
+        } catch (err: any) {
           console.error('[Admin] Error deleting user:', err);
+          showToast(err.message || 'Gagal mencabut hak akses.', 'error');
+        } finally {
+          endItemProcessing(id);
+          endModuleRefresh('users');
         }
       }
     );
@@ -876,10 +1067,18 @@ export default function Admin({}: AdminProps) {
       'Hapus Kupon Promo',
       'Apakah Anda yakin ingin menghapus kupon promo ini secara permanen?',
       async () => {
+        startItemProcessing(id);
         try {
           await database.deleteCoupon(id);
-        } catch (err) {
+          startModuleRefresh('coupons');
+          await refetchCoupons();
+          showToast('Kupon promo berhasil dihapus!');
+        } catch (err: any) {
           console.error('[Admin] Error deleting coupon:', err);
+          showToast(err.message || 'Gagal menghapus kupon promo.', 'error');
+        } finally {
+          endItemProcessing(id);
+          endModuleRefresh('coupons');
         }
       }
     );
@@ -916,7 +1115,27 @@ export default function Admin({}: AdminProps) {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 flex flex-col lg:flex-row gap-6 font-sans">
+    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 flex flex-col md:flex-row gap-6 font-sans relative">
+      {/* Toast Notifications */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full">
+        {toasts.map(t => (
+          <div
+            key={t.id}
+            className={`pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg border text-xs font-semibold transition-all duration-300 ${
+              t.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+            }`}
+          >
+            {t.type === 'success' ? (
+              <CheckCircle size={14} className="text-emerald-600 flex-shrink-0 animate-pulse" />
+            ) : (
+              <AlertCircle size={14} className="text-rose-600 flex-shrink-0" />
+            )}
+            <span>{t.message}</span>
+          </div>
+        ))}
+      </div>
       
       {/* Sidebar layouts controls */}
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
@@ -932,7 +1151,7 @@ export default function Admin({}: AdminProps) {
             </div>
 
             {/* Quick KPI stats row */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
                 <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Okupansi Kamar</span>
                 <span className="text-2xl font-extrabold text-[#0D9488] font-mono block">{occupancyRate}%</span>
@@ -978,6 +1197,12 @@ export default function Admin({}: AdminProps) {
 
         {activeTab === 'properties' && (
           <div className="space-y-4">
+            {refreshingModule['properties'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Katalog Kompleks Properti Kos</h2>
@@ -1009,16 +1234,22 @@ export default function Admin({}: AdminProps) {
                           setActivePropertyEdit(p);
                           setShowPropertyModal(true);
                         }}
-                        className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                        disabled={processingItems[p.id]}
+                        className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Edit2 size={12} />
                         Ubah
                       </button>
                       <button 
                         onClick={() => handleDeleteProperty(p.id)}
-                        className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                        disabled={processingItems[p.id]}
+                        className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Trash2 size={12} />
+                        {processingItems[p.id] ? (
+                          <RotateCw size={12} className="animate-spin text-red-600" />
+                        ) : (
+                          <Trash2 size={12} />
+                        )}
                         Hapus
                       </button>
                     </div>
@@ -1063,6 +1294,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
         {activeTab === 'rooms' && (
           <div className="space-y-4">
+            {refreshingModule['rooms'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Ketersediaan Kamar / Unit</h2>
@@ -1096,16 +1333,22 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             setActiveRoomEdit(r);
                             setShowRoomModal(true);
                           }}
-                          className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                          disabled={processingItems[r.id]}
+                          className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <Edit2 size={12} />
                           Kustomisasi
                         </button>
                         <button 
                           onClick={() => handleDeleteRoom(r.id)}
-                          className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                          disabled={processingItems[r.id]}
+                          className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <Trash2 size={12} />
+                          {processingItems[r.id] ? (
+                            <RotateCw size={12} className="animate-spin text-red-600" />
+                          ) : (
+                            <Trash2 size={12} />
+                          )}
                           Hapus
                         </button>
                       </div>
@@ -1151,6 +1394,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
         {activeTab === 'facilities' && (
           <div className="space-y-4">
+            {refreshingModule['facilities'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Master Fasilitas Layanan</h2>
@@ -1203,6 +1452,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                       <div className="flex gap-2 border-t border-[#F1F5F9] pt-3">
                         <button
+                          disabled={processingItems[fac.id]}
                           onClick={() => {
                             setEditingFacilityIndex(originalIdx);
                             setFacilityForm({
@@ -1212,16 +1462,21 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             });
                             setShowFacilityModal(true);
                           }}
-                          className="flex-1 p-2 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                          className="flex-1 p-2 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <Edit2 size={12} />
                           Ubah
                         </button>
                         <button
+                          disabled={processingItems[fac.id]}
                           onClick={() => handleDeleteFacility(originalIdx)}
-                          className="flex-1 p-2 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                          className="flex-1 p-2 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <Trash2 size={12} />
+                          {processingItems[fac.id] ? (
+                            <RotateCw size={12} className="animate-spin text-red-600" />
+                          ) : (
+                            <Trash2 size={12} />
+                          )}
                           Hapus
                         </button>
                       </div>
@@ -1243,6 +1498,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
         {activeTab === 'surveys' && (
           <div className="space-y-4">
+            {refreshingModule['surveys'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="border-b border-[#F1F5F9] pb-4 text-left">
               <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Antrian Jadwal Survey Lapangan</h2>
               <p className="text-xs text-[#64748B] mt-0.5">Saring jadwal survey masuk dengan DP Rp 500rb komitmen.</p>
@@ -1282,16 +1543,26 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     <div className="flex flex-wrap gap-2 border-t border-[#F1F5F9] pt-3.5">
                       <button 
                         onClick={() => handleApproveSurvey(s)}
-                        className="p-2 px-4 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm"
+                        disabled={processingItems[s.id]}
+                        className="p-2 px-4 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Check size={13} />
+                        {processingItems[s.id] ? (
+                          <RotateCw size={13} className="animate-spin text-white" />
+                        ) : (
+                          <Check size={13} />
+                        )}
                         Selesai Survey (Sesuai Janji)
                       </button>
                       <button 
                         onClick={() => handleNoShowSurvey(s)}
-                        className="p-2 px-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm"
+                        disabled={processingItems[s.id]}
+                        className="p-2 px-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <X size={13} />
+                        {processingItems[s.id] ? (
+                          <RotateCw size={13} className="animate-spin text-white" />
+                        ) : (
+                          <X size={13} />
+                        )}
                         No-Show (DP Hangus)
                       </button>
                     </div>
@@ -1301,16 +1572,26 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     <div className="flex gap-2 border-t border-slate-850/80 pt-2.5">
                       <button 
                         onClick={() => handleApproveSurveyPayment(s)}
-                        className="p-1 px-3 bg-emerald-600 hover:bg-emerald-550 text-white rounded-xl font-bold font-sans cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md shadow-emerald-600/5"
+                        disabled={processingItems[s.id]}
+                        className="p-1 px-3 bg-emerald-600 hover:bg-emerald-550 text-white rounded-xl font-bold font-sans cursor-pointer transition text-[10px] flex items-center gap-1 shadow-md shadow-emerald-600/5 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Check size={11} />
+                        {processingItems[s.id] ? (
+                          <RotateCw size={11} className="animate-spin text-white" />
+                        ) : (
+                          <Check size={11} />
+                        )}
                         Setujui Pembayaran DP
                       </button>
                       <button 
                         onClick={() => handleCancelSurvey(s)}
-                        className="p-2 px-4 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl transition font-bold cursor-pointer text-xs flex items-center gap-1.5 border border-red-100 hover:border-red-500 shadow-xs"
+                        disabled={processingItems[s.id]}
+                        className="p-2 px-4 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl transition font-bold cursor-pointer text-xs flex items-center gap-1.5 border border-red-100 hover:border-red-500 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <X size={11} />
+                        {processingItems[s.id] ? (
+                          <RotateCw size={11} className="animate-spin text-red-600" />
+                        ) : (
+                          <X size={11} />
+                        )}
                         Tolak
                       </button>
                     </div>
@@ -2816,6 +3097,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             {/* TAB 6: BRAND COUPONS OR PROMOS */}
             {activeTab === 'coupons' && (
           <div className="space-y-4">
+            {refreshingModule['coupons'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Kupon Promo & Kampanye Diskon</h2>
@@ -2846,6 +3133,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
         {activeTab === 'bookings_history' && (
           <div className="space-y-4">
+            {refreshingModule['bookings'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-3">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Riwayat Transaksi Pemesanan & Kontrak Sewa</h2>
@@ -2988,7 +3281,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                               onClick={() => {
                                 setEditingOccupantBooking(b);
                               }}
-                              className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-600 hover:text-white font-extrabold text-[10px] rounded-xl border border-amber-500/20 transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider"
+                              disabled={processingItems[b.id]}
+                              className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-600 hover:text-white font-extrabold text-[10px] rounded-xl border border-amber-500/20 transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <Edit2 size={11} />
                               Update Data Penghuni (Si B)
@@ -2998,9 +3292,14 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                               <button
                                 type="button"
                                 onClick={() => handleConfirmArrival(b)}
-                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-550 text-white font-extrabold text-[10px] rounded-xl transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider"
+                                disabled={processingItems[b.id]}
+                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-550 text-white font-extrabold text-[10px] rounded-xl transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                <CheckCircle size={11} />
+                                {processingItems[b.id] ? (
+                                  <RotateCw size={11} className="animate-spin text-white" />
+                                ) : (
+                                  <CheckCircle size={11} />
+                                )}
                                 Konfirmasi Kedatangan (Check-In)
                               </button>
                             )}
@@ -3034,17 +3333,27 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             <button
                               type="button"
                               onClick={() => handleApproveBooking(b)}
-                              className="p-2 px-4 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl font-bold cursor-pointer transition text-xs flex items-center gap-1.5 shadow-xs"
+                              disabled={processingItems[b.id]}
+                              className="p-2 px-4 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl font-bold cursor-pointer transition text-xs flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              <Check size={11} />
+                              {processingItems[b.id] ? (
+                                <RotateCw size={11} className="animate-spin text-white" />
+                              ) : (
+                                <Check size={11} />
+                              )}
                               Setujui Pembayaran
                             </button>
                             <button
                               type="button"
                               onClick={() => handleCancelBooking(b)}
-                              className="p-2 px-4 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl transition font-bold cursor-pointer text-xs flex items-center gap-1.5 border border-red-100 hover:border-red-500 shadow-xs"
+                              disabled={processingItems[b.id]}
+                              className="p-2 px-4 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl transition font-bold cursor-pointer text-xs flex items-center gap-1.5 border border-red-100 hover:border-red-500 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              <X size={11} />
+                              {processingItems[b.id] ? (
+                                <RotateCw size={11} className="animate-spin text-red-600" />
+                              ) : (
+                                <X size={11} />
+                              )}
                               Tolak
                             </button>
                           </>
@@ -3063,6 +3372,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
         {activeTab === 'tenants' && (
           <div className="space-y-4">
+            {refreshingModule['tenants'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-4 flex-wrap gap-4 text-left">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Daftar Aktif Penghuni Kamar (Tenants)</h2>
@@ -3234,6 +3549,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
         {activeTab === 'user_roles' && (
           <div className="space-y-4">
+            {refreshingModule['users'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">User & Manajemen Hak Akses (RBAC)</h2>
@@ -3294,7 +3615,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                         });
                         setShowUserModal(true);
                       }}
-                      className="flex-1 md:flex-initial p-1.5 px-3 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center"
+                      disabled={processingItems[u.id]}
+                      className="flex-1 md:flex-initial p-1.5 px-3 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Edit2 size={11} />
                       Ubah Izin
@@ -3302,9 +3624,14 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     <button
                       type="button"
                       onClick={() => handleDeleteUser(u.id)}
-                      className="flex-1 md:flex-initial p-1.5 px-3 bg-red-950/25 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center"
+                      disabled={processingItems[u.id]}
+                      className="flex-1 md:flex-initial p-1.5 px-3 bg-red-950/25 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <Trash2 size={11} />
+                      {processingItems[u.id] ? (
+                        <RotateCw size={11} className="animate-spin text-red-400" />
+                      ) : (
+                        <Trash2 size={11} />
+                      )}
                       Cabut Akses
                     </button>
                   </div>
@@ -3937,16 +4264,25 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
+              disabled={isSavingOccupant}
               onClick={() => setEditingOccupantBooking(null)}
-              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all duration-200 cursor-pointer"
+              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Batal
             </button>
             <button
               type="submit"
-              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all duration-200 cursor-pointer"
+              disabled={isSavingOccupant}
+              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all duration-200 cursor-pointer disabled:bg-[#0D9488]/50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
             >
-              Simpan Perubahan
+              {isSavingOccupant ? (
+                <>
+                  <RotateCw size={13} className="animate-spin" />
+                  <span>Menyimpan...</span>
+                </>
+              ) : (
+                'Simpan Perubahan'
+              )}
             </button>
           </div>
         </form>

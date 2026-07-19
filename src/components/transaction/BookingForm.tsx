@@ -113,7 +113,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             <p>Sewa Komitmen Survey membutuhkan DP Rp 500.000. Jaminan ini akan hangus jika Anda tidak hadir sesuai jadwal (No-Show), namun sepenuhnya dikembalikan/dikompensasikan ke harga sewa jika lanjut sewa (Covenan Transparansi).</p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap</label>
               <input 
@@ -136,7 +136,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Tanggal Kunjungan</label>
               <input 
@@ -160,7 +160,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nomor Handphone (WhatsApp)</label>
               <input 
@@ -212,7 +212,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Tenant Utama</label>
               <input 
@@ -235,7 +235,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </div>
           </div>
 
-          <div className={bookingForm.isForOther ? "grid grid-cols-1" : "grid grid-cols-2 gap-3"}>
+          <div className={bookingForm.isForOther ? "grid grid-cols-1" : "grid grid-cols-1 sm:grid-cols-2 gap-3"}>
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Email</label>
               <input 
@@ -280,7 +280,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                   <strong>Catatan Pemesanan Pihak Ketiga:</strong> Masukkan data lengkap orang yang akan menempati kamar (Si B). Kamar akan otomatis terbooking lunas aman di sistem setelah pembayaran selesai. Admin akan memverifikasi NIK KTP mereka saat kedatangan/check-in.
                 </div>
                 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap Penghuni</label>
                     <input 
@@ -303,7 +303,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Email Penghuni</label>
                     <input 
@@ -329,7 +329,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Rencana Check-In</label>
               <input 

@@ -8,9 +8,10 @@ interface CouponListProps {
   coupons: Coupon[];
   onSelectCoupon?: (coupon: Coupon) => void;
   onDeleteCoupon?: (id: number) => void;
+  processingItems?: Record<string, boolean>;
 }
 
-export const CouponList: React.FC<CouponListProps> = ({ coupons, onSelectCoupon, onDeleteCoupon }) => {
+export const CouponList: React.FC<CouponListProps> = ({ coupons, onSelectCoupon, onDeleteCoupon, processingItems = {} }) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {coupons.map(c => (
@@ -33,11 +34,16 @@ export const CouponList: React.FC<CouponListProps> = ({ coupons, onSelectCoupon,
               {onDeleteCoupon && (
                 <button
                   type="button"
+                  disabled={processingItems[c.id]}
                   onClick={() => onDeleteCoupon(c.id)}
-                  className="p-1 hover:bg-rose-500/10 text-rose-500 rounded-lg transition-colors cursor-pointer border border-rose-500/10"
+                  className="p-1 hover:bg-rose-500/10 text-rose-500 rounded-lg transition-colors cursor-pointer border border-rose-500/10 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[22px] min-h-[22px]"
                   title="Hapus Kupon"
                 >
-                  <Trash2 size={12} />
+                  {processingItems[c.id] ? (
+                    <span className="w-2.5 h-2.5 block border border-rose-500 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Trash2 size={12} />
+                  )}
                 </button>
               )}
             </div>

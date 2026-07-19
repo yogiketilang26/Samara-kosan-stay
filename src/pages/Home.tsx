@@ -271,18 +271,11 @@ export default function Home({}: HomeProps) {
 
   // Helper to render lucide icon from settings
   const renderSettingIcon = (iconName: string) => {
-    switch (iconName) {
-      case 'Clock': return <Clock size={24} className="text-[#2E6F40]" />;
-      case 'LogIn': return <LogIn size={24} className="text-[#2E6F40]" />;
-      case 'Shield': return <Shield size={24} className="text-[#2E6F40]" />;
-      case 'Wifi': return <Wifi size={24} className="text-[#2E6F40]" />;
-      case 'Zap': return <Zap size={24} className="text-[#2E6F40]" />;
-      case 'Droplet': return <Droplet size={24} className="text-[#2E6F40]" />;
-      case 'Car': return <Car size={24} className="text-[#2E6F40]" />;
-      case 'Shirt': return <Shirt size={24} className="text-[#2E6F40]" />;
-      case 'Sparkles': return <Sparkles size={24} className="text-[#2E6F40]" />;
-      default: return <Info size={24} className="text-[#2E6F40]" />;
+    const IconComponent = (LucideIcons as any)[iconName];
+    if (IconComponent) {
+      return <IconComponent size={24} className="text-[#2E6F40]" />;
     }
+    return <LucideIcons.Info size={24} className="text-[#2E6F40]" />;
   };
 
   // Parse Standard Facilities
@@ -868,6 +861,18 @@ export default function Home({}: HomeProps) {
         }).addTo(map);
 
         mapRef.current = map;
+
+        // Auto-invalidate size on container resize (perfect for orientation/screen changes!)
+        if (typeof ResizeObserver !== 'undefined') {
+          const resizeObserver = new ResizeObserver(() => {
+            try {
+              map.invalidateSize();
+            } catch (e) {
+              console.warn('[LEAFLET] Error invalidating map size:', e);
+            }
+          });
+          resizeObserver.observe(container);
+        }
       }
     }
 
