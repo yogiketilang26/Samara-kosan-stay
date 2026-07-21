@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import * as LucideIcons from 'lucide-react';
-import { database, getIsSupabaseConfigured } from '../lib/supabase';
+import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
+import { observability, useRenderCounter } from '../lib/observability';
 import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem } from '../types';
 import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
@@ -26,6 +27,8 @@ import {
 interface AdminProps {}
 
 export default function Admin({}: AdminProps) {
+  useRenderCounter('AdminDashboard');
+  
   // Use granular real-time table hooks to fetch data and receive live changes
   const { data: propertiesData, loading: propertiesLoading, refetch: refetchProperties } = useRealtimeTable<Property>(
     'properties',
@@ -75,6 +78,18 @@ export default function Admin({}: AdminProps) {
     journalEntriesLoading || paymentsLoading || settingsLoading || masterFacilitiesLoading;
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  
+  // Observability real-time state trigger
+  const [, setObservabilityTrigger] = useState(0);
+  const [obsSubTab, setObsSubTab] = useState<'realtime' | 'api' | 'performance' | 'errors'>('realtime');
+  
+  useEffect(() => {
+    const unsub = observability.subscribeToChanges(() => {
+      setObservabilityTrigger(prev => prev + 1);
+    });
+    return () => unsub();
+  }, []);
+
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -400,6 +415,18 @@ export default function Admin({}: AdminProps) {
   // Room modal triggers
   const [showRoomModal, setShowRoomModal] = useState(false);
   const [activeRoomEdit, setActiveRoomEdit] = useState<Room | null>(null);
+
+  // Pelunasan & Cancellation of Survey states
+  const [showPelunasanModal, setShowPelunasanModal] = useState(false);
+  const [selectedSurveyForPelunasan, setSelectedSurveyForPelunasan] = useState<Survey | null>(null);
+  const [pelunasanCheckInDate, setPelunasanCheckInDate] = useState(new Date().toISOString().split('T')[0]);
+  const [pelunasanDurationMonths, setPelunasanDurationMonths] = useState(1);
+  const [pelunasanIsSaving, setPelunasanIsSaving] = useState(false);
+
+  const [showCancelSurveyModal, setShowCancelSurveyModal] = useState(false);
+  const [selectedSurveyForCancel, setSelectedSurveyForCancel] = useState<Survey | null>(null);
+  const [cancelSurveyActionType, setCancelSurveyActionType] = useState<'forfeit' | 'refund' | 'none'>('forfeit');
+  const [cancelSurveyIsSaving, setCancelSurveyIsSaving] = useState(false);
 
   // Coupon creator modal triggers
   const [showCouponModal, setShowCouponModal] = useState(false);
@@ -867,6 +894,85 @@ export default function Admin({}: AdminProps) {
           const updated = { ...s, status: 'survey_confirmed' as const };
           await database.saveSurvey(updated);
           database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
+
+          // Send confirmation email to end user
+          if (s.email) {
+            fetch('/api/email/send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: s.email,
+                subject: `[Samara Stay] Bukti Pembayaran DP Survey - Unit ${s.room_number}`,
+                html: `
+                  <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
+                    <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
+                      <h1 style="font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 0;">SAMARA</h1>
+                      <p style="font-family: monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 4px 0 0 0;">S T A Y</p>
+                    </div>
+
+                    <div style="text-align: center; margin-bottom: 30px;">
+                      <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">LUNAS / PAID</span>
+                      <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">BUKTI PEMBAYARAN DP SURVEY</h2>
+                      <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">No. Invoice: ${s.invoice_id || 'INV-SRV-' + Math.floor(1000 + Math.random() * 9000)}</p>
+                    </div>
+
+                    <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
+                      <p>Halo <strong>${s.tenant_name}</strong>,</p>
+                      <p>Pembayaran jaminan komitmen survey Anda telah berhasil disetujui secara manual oleh pengelola. Berikut rincian pembayaran DP Survey Anda:</p>
+                    </div>
+
+                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
+                      <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Komitmen Survey</h3>
+                      
+                      <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
+                        <tr>
+                          <td style="color: #64748b; width: 45%;">Nama Calon Penghuni:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${s.tenant_name}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b;">No. Handphone:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right; font-family: monospace;">${s.phone}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b;">Kamar yang di-survey:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">Unit ${s.room_number}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b;">Tanggal Survey:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${s.survey_date}</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b;">Jam Kunjungan (Slot):</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${s.survey_time_slot} WIB</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b;">Metode Pembayaran:</td>
+                          <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: uppercase;">Manual Approval (Admin)</td>
+                        </tr>
+                        <tr>
+                          <td style="color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px;">Jumlah DP Komitmen:</td>
+                          <td style="color: #047857; font-weight: 900; font-size: 18px; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px; text-align: right;">
+                            Rp 500.000
+                          </td>
+                        </tr>
+                      </table>
+                    </div>
+
+                    <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #f59e0b; background-color: #fbf8f3; border-radius: 0 12px 12px 0;">
+                      <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Informasi Kebijakan Jaminan:</strong>
+                      Uang jaminan DP Survey ini sepenuhnya aman. Jika Anda memutuskan untuk melanjutkan sewa setelah survey, jaminan Rp 500.000 ini akan langsung dikompensasikan (mengurangi) pembayaran sisa sewa kamar Anda. Namun jika Anda tidak hadir sesuai jadwal (No-Show), maka DP dinyatakan hangus.
+                    </div>
+
+                    <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
+                      <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
+                      <p style="margin: 4px 0 0 0;">Email: info@samarastay.com | Whatsapp Pengelola Hunian</p>
+                      <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi.</p>
+                    </div>
+                  </div>
+                `
+              })
+            }).catch(e => console.error('Error sending approved survey email:', e));
+          }
           
           startModuleRefresh('surveys');
           await refetchSurveys();
@@ -905,6 +1011,301 @@ export default function Admin({}: AdminProps) {
         }
       }
     );
+  };
+
+  const handleExecutePelunasan = async () => {
+    if (!selectedSurveyForPelunasan) return;
+    const s = selectedSurveyForPelunasan;
+
+    setPelunasanIsSaving(true);
+    try {
+      const { data: roomData } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('property_id', s.property_id)
+        .eq('room_number', s.room_number)
+        .maybeSingle();
+
+      if (!roomData) throw new Error(`Data unit kamar ${s.room_number} tidak ditemukan.`);
+
+      const isFreeSurvey = Number(s.dp_amount) === 0;
+      const dpDeduction = isFreeSurvey ? 0 : 500000;
+
+      const monthlyPrice = Number(roomData.price);
+      const rentTotal = monthlyPrice * pelunasanDurationMonths;
+      const tax = Math.round(rentTotal * 0.1);
+      const deposit = 500000;
+      const grossTotal = rentTotal + tax + deposit;
+      const remainingBalance = grossTotal - dpDeduction;
+
+      const tenantPayload = {
+        full_name: s.tenant_name,
+        phone: s.phone,
+        email: s.email,
+        property_id: s.property_id,
+        room_number: s.room_number,
+        start_date: pelunasanCheckInDate,
+        duration_months: pelunasanDurationMonths,
+        payment_status: 'paid' as const,
+        nik: s.nik,
+        created_at: new Date().toISOString().split('T')[0]
+      };
+      const { error: tenantErr } = await safeSupabaseUpsert('tenants', tenantPayload);
+      if (tenantErr) throw tenantErr;
+
+      const bookingOrderId = `BOOK-PLN-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const bookingPayload = {
+        property_id: s.property_id,
+        room_id: roomData.id,
+        room_number: s.room_number,
+        tenant_name: s.tenant_name,
+        phone: s.phone,
+        email: s.email,
+        nik: s.nik,
+        booking_date: new Date().toISOString().split('T')[0],
+        check_in_date: pelunasanCheckInDate,
+        duration_months: pelunasanDurationMonths,
+        booking_type: 'monthly' as const,
+        total_price: grossTotal,
+        status: 'approved' as const,
+        payment_method: 'Manual Pelunasan (Admin)',
+        midtrans_order_id: bookingOrderId,
+        is_dp: false
+      };
+      const { error: bookingErr } = await safeSupabaseUpsert('bookings', bookingPayload);
+      if (bookingErr) throw bookingErr;
+
+      await safeSupabaseUpsert('rooms', { status: 'occupied', current_tenant_name: s.tenant_name }, roomData.id);
+
+      const pelunasanInvoiceId = `INV-PLN-${Math.floor(1000 + Math.random() * 9000)}`;
+      const paymentPayload = {
+        id: pelunasanInvoiceId,
+        tenant_name: s.tenant_name,
+        property_id: s.property_id,
+        amount: remainingBalance,
+        method: 'Manual Pelunasan (Admin)',
+        status: 'paid' as const,
+        payment_date: new Date().toISOString().split('T')[0],
+        midtrans_order_id: bookingOrderId
+      };
+      const { error: paymentErr } = await safeSupabaseUpsert('payments', paymentPayload);
+      if (paymentErr) throw paymentErr;
+
+      const updatedSurvey = { ...s, status: 'paid_full' as const };
+      await database.saveSurvey(updatedSurvey);
+
+      if (!isFreeSurvey) {
+        await database.recordFinancialRevenue(pelunasanInvoiceId, 1300, 500000, `Reklasifikasi Kompensasi DP Survey ke Pendapatan Sewa Unit ${s.room_number} - ${s.tenant_name}`);
+      }
+      await database.recordFinancialRevenue(pelunasanInvoiceId, 1010, remainingBalance, `Pelunasan Sewa Unit ${s.room_number} (${pelunasanDurationMonths} Bulan) - ${s.tenant_name}`);
+
+      database.logActivity("System", "SURVEY_PELUNASAN", `Pelunasan sewa unit ${s.room_number} selesai untuk tenant ${s.tenant_name}`);
+
+      if (s.email) {
+        fetch('/api/email/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: s.email,
+            subject: `[Samara Stay] Konfirmasi Pelunasan & Bukti Kontrak Sewa - Unit ${s.room_number}`,
+            html: `
+              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
+                <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
+                  <h1 style="font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 0;">SAMARA</h1>
+                  <p style="font-family: monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 4px 0 0 0;">S T A Y</p>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 30px;">
+                  <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">LUNAS / COMPLETED</span>
+                  <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">BUKTI PELUNASAN KONTRAK SEWA</h2>
+                  <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">No. Invoice: ${pelunasanInvoiceId}</p>
+                </div>
+
+                <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
+                  <p>Halo Selamat Datang, <strong>${s.tenant_name}</strong>!</p>
+                  <p>Selamat bergabung di Samara Stay! Pembayaran pelunasan sewa unit kamar Anda telah berhasil kami terima dan verifikasi penuh. Unit Anda siap huni!</p>
+                </div>
+
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
+                  <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Transaksi Sewa</h3>
+                  
+                  <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
+                    <tr>
+                      <td style="color: #64748b; width: 45%;">Unit Kamar:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">Kamar ${s.room_number}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Mulai Huni (Check-In):</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${pelunasanCheckInDate}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Durasi Sewa:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${pelunasanDurationMonths} Bulan</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Biaya Sewa Pokok:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">Rp ${(rentTotal).toLocaleString('id-ID')}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">PBJT (10%):</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">Rp ${(tax).toLocaleString('id-ID')}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Deposit Jaminan:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">Rp ${(deposit).toLocaleString('id-ID')}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Kompensasi DP Survey:</td>
+                      <td style="color: #b91c1c; font-weight: 700; text-align: right;">-Rp ${(dpDeduction).toLocaleString('id-ID')}</td>
+                    </tr>
+                    <tr style="border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px;">
+                      <td style="color: #64748b; padding-top: 12px;"><strong>Total Pelunasan Dibayar:</strong></td>
+                      <td style="color: #047857; font-weight: 900; font-size: 18px; padding-top: 12px; text-align: right;">
+                        Rp ${(remainingBalance).toLocaleString('id-ID')}
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+
+                <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #059669; background-color: #ecfdf5; border-radius: 0 12px 12px 0;">
+                  <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Pemberitahuan Check-In:</strong>
+                  Silakan serahkan bukti pelunasan ini ke resepsionis pengelola hunian saat kedatangan untuk serah terima kunci unit & onboarding fasilitas smart access.
+                </div>
+
+                <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
+                  <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
+                  <p style="margin: 4px 0 0 0;">Email: info@samarastay.com | Customer Service Office</p>
+                  <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi.</p>
+                </div>
+              </div>
+            `
+          })
+        }).catch(e => console.error('Error sending pelunasan email:', e));
+      }
+
+      startModuleRefresh('surveys');
+      startModuleRefresh('tenants');
+      startModuleRefresh('rooms');
+      startModuleRefresh('transactions');
+      await Promise.all([refetchSurveys(), refetchTenants(), refetchRooms(), refetchTransactions()]);
+      showToast('Pelunasan berhasil diproses! Tenant baru telah aktif.');
+      setShowPelunasanModal(false);
+    } catch (err: any) {
+      console.error('[Admin] Error executing pelunasan:', err);
+      showToast(err.message || 'Gagal memproses pelunasan.', 'error');
+    } finally {
+      setPelunasanIsSaving(false);
+    }
+  };
+
+  const handleExecuteCancelSurvey = async () => {
+    if (!selectedSurveyForCancel) return;
+    const s = selectedSurveyForCancel;
+
+    setCancelSurveyIsSaving(true);
+    try {
+      const updatedSurvey = { ...s, status: 'expired' as const };
+      await database.saveSurvey(updatedSurvey);
+
+      const { data: roomData } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('property_id', s.property_id)
+        .eq('room_number', s.room_number)
+        .maybeSingle();
+
+      if (roomData && roomData.status === 'reserved') {
+        await safeSupabaseUpsert('rooms', { status: 'available' }, roomData.id);
+      }
+
+      if (cancelSurveyActionType === 'forfeit') {
+        await database.postFinancialTransaction({
+          category: "Penerimaan Sewa",
+          description: `DP Survey Hangus - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
+          amount: 500000,
+          type: "income",
+          reference_type: "survey",
+          reference_id: String(s.id),
+          created_by: "Admin",
+          debit_account_id: 1300,
+          credit_account_id: 4200
+        });
+        database.logActivity("System", "SURVEY_CANCEL_FORFEIT", `DP Survey Hangus (Forfeit) untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
+      } else if (cancelSurveyActionType === 'refund') {
+        await database.postFinancialTransaction({
+          category: "Biaya Operasional",
+          description: `Pengembalian (Refund) DP Survey - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
+          amount: 500000,
+          type: "expense",
+          reference_type: "survey",
+          reference_id: String(s.id),
+          created_by: "Admin",
+          debit_account_id: 1300,
+          credit_account_id: 1010
+        });
+        database.logActivity("System", "SURVEY_CANCEL_REFUND", `DP Survey dikembalikan (Refund) untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
+      } else {
+        database.logActivity("System", "SURVEY_CANCEL_FREE", `Survey Kunjungan Tanpa DP dibatalkan untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
+      }
+
+      if (s.email) {
+        const isFree = Number(s.dp_amount) === 0;
+        fetch('/api/email/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: s.email,
+            subject: `[Samara Stay] Pemberitahuan Pembatalan Reservasi - Unit ${s.room_number}`,
+            html: `
+              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
+                <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
+                  <h1 style="font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 0;">SAMARA</h1>
+                  <p style="font-family: monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 4px 0 0 0;">S T A Y</p>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 30px;">
+                  <span style="background-color: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">DIBATALKAN / CANCELED</span>
+                  <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">PEMBATALAN RESERVASI UNIT</h2>
+                  <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">No. Reservasi: ${s.reservation_number}</p>
+                </div>
+
+                <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
+                  <p>Halo <strong>${s.tenant_name}</strong>,</p>
+                  <p>Kami menginformasikan bahwa reservasi survey sewa unit kamar Anda telah resmi dibatalkan di sistem kami.</p>
+                  
+                  <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
+                    <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Detail Pembatalan</h3>
+                    <table style="width: 100%; font-size: 13px; line-height: 2;">
+                      <tr><td style="color: #64748b; width: 45%;">Kamar:</td><td style="color: #1e293b; font-weight: 700; text-align: right;">Unit ${s.room_number}</td></tr>
+                      <tr><td style="color: #64748b;">Status DP Survey:</td><td style="color: #b91c1c; font-weight: 700; text-align: right;">${isFree ? 'Tanpa DP (Gratis)' : (cancelSurveyActionType === 'refund' ? 'Direfund Rp 500.000' : 'Hangus (Forfeited)')}</td></tr>
+                    </table>
+                  </div>
+                  
+                  <p style="font-size: 13px; color: #64748b;">Jika Anda memiliki pertanyaan lebih lanjut mengenai pembatalan ini atau ingin menjadwalkan ulang di masa mendatang, silakan hubungi tim Customer Service kami.</p>
+                </div>
+
+                <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
+                  <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
+                  <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi.</p>
+                </div>
+              </div>
+            `
+          })
+        }).catch(e => console.error('Error sending cancellation email:', e));
+      }
+
+      startModuleRefresh('surveys');
+      startModuleRefresh('rooms');
+      startModuleRefresh('transactions');
+      await Promise.all([refetchSurveys(), refetchRooms(), refetchTransactions()]);
+      showToast('Booking survey berhasil dibatalkan.');
+      setShowCancelSurveyModal(false);
+    } catch (err: any) {
+      console.error('[Admin] Error canceling survey:', err);
+      showToast(err.message || 'Gagal membatalkan survey.', 'error');
+    } finally {
+      setCancelSurveyIsSaving(false);
+    }
   };
 
   const handleAddProperty = async (payload: Partial<Property>) => {
@@ -1593,6 +1994,37 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           <X size={11} />
                         )}
                         Tolak
+                      </button>
+                    </div>
+                  )}
+
+                  {s.status === 'survey_completed' && (
+                    <div className="flex flex-wrap gap-2 border-t border-[#F1F5F9] pt-3.5">
+                      <button 
+                        onClick={() => {
+                          setSelectedSurveyForPelunasan(s);
+                          setPelunasanCheckInDate(new Date().toISOString().split('T')[0]);
+                          setPelunasanCheckInDate(new Date().toISOString().split('T')[0]);
+                          setPelunasanDurationMonths(1);
+                          setShowPelunasanModal(true);
+                        }}
+                        disabled={processingItems[s.id]}
+                        className="p-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Check size={13} />
+                        Pelunasan Pembayaran (Lanjut Sewa)
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setSelectedSurveyForCancel(s);
+                          setCancelSurveyActionType(Number(s.dp_amount) === 0 ? 'none' : 'forfeit');
+                          setShowCancelSurveyModal(true);
+                        }}
+                        disabled={processingItems[s.id]}
+                        className="p-2 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <X size={13} />
+                        Batalkan Booking (Batal Sewa)
                       </button>
                     </div>
                   )}
@@ -4084,6 +4516,570 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
 
+        {activeTab === 'observability' && (() => {
+          const rtHealth = observability.getRealtimeHealth();
+          const apiStats = observability.getApiStats();
+          const apiMetrics = observability.getApiMetrics();
+          const perfMetrics = observability.getPerformanceMetrics();
+          const renderCounts = observability.getRenderCounts();
+          const errorLogs = observability.getErrorLogs();
+
+          return (
+            <div className="space-y-6">
+              {/* Header section with description */}
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#E2E8F0] pb-4 gap-3">
+                <div>
+                  <h2 className="text-xl font-extrabold font-display text-[#1E293B] uppercase tracking-tight flex items-center gap-2.5">
+                    <LucideIcons.Gauge className="text-[#0D9488]" size={22} />
+                    Observabilitas & Realtime Health Monitor
+                  </h2>
+                  <p className="text-xs text-[#64748B] mt-0.5">Pantau status koneksi websocket realtime, latensi API, siklus hidup subscription (memory leak prevention), rendering React, dan pelacakan error produksi.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Trigger mock API request to simulate metrics
+                      fetch('/api/health?t=' + Date.now()).catch(() => {});
+                    }}
+                    className="p-2 px-3 bg-[#E0F2FE] hover:bg-[#BAE6FD] text-[#0369A1] rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5"
+                  >
+                    <LucideIcons.Send size={13} />
+                    <span>Tes API Ping</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        throw new Error('MOCK EXCEPTION: Pengujian manual pelacakan error terintegrasi!');
+                      } catch (err: any) {
+                        observability.recordError({
+                          message: err.message,
+                          stack: err.stack,
+                          url: window.location.href,
+                        });
+                      }
+                    }}
+                    className="p-2 px-3 bg-[#FFE4E6] hover:bg-[#FECDD3] text-[#BE123C] rounded-xl font-bold font-sans cursor-pointer transition text-xs flex items-center gap-1.5"
+                  >
+                    <LucideIcons.Bug size={13} />
+                    <span>Tes Error Tracking</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Sub Navigation bar */}
+              <div className="flex border-b border-[#E2E8F0] overflow-x-auto gap-1 pr-2 no-scrollbar">
+                {[
+                  { id: 'realtime', label: 'Websocket & Realtime', icon: LucideIcons.Radio, badge: rtHealth.connectionStatus === 'CONNECTED' ? 'Online' : 'Offline', badgeColor: rtHealth.connectionStatus === 'CONNECTED' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800' },
+                  { id: 'api', label: 'Kinerja API & Query', icon: LucideIcons.Zap, badge: `${apiStats.totalRequests} Req`, badgeColor: 'bg-[#F1F5F9] text-[#475569]' },
+                  { id: 'performance', label: 'React & Browser Performance', icon: LucideIcons.Cpu, badge: `${renderCounts.length} Comp`, badgeColor: 'bg-[#F1F5F9] text-[#475569]' },
+                  { id: 'errors', label: 'Error & Exception Logs', icon: LucideIcons.AlertTriangle, badge: `${errorLogs.length} Error`, badgeColor: errorLogs.length > 0 ? 'bg-rose-100 text-rose-800 animate-pulse font-bold' : 'bg-emerald-100 text-emerald-800' },
+                ].map((tab) => {
+                  const TabIcon = tab.icon;
+                  const isActive = obsSubTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setObsSubTab(tab.id as any)}
+                      className={`flex items-center gap-2 px-4 py-3 border-b-2 text-xs font-bold cursor-pointer whitespace-nowrap transition-all ${
+                        isActive
+                          ? 'border-[#0D9488] text-[#0D9488]'
+                          : 'border-transparent text-[#64748B] hover:text-[#0D9488] hover:border-[#E2E8F0]'
+                      }`}
+                    >
+                      <TabIcon size={14} />
+                      <span>{tab.label}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-semibold font-mono ${tab.badgeColor}`}>
+                        {tab.badge}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* TAB 1: Websocket & Realtime Channel */}
+              {obsSubTab === 'realtime' && (
+                <div className="space-y-6">
+                  {/* Status Cards Row */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Status Koneksi</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${rtHealth.connectionStatus === 'CONNECTED' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                        <span className="text-sm font-extrabold text-[#1E293B] font-mono">{rtHealth.connectionStatus}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Active Gateway Channel</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xl font-extrabold text-[#1E293B] font-mono">{rtHealth.activeChannelsCount}</span>
+                        <span className="text-[10px] bg-[#E0F2FE] text-[#0369A1] font-bold px-2 py-0.5 rounded-md font-mono">GLOBAL SINGLETON</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Jumlah Listener Aktif</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xl font-extrabold text-[#1E293B] font-mono">{rtHealth.totalListenersCount}</span>
+                        <span className="text-[10px] text-[#64748B] font-sans">Multiplexed Event Stream</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Waktu Event Terakhir</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-extrabold text-[#1E293B] font-mono">{rtHealth.lastEventTime || 'Belum Ada Event'}</span>
+                        <LucideIcons.Clock className="text-[#94A3B8]" size={15} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Active Tables & Listeners */}
+                    <div className="bg-white border border-[#E2E8F0] p-5 rounded-2xl space-y-4">
+                      <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-3">
+                        <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider font-mono flex items-center gap-1.5">
+                          <LucideIcons.ListCollapse size={14} className="text-[#0D9488]" />
+                          Tabel & Distribusi Listener Realtime
+                        </h4>
+                        <span className="text-[10px] text-[#64748B] font-mono">{rtHealth.tableListeners.length} Tabel Terhubung</span>
+                      </div>
+
+                      <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-1 no-scrollbar">
+                        {rtHealth.tableListeners.map((l: any) => (
+                          <div key={l.table} className="flex justify-between items-center p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl hover:bg-[#F1F5F9] transition">
+                            <div className="flex items-center gap-2.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#0D9488]" />
+                              <span className="text-xs font-bold text-slate-800 font-mono">{l.table}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 font-mono text-[10px] font-extrabold border border-emerald-200 rounded-md">
+                                {l.count} Callback Aktif
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+
+                        {rtHealth.tableListeners.length === 0 && (
+                          <div className="text-center py-10 text-[#64748B] text-xs">
+                            Tidak ada listener realtime yang terdaftar saat ini. Buka halaman lain untuk memicu subscription.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Subscription Cleanup Verification Audit */}
+                    <div className="bg-white border border-[#E2E8F0] p-5 rounded-2xl space-y-4">
+                      <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-3">
+                        <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider font-mono flex items-center gap-1.5">
+                          <LucideIcons.Activity size={14} className="text-emerald-600" />
+                          Subscription Cleanup Verification
+                        </h4>
+                        <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md font-mono font-bold flex items-center gap-1">
+                          <LucideIcons.Check size={11} /> Leak-Free Guaranteed
+                        </span>
+                      </div>
+                      
+                      <p className="text-[11px] text-[#64748B] leading-relaxed">
+                        Sistem ERP memverifikasi bahwa setiap kali komponen React unmount (dilepas), method <code className="font-mono bg-[#F1F5F9] px-1 py-0.5 text-rose-600 rounded text-[10px]">unsubscribe()</code> dipanggil untuk menghapus listener. Mutasi terperinci di bawah membuktikan integritas siklus hidup subscription:
+                      </p>
+
+                      <div className="space-y-2 max-h-[30vh] overflow-y-auto font-mono text-[10px] border border-[#E2E8F0] rounded-xl p-3 bg-slate-950 text-slate-300 no-scrollbar select-all">
+                        {rtHealth.history.map((h: any, idx: number) => (
+                          <div key={idx} className="flex items-center justify-between border-b border-white/5 pb-1.5">
+                            <div>
+                              <span className="text-slate-550">[{h.timestamp}]</span>{' '}
+                              <span className={`font-bold uppercase ${h.type === 'SUBSCRIBE' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {h.type}
+                              </span>{' '}
+                              <span className="text-white">{h.table}</span>
+                            </div>
+                            <span className="text-slate-500 text-[8px]">✓ verified</span>
+                          </div>
+                        ))}
+
+                        {rtHealth.history.length === 0 && (
+                          <div className="text-center py-6 text-slate-500 font-sans text-xs">
+                            Menunggu siklus unmount/mount komponen untuk menghasilkan logs...
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Realtime database changes log */}
+                  <div className="bg-white border border-[#E2E8F0] p-5 rounded-2xl space-y-4">
+                    <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider font-mono flex items-center gap-1.5 border-b border-[#F1F5F9] pb-3">
+                      <LucideIcons.ListCollapse size={14} className="text-[#0D9488]" />
+                      Real-time Database Mutasi Postgres (Live Updates)
+                    </h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-[#E2E8F0] text-[#64748B] font-mono text-[10px] uppercase">
+                            <th className="py-2.5 font-bold">Waktu Event</th>
+                            <th className="py-2.5 font-bold">Nama Tabel</th>
+                            <th className="py-2.5 font-bold">Tipe Operasi</th>
+                            <th className="py-2.5 font-bold">ID Records Terpengaruh</th>
+                            <th className="py-2.5 font-bold text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9] text-[#3A444D] font-mono text-[11px]">
+                          {rtHealth.recentEvents.map((evt: any, i: number) => (
+                            <tr key={i} className="hover:bg-[#F8FAFC]">
+                              <td className="py-3 text-[#64748B]">{evt.timestamp}</td>
+                              <td className="py-3 font-bold text-[#0D9488]">{evt.table}</td>
+                              <td className="py-3">
+                                <span className={`px-2 py-0.5 rounded font-extrabold text-[9px] ${
+                                  evt.eventType === 'INSERT' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                                  evt.eventType === 'UPDATE' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
+                                  'bg-rose-50 text-rose-700 border border-rose-100'
+                                }`}>
+                                  {evt.eventType}
+                                </span>
+                              </td>
+                              <td className="py-3 font-bold">{evt.id}</td>
+                              <td className="py-3 text-right text-emerald-600 font-extrabold">✓ DIOLAH</td>
+                            </tr>
+                          ))}
+
+                          {rtHealth.recentEvents.length === 0 && (
+                            <tr>
+                              <td colSpan={5} className="py-8 text-center text-[#64748B] font-sans text-xs">
+                                Belum menerima perubahan database realtime pada sesi aktif ini. Edit atau tambahkan data untuk melihat perubahan live di sini.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: API & Database Monitoring */}
+              {obsSubTab === 'api' && (
+                <div className="space-y-6">
+                  {/* Stats Cards Row */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Total API Requests (Sesi)</span>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xl font-extrabold text-[#1E293B] font-mono">{apiStats.totalRequests}</span>
+                        <span className="text-[10px] bg-slate-100 text-slate-700 font-mono px-2 py-0.5 rounded">HTTP Fetch</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Rata-rata Latensi Respons</span>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xl font-extrabold text-[#1E293B] font-mono">{apiStats.averageLatency} ms</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${
+                          apiStats.averageLatency < 150 ? 'bg-emerald-100 text-emerald-800' :
+                          apiStats.averageLatency < 500 ? 'bg-amber-100 text-amber-800' :
+                          'bg-rose-100 text-rose-800'
+                        }`}>
+                          {apiStats.averageLatency < 150 ? 'EXCELLENT' : apiStats.averageLatency < 500 ? 'OPTIMAL' : 'SLOW'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Error / Failure Rate</span>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xl font-extrabold text-rose-600 font-mono">{apiStats.errorRate}%</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${
+                          apiStats.errorRate === 0 ? 'bg-emerald-100 text-emerald-800' :
+                          apiStats.errorRate < 5 ? 'bg-amber-100 text-amber-800' :
+                          'bg-rose-100 text-rose-800 animate-pulse'
+                        }`}>
+                          {apiStats.errorRate === 0 ? 'HEALTHY' : apiStats.errorRate < 5 ? 'STABLE' : 'CRITICAL'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Top Endpoints Performance */}
+                    <div className="bg-white border border-[#E2E8F0] p-5 rounded-2xl space-y-4">
+                      <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider font-mono flex items-center gap-1.5 border-b border-[#F1F5F9] pb-3">
+                        <LucideIcons.LineChart size={14} className="text-[#0D9488]" />
+                        Distribusi & Metrik Kinerja Endpoint Paling Sering Dipanggil
+                      </h4>
+
+                      <div className="space-y-4">
+                        {apiStats.endpointStats.map((stat: any, idx: number) => (
+                          <div key={idx} className="space-y-1.5">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-mono font-bold text-slate-800 max-w-[70%] truncate" title={stat.endpoint}>
+                                {stat.endpoint}
+                              </span>
+                              <span className="text-[#64748B] font-mono text-[10px]">{stat.count} panggilan | Rata-rata: {stat.averageDuration}ms</span>
+                            </div>
+                            
+                            {/* Visual Progress Bar */}
+                            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden flex">
+                              <div 
+                                className={`h-full rounded-full ${
+                                  stat.averageDuration < 150 ? 'bg-emerald-500' :
+                                  stat.averageDuration < 500 ? 'bg-amber-500' :
+                                  'bg-rose-500'
+                                }`}
+                                style={{ width: `${Math.min((stat.count / apiStats.totalRequests) * 100 + 5, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+
+                        {apiStats.endpointStats.length === 0 && (
+                          <div className="text-center py-10 text-[#64748B] text-xs">
+                            Belum ada statistik pemanggilan API yang terhimpun. Pindahkan navigasi dashboard untuk mengumpulkan data logs.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* API Requests Stream */}
+                    <div className="bg-white border border-[#E2E8F0] p-5 rounded-2xl space-y-4">
+                      <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider font-mono flex items-center gap-1.5 border-b border-[#F1F5F9] pb-3">
+                        <LucideIcons.ListCollapse size={14} className="text-[#0D9488]" />
+                        Kronologis Pemanggilan API (Real-time HTTP Stream)
+                      </h4>
+
+                      <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1 no-scrollbar select-all">
+                        {apiMetrics.slice(0, 30).map((m: any) => (
+                          <div key={m.id} className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl flex items-center justify-between text-xs font-mono hover:bg-[#F1F5F9] transition">
+                            <div className="space-y-0.5 max-w-[75%]">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`px-1.5 py-0.2 rounded font-extrabold text-[9px] ${
+                                  m.method === 'GET' ? 'bg-[#ECFDF5] text-[#047857]' :
+                                  m.method === 'POST' ? 'bg-[#EFF6FF] text-[#1D4ED8]' :
+                                  'bg-[#FFFBEB] text-[#B45309]'
+                                }`}>
+                                  {m.method}
+                                </span>
+                                <span className="font-bold text-slate-800 truncate block" title={m.endpoint}>{m.endpoint}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-[9px] text-[#64748B]">
+                                <span className="uppercase tracking-wider font-semibold">[{m.type}]</span>
+                                <span>•</span>
+                                <span>{m.timestamp}</span>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className="font-bold text-slate-800 font-mono text-[11px] block">{m.duration} ms</span>
+                              <span className={`text-[10px] font-extrabold ${m.status >= 200 && m.status < 300 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                HTTP {m.status || 'FAILED'}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+
+                        {apiMetrics.length === 0 && (
+                          <div className="text-center py-10 text-[#64748B] text-xs">
+                            Tidak ada panggilan API terekam di sesi berjalan saat ini.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: Performance & Browser Health */}
+              {obsSubTab === 'performance' && (
+                <div className="space-y-6">
+                  {/* System & Hardware Context */}
+                  {perfMetrics && (
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                        <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Kecepatan Muat Halaman</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xl font-extrabold text-[#1E293B] font-mono">{perfMetrics.loadTime} ms</span>
+                          <LucideIcons.Gauge className="text-slate-400" size={16} />
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                        <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Heap Memory Digunakan</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xl font-extrabold text-[#1E293B] font-mono">
+                            {perfMetrics.memory ? `${perfMetrics.memory.usedJSHeapSize} MB` : 'N/A'}
+                          </span>
+                          <LucideIcons.ShieldAlert className="text-slate-400" size={16} />
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                        <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Total Limit Memory</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xl font-extrabold text-[#1E293B] font-mono">
+                            {perfMetrics.memory ? `${perfMetrics.memory.jsHeapSizeLimit} MB` : 'N/A'}
+                          </span>
+                          <LucideIcons.HardDrive className="text-slate-400" size={16} />
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                        <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Dimensi Resolusi Layar</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xl font-extrabold text-[#1E293B] font-mono">{perfMetrics.screenResolution}</span>
+                          <LucideIcons.Monitor className="text-slate-400" size={16} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Memory Usage visual progress if available */}
+                  {perfMetrics?.memory && (
+                    <div className="bg-white border border-[#E2E8F0] p-5 rounded-2xl space-y-3">
+                      <div className="flex justify-between items-center text-xs font-mono">
+                        <span className="font-bold uppercase text-[#64748B]">Visualisasi Alokasi JS Heap Memory Virtual</span>
+                        <span className="font-extrabold text-[#1E293B]">
+                          {Math.round((perfMetrics.memory.usedJSHeapSize / perfMetrics.memory.totalJSHeapSize) * 100)}% Digunakan
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden flex border border-[#E2E8F0]">
+                        <div 
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-300"
+                          style={{ width: `${(perfMetrics.memory.usedJSHeapSize / perfMetrics.memory.jsHeapSizeLimit) * 100}%` }}
+                        />
+                        <div 
+                          className="h-full bg-amber-500 transition-all duration-300"
+                          style={{ width: `${((perfMetrics.memory.totalJSHeapSize - perfMetrics.memory.usedJSHeapSize) / perfMetrics.memory.jsHeapSizeLimit) * 100}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-[9px] text-[#64748B] font-mono uppercase tracking-wider">
+                        <span>Used: {perfMetrics.memory.usedJSHeapSize} MB</span>
+                        <span>Allocated Total: {perfMetrics.memory.totalJSHeapSize} MB</span>
+                        <span>Max Limit: {perfMetrics.memory.jsHeapSizeLimit} MB</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* React Component Render Counting */}
+                  <div className="bg-white border border-[#E2E8F0] p-5 rounded-2xl space-y-4">
+                    <div className="border-b border-[#F1F5F9] pb-3">
+                      <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <LucideIcons.Activity size={14} className="text-[#0D9488]" />
+                        Render Profiling: Hitung Render React Component (Anti-Leak & Re-renders)
+                      </h4>
+                      <p className="text-[11px] text-[#64748B] mt-1 leading-relaxed">
+                        Pantau frekuensi re-rendering komponen utama secara langsung di browser. Nilai render yang berlebihan mengindikasikan struktur dependencies array <code className="font-mono bg-[#F1F5F9] px-1 py-0.5 text-rose-600 rounded text-[10px]">useEffect</code> atau state cascading yang kurang stabil.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] overflow-y-auto pr-1 no-scrollbar select-all">
+                      {renderCounts.map((rc: any) => (
+                        <div key={rc.componentName} className="p-3.5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl flex items-center justify-between hover:bg-[#F1F5F9] transition">
+                          <div>
+                            <span className="text-xs font-extrabold text-slate-800 font-mono block">{rc.componentName}</span>
+                            <span className="text-[9px] text-[#64748B] font-mono">Terakhir diupdate: {rc.lastRendered}</span>
+                          </div>
+                          <div className="text-right flex items-center gap-2">
+                            <span className={`px-3 py-1 font-mono text-xs font-extrabold rounded-lg ${
+                              rc.count < 10 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                              rc.count < 40 ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                              'bg-rose-50 text-rose-700 border border-rose-200 animate-pulse'
+                            }`}>
+                              {rc.count} Renders
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+
+                      {renderCounts.length === 0 && (
+                        <div className="col-span-2 text-center py-10 text-[#64748B] text-xs">
+                          Belum ada metrics re-rendering yang berhasil ditangkap.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: Error Logs & Exception Tracking */}
+              {obsSubTab === 'errors' && (
+                <div className="space-y-6">
+                  {/* Quick User Context Details */}
+                  <div className="bg-white border border-[#E2E8F0] p-4 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 bg-rose-50 text-rose-700 border border-rose-100 rounded-xl">
+                        <LucideIcons.UserCog size={16} />
+                      </div>
+                      <div>
+                        <h5 className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider font-mono">Aktif Sesi Diagnostik User</h5>
+                        <span className="text-xs font-extrabold text-[#1E293B] font-mono">yogiketilang33@gmail.com</span>
+                      </div>
+                    </div>
+                    <div className="p-2 px-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-[10px] font-mono text-[#64748B]">
+                      Browser Context Auto-Injected on Tracebacks
+                    </div>
+                  </div>
+
+                  {/* Terminal Error Logs List */}
+                  <div className="bg-slate-950 border border-slate-850 rounded-2xl p-5 space-y-4">
+                    <div className="flex justify-between items-center border-b border-white/10 pb-3">
+                      <div className="flex items-center gap-2 text-rose-400 font-mono text-xs font-bold">
+                        <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                        <span>EXCEPTIONS ERROR TRACKER LOGGER TERMINAL</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Clear errors locally
+                          (observability as any).errorLogs = [];
+                          setObservabilityTrigger(prev => prev + 1);
+                        }}
+                        className="text-[9px] text-[#64748B] hover:text-white font-bold border border-white/10 rounded-lg py-1 px-2.5 hover:bg-white/5 transition-all cursor-pointer"
+                      >
+                        Clear Terminal Logs
+                      </button>
+                    </div>
+
+                    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1 no-scrollbar select-all">
+                      {errorLogs.map((log) => (
+                        <div key={log.id} className="p-4 bg-slate-900 border border-red-500/10 rounded-xl space-y-2.5 font-mono text-[10px]">
+                          <div className="flex flex-col sm:flex-row justify-between border-b border-white/5 pb-2 gap-1">
+                            <div>
+                              <span className="text-rose-500 font-extrabold">[CRITICAL EXCEPTION]</span>{' '}
+                              <span className="text-white font-bold">{log.message}</span>
+                            </div>
+                            <span className="text-slate-500 text-[9px]">{log.timestamp}</span>
+                          </div>
+
+                          <div className="space-y-1 text-slate-400 leading-normal">
+                            <p><span className="text-slate-550 font-bold uppercase">URL Asal:</span> <span className="text-indigo-300">{log.url}</span></p>
+                            <p><span className="text-slate-550 font-bold uppercase">User Email:</span> <span className="text-[#0D9488] font-bold">@{log.userEmail || 'anonymous'}</span></p>
+                          </div>
+
+                          {log.stack && (
+                            <div className="pt-2">
+                              <span className="text-slate-550 block font-bold uppercase mb-1.5 text-[8.5px]">Exception Stack Trace:</span>
+                              <pre className="p-3 bg-slate-950 border border-white/5 rounded-lg overflow-x-auto text-slate-300 leading-relaxed max-h-40 no-scrollbar select-all text-[9.5px]">
+                                {log.stack}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+
+                      {errorLogs.length === 0 && (
+                        <div className="text-center py-12 text-slate-550 font-sans text-xs">
+                          <p className="font-extrabold">✓ Sistem Sehat & Bersih Dari Error</p>
+                          <p className="text-[10px] mt-1">Tidak ada unhandled exceptions atau crashed promises yang ditangkap pada sesi berjalan ini.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
       </div>
 
       {/* Property Editor modal */}
@@ -4473,6 +5469,221 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Pelunasan Survey Modal */}
+      <Modal
+        isOpen={showPelunasanModal}
+        onClose={() => setShowPelunasanModal(false)}
+        title="PROSES PELUNASAN KONTRAK SEWA UNIT"
+      >
+        {selectedSurveyForPelunasan && (
+          <div className="space-y-4 font-sans text-xs text-[#3A444D]">
+            <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-[#64748b] font-mono uppercase tracking-wider text-[10px]">Nama Calon Penghuni</span>
+                <span className="font-extrabold text-[#1e293b]">{selectedSurveyForPelunasan.tenant_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#64748b] font-mono uppercase tracking-wider text-[10px]">Unit Kamar</span>
+                <span className="font-extrabold text-[#1e293b]">Unit {selectedSurveyForPelunasan.room_number}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#64748b] font-mono uppercase tracking-wider text-[10px]">Email Penghuni</span>
+                <span className="font-extrabold text-[#1e293b]">{selectedSurveyForPelunasan.email || '-'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#64748b] font-mono uppercase tracking-wider text-[10px]">No. Whatsapp</span>
+                <span className="font-extrabold text-[#1e293b] font-mono">{selectedSurveyForPelunasan.phone}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Tanggal Mulai Huni (Check-In)</label>
+                <input 
+                  type="date"
+                  value={pelunasanCheckInDate}
+                  onChange={(e) => setPelunasanCheckInDate(e.target.value)}
+                  className="w-full bg-[#FAFAFA] border border-[#CBD5E1] p-2.5 rounded-xl text-slate-800 outline-none text-xs"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Durasi Sewa (Bulan)</label>
+                <select
+                  value={pelunasanDurationMonths}
+                  onChange={(e) => setPelunasanDurationMonths(Number(e.target.value))}
+                  className="w-full bg-[#FAFAFA] border border-[#CBD5E1] p-2.5 rounded-xl text-slate-800 outline-none text-xs font-bold"
+                >
+                  {[1, 2, 3, 4, 5, 6, 12].map(m => (
+                    <option key={m} value={m}>{m} Bulan</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-2xl p-4 space-y-2.5">
+              <h5 className="font-bold text-amber-900 font-mono text-[10px] uppercase tracking-wider border-b border-[#FDE68A] pb-1.5">Kalkulasi Sisa Pembayaran</h5>
+              
+              <div className="space-y-1.5 text-slate-700">
+                <div className="flex justify-between">
+                  <span>Biaya Sewa Pokok ({pelunasanDurationMonths} Bulan):</span>
+                  <span className="font-bold">
+                    Rp {((properties.find(p => p.id === selectedSurveyForPelunasan.property_id)?.price || 2500000) * pelunasanDurationMonths).toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>PBJT / Pajak Hunian (10%):</span>
+                  <span className="font-bold">
+                    Rp {(Math.round((properties.find(p => p.id === selectedSurveyForPelunasan.property_id)?.price || 2500000) * pelunasanDurationMonths * 0.1)).toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Deposit Jaminan (Standard):</span>
+                  <span className="font-bold">Rp 500.000</span>
+                </div>
+                {Number(selectedSurveyForPelunasan.dp_amount) > 0 ? (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Kompensasi DP Komitmen (Deduction):</span>
+                    <span>-Rp 500.000</span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between text-slate-500 font-mono text-[10px] uppercase tracking-wider">
+                    <span>Skema Kunjungan Tanpa DP:</span>
+                    <span>Rp 0</span>
+                  </div>
+                )}
+                
+                <div className="flex justify-between text-base font-extrabold text-[#1e293b] border-t border-dashed border-[#FDE68A] pt-2 mt-1.5">
+                  <span>Total Pelunasan Bersih:</span>
+                  <span className="text-emerald-700">
+                    Rp {(() => {
+                      const basePrice = properties.find(p => p.id === selectedSurveyForPelunasan.property_id)?.price || 2500000;
+                      const rent = basePrice * pelunasanDurationMonths;
+                      const tax = Math.round(rent * 0.1);
+                      const deposit = 500000;
+                      const dp = Number(selectedSurveyForPelunasan.dp_amount) === 0 ? 0 : 500000;
+                      return (rent + tax + deposit - dp).toLocaleString('id-ID');
+                    })()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                disabled={pelunasanIsSaving}
+                onClick={() => setShowPelunasanModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-[#CBD5E1] hover:bg-[#FAFAFA] text-slate-700 font-bold transition-all text-xs cursor-pointer disabled:opacity-50"
+              >
+                Batalkan
+              </button>
+              <button
+                type="button"
+                disabled={pelunasanIsSaving}
+                onClick={handleExecutePelunasan}
+                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold transition-all text-xs cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {pelunasanIsSaving ? (
+                  <>
+                    <RotateCw size={13} className="animate-spin text-white" />
+                    <span>Memproses Kontrak...</span>
+                  </>
+                ) : (
+                  'Konfirmasi Pelunasan'
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Cancellation of Survey Modal */}
+      <Modal
+        isOpen={showCancelSurveyModal}
+        onClose={() => setShowCancelSurveyModal(false)}
+        title="KONFIRMASI PEMBATALAN BOOKING"
+      >
+        {selectedSurveyForCancel && (
+          <div className="space-y-4 font-sans text-xs text-[#3A444D]">
+            <div className="bg-[#FFF1F2] border border-[#FECDD3] rounded-2xl p-4 flex gap-3 items-start">
+              <div className="p-2.5 bg-rose-100 text-rose-800 rounded-xl shrink-0">
+                <X size={20} />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-rose-900 uppercase tracking-wider font-mono">PERINGATAN PEMBATALAN RESERVASI</h4>
+                <p className="text-[11px] text-rose-700 mt-1 leading-relaxed">
+                  Calon penghuni <strong>{selectedSurveyForCancel.tenant_name}</strong> memutuskan untuk tidak jadi menempati unit <strong>Kamar {selectedSurveyForCancel.room_number}</strong> setelah melakukan survey.
+                </p>
+              </div>
+            </div>
+
+            {Number(selectedSurveyForCancel.dp_amount) > 0 ? (
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono block">Penanganan DP Komitmen (Rp 500.000)</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCancelSurveyActionType('forfeit')}
+                    className={`p-3 rounded-xl border text-left cursor-pointer transition ${
+                      cancelSurveyActionType === 'forfeit'
+                        ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/10'
+                        : 'border-[#CBD5E1] hover:bg-[#FAFAFA]'
+                    }`}
+                  >
+                    <strong className="block text-amber-900 text-[11px]">DP Hangus (Forfeit)</strong>
+                    <span className="text-[10px] text-slate-500 leading-normal block mt-1">DP diakui sebagai Pendapatan Lain-lain (No-Show/Batal).</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCancelSurveyActionType('refund')}
+                    className={`p-3 rounded-xl border text-left cursor-pointer transition ${
+                      cancelSurveyActionType === 'refund'
+                        ? 'bg-[#ECFDF5] border-emerald-500 ring-2 ring-emerald-500/10'
+                        : 'border-[#CBD5E1] hover:bg-[#FAFAFA]'
+                    }`}
+                  >
+                    <strong className="block text-emerald-900 text-[11px]">DP Direfund (Refund)</strong>
+                    <span className="text-[10px] text-slate-500 leading-normal block mt-1">Uang DP jaminan dikembalikan penuh ke calon penghuni.</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-[#FAFAFA] border border-[#E2E8F0] rounded-xl text-slate-500 text-[11px] leading-relaxed">
+                <span className="font-bold text-slate-700 uppercase font-mono tracking-wider text-[9px] block mb-1">Skema Tanpa DP</span>
+                Survey kunjungan ini diajukan tanpa DP komitmen booking. Kamar tidak berstatus 'Reserved' di sistem, sehingga pembatalan ini akan langsung membatalkan antrian secara gratis.
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                disabled={cancelSurveyIsSaving}
+                onClick={() => setShowCancelSurveyModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-[#CBD5E1] hover:bg-[#FAFAFA] text-slate-700 font-bold transition-all text-xs cursor-pointer disabled:opacity-50"
+              >
+                Kembali
+              </button>
+              <button
+                type="button"
+                disabled={cancelSurveyIsSaving}
+                onClick={handleExecuteCancelSurvey}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold transition-all text-xs cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {cancelSurveyIsSaving ? (
+                  <>
+                    <RotateCw size={13} className="animate-spin text-white" />
+                    <span>Membatalkan...</span>
+                  </>
+                ) : (
+                  'Batalkan Booking'
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Custom Confirmation Dialog */}

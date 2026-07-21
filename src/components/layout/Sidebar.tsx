@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, Building2, BedDouble, GraduationCap, 
   Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail, Sparkles,
-  Menu, X, PanelLeftClose, PanelLeft
+  Menu, X, PanelLeftClose, PanelLeft, Cpu
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -24,6 +24,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'user_roles', name: 'User & Akses', icon: UserCog },
     { id: 'email_integration', name: 'Integrasi Email', icon: Mail },
     { id: 'midtrans_logs', name: 'Midtrans Logs', icon: Terminal },
+    { id: 'observability', name: 'Health & Observability', icon: Cpu },
     { id: 'activity_logs', name: 'Log Aktivitas', icon: Activity }
   ];
 

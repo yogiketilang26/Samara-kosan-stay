@@ -34,6 +34,9 @@ class SupabaseRealtimeManager {
   private connectionStatus: 'CONNECTED' | 'DISCONNECTED' = 'DISCONNECTED';
   private retryTimeout: any = null;
   private retryCount = 0;
+  private lastEventTime: string | null = null;
+  private subscriptionHistory: { timestamp: string, type: 'SUBSCRIBE' | 'UNSUBSCRIBE', table: string }[] = [];
+  private recentEvents: { timestamp: string, table: string, eventType: string, id: any }[] = [];
 
   public init(supabaseClient: any, isConfigured: boolean) {
     this.client = supabaseClient;
@@ -72,6 +75,15 @@ class SupabaseRealtimeManager {
         .on('postgres_changes', { event: '*', schema: 'public' }, (payload: any) => {
           console.log('[REALTIME MANAGER] Realtime change event received:', payload);
           
+          this.lastEventTime = new Date().toLocaleTimeString();
+          this.recentEvents.unshift({
+            timestamp: new Date().toLocaleTimeString(),
+            table: payload?.table || 'unknown',
+            eventType: payload?.eventType || 'UNKNOWN',
+            id: payload?.new?.id || payload?.old?.id || '-'
+          });
+          if (this.recentEvents.length > 50) this.recentEvents.pop();
+
           // Route to specific table listeners
           if (payload && payload.table) {
             const tableListeners = this.listeners.get(payload.table);
@@ -155,15 +167,43 @@ class SupabaseRealtimeManager {
 
     console.log(`[REALTIME MANAGER] Centralized subscription registered for table: ${tableName}. Total listeners: ${tableListeners.size}`);
 
+    this.subscriptionHistory.unshift({
+      timestamp: new Date().toLocaleTimeString(),
+      type: 'SUBSCRIBE',
+      table: tableName
+    });
+    if (this.subscriptionHistory.length > 50) this.subscriptionHistory.pop();
+
     return () => {
       const currentListeners = this.listeners.get(tableName);
       if (currentListeners) {
         currentListeners.delete(callback);
         console.log(`[REALTIME MANAGER] Centralized subscription unregistered for table: ${tableName}. Remaining listeners: ${currentListeners.size}`);
+        
+        this.subscriptionHistory.unshift({
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'UNSUBSCRIBE',
+          table: tableName
+        });
+        if (this.subscriptionHistory.length > 50) this.subscriptionHistory.pop();
+
         if (currentListeners.size === 0) {
           this.listeners.delete(tableName);
         }
       }
+    };
+  }
+
+  public getStatus() {
+    return {
+      connectionStatus: this.connectionStatus,
+      listenersCount: Array.from(this.listeners.entries()).map(([table, set]) => ({
+        table,
+        count: set.size
+      })),
+      lastEventTime: this.lastEventTime,
+      history: this.subscriptionHistory,
+      recentEvents: this.recentEvents
     };
   }
 }
@@ -835,39 +875,42 @@ export const database = {
 
       // Confirmed survey side-effects (payment + room reservation)
       if (updated.status === 'survey_confirmed') {
-        const { data: roomData } = await supabase
-          .from('rooms')
-          .select('*')
-          .eq('property_id', updated.property_id)
-          .eq('room_number', updated.room_number)
-          .maybeSingle();
+        const isFree = Number(updated.dp_amount) === 0;
+        if (!isFree) {
+          const { data: roomData } = await supabase
+            .from('rooms')
+            .select('*')
+            .eq('property_id', updated.property_id)
+            .eq('room_number', updated.room_number)
+            .maybeSingle();
 
-        if (roomData) {
-          await safeSupabaseUpsert('rooms', { status: 'reserved' }, roomData.id);
+          if (roomData) {
+            await safeSupabaseUpsert('rooms', { status: 'reserved' }, roomData.id);
+          }
+
+          const targetInvoiceId = updated.invoice_id || `INV-SRV-${Math.floor(1000 + Math.random()*9000)}`;
+          const srvInvPayload = {
+            id: targetInvoiceId,
+            tenant_name: updated.tenant_name,
+            property_id: updated.property_id,
+            amount: updated.dp_amount,
+            method: updated.payment_method || "Midtrans Snap QRIS",
+            status: "paid",
+            payment_date: new Date().toISOString().split('T')[0],
+            midtrans_order_id: updated.reservation_number
+          };
+
+          const { data: existingPayment } = await supabase
+            .from('payments')
+            .select('id')
+            .eq('midtrans_order_id', updated.reservation_number)
+            .maybeSingle();
+
+          const payId = existingPayment ? existingPayment.id : targetInvoiceId;
+          await safeSupabaseUpsert('payments', srvInvPayload, existingPayment ? existingPayment.id : undefined);
+
+          await this.recordFinancialRevenue(payId, 1300, updated.dp_amount, `DP Survey Kamar ${updated.room_number} - ${updated.tenant_name}`);
         }
-
-        const targetInvoiceId = updated.invoice_id || `INV-SRV-${Math.floor(1000 + Math.random()*9000)}`;
-        const srvInvPayload = {
-          id: targetInvoiceId,
-          tenant_name: updated.tenant_name,
-          property_id: updated.property_id,
-          amount: updated.dp_amount,
-          method: updated.payment_method || "Midtrans Snap QRIS",
-          status: "paid",
-          payment_date: new Date().toISOString().split('T')[0],
-          midtrans_order_id: updated.reservation_number
-        };
-
-        const { data: existingPayment } = await supabase
-          .from('payments')
-          .select('id')
-          .eq('midtrans_order_id', updated.reservation_number)
-          .maybeSingle();
-
-        const payId = existingPayment ? existingPayment.id : targetInvoiceId;
-        await safeSupabaseUpsert('payments', srvInvPayload, existingPayment ? existingPayment.id : undefined);
-
-        await this.recordFinancialRevenue(payId, 1300, updated.dp_amount, `DP Survey Kamar ${updated.room_number} - ${updated.tenant_name}`);
       } else if (updated.status === 'no_show' || updated.status === 'expired') {
         const { data: roomData } = await supabase
           .from('rooms')
@@ -890,7 +933,7 @@ export const database = {
           await safeSupabaseUpsert('payments', { status: 'overdue' }, existingPayment.id);
         }
 
-        if (updated.status === 'no_show') {
+        if (updated.status === 'no_show' && Number(updated.dp_amount) > 0) {
           await this.recordFinancialReclassification(1300, 4200, updated.dp_amount, `DP Survey Hangus (No Show) - Reservasi ${updated.reservation_number}`);
         }
       }

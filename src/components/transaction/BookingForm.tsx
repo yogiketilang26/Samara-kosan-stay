@@ -27,6 +27,7 @@ interface BookingFormProps {
     job: string;
     date: string;
     slot: string;
+    isWithoutDp?: boolean;
   };
   setSurveyForm: (val: any) => void;
   bookingForm: {
@@ -92,7 +93,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       discount,
       tax,
       deposit,
-      total: checkoutFlow === 'survey' ? 500000 : grandTotal // DP Survey is fixed flat Rp 500.000 commitment
+      total: checkoutFlow === 'survey' ? (surveyForm.isWithoutDp ? 0 : 500000) : grandTotal
     };
   };
 
@@ -108,10 +109,45 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       {checkoutFlow === 'survey' ? (
         // Survey workflow fields
         <div className="space-y-3 text-left">
-          <div className="bg-amber-50 border border-amber-200/60 p-3.5 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-amber-900">
-            <ShieldAlert size={14} className="shrink-0 text-amber-600 animate-pulse" />
-            <p>Sewa Komitmen Survey membutuhkan DP Rp 500.000. Jaminan ini akan hangus jika Anda tidak hadir sesuai jadwal (No-Show), namun sepenuhnya dikembalikan/dikompensasikan ke harga sewa jika lanjut sewa (Covenan Transparansi).</p>
+          <div className="space-y-1">
+            <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Skema Kunjungan Survey</label>
+            <div className="flex gap-2 p-1 bg-slate-100/80 rounded-xl border border-[#E2E8F0]">
+              <button
+                type="button"
+                onClick={() => setSurveyForm({ ...surveyForm, isWithoutDp: false })}
+                className={`flex-1 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all duration-200 cursor-pointer text-center ${
+                  !surveyForm.isWithoutDp
+                    ? 'bg-[#2E6F40] text-white shadow-xs font-black'
+                    : 'text-[#64748B] hover:text-[#1E293B] hover:bg-slate-200'
+                }`}
+              >
+                🔒 Komitmen DP (Kunci Unit)
+              </button>
+              <button
+                type="button"
+                onClick={() => setSurveyForm({ ...surveyForm, isWithoutDp: true })}
+                className={`flex-1 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all duration-200 cursor-pointer text-center ${
+                  surveyForm.isWithoutDp
+                    ? 'bg-[#2E6F40] text-white shadow-xs font-black'
+                    : 'text-[#64748B] hover:text-[#1E293B] hover:bg-slate-200'
+                }`}
+              >
+                ⚡ Free Kunjungan (Tanpa DP)
+              </button>
+            </div>
           </div>
+
+          {surveyForm.isWithoutDp ? (
+            <div className="bg-blue-50 border border-blue-200/60 p-3.5 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-blue-900">
+              <ShieldAlert size={14} className="shrink-0 text-blue-600" />
+              <p><strong>Skema Tanpa DP:</strong> Bebas biaya jaminan! Namun unit kamar tetap dibuka untuk umum dan dapat disewa oleh orang lain sewaktu-waktu sebelum kedatangan Anda. Pilih skema DP untuk mengunci unit Anda.</p>
+            </div>
+          ) : (
+            <div className="bg-amber-50 border border-amber-200/60 p-3.5 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-amber-900">
+              <ShieldAlert size={14} className="shrink-0 text-amber-600 animate-pulse" />
+              <p>Sewa Komitmen Survey membutuhkan DP Rp 500.000. Jaminan ini akan hangus jika Anda tidak hadir sesuai jadwal (No-Show), namun sepenuhnya dikembalikan/dikompensasikan ke harga sewa jika lanjut sewa (Covenan Transparansi).</p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
@@ -405,7 +441,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
         {checkoutFlow === 'survey' ? (
           <div className="flex justify-between items-center text-[#475569]">
             <span>Commitment Payment DP Survey</span>
-            <span className="font-mono font-bold text-[#2E6F40]">Rp 500.000</span>
+            <span className="font-mono font-bold text-[#2E6F40]">{surveyForm.isWithoutDp ? 'Rp 0' : 'Rp 500.000'}</span>
           </div>
         ) : (
           <div className="space-y-2 pt-1 text-[11px]">
@@ -447,7 +483,9 @@ export const BookingForm: React.FC<BookingFormProps> = ({
         type="submit"
         className="w-full py-3 bg-[#2E6F40] hover:bg-[#1f4b2b] text-white font-black uppercase text-[11px] rounded-2xl shadow-sm transition-all tracking-wider cursor-pointer text-center"
       >
-        Bayar Online Sekarang via Midtrans SNAP
+        {checkoutFlow === 'survey' && surveyForm.isWithoutDp 
+          ? 'Konfirmasi Jadwal Survey Gratis' 
+          : 'Bayar Online Sekarang via Midtrans SNAP'}
       </button>
     </form>
   );

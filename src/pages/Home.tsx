@@ -102,7 +102,8 @@ export default function Home({}: HomeProps) {
     job: 'Software Engineer',
     date: new Date(Date.now() + 86400000).toISOString().split('T')[0], // tomorrow
     slot: '13:00 - 15:00',
-    moveInDate: ''
+    moveInDate: '',
+    isWithoutDp: false
   });
 
   // Booking Form states
@@ -383,6 +384,92 @@ export default function Home({}: HomeProps) {
     if (checkoutFlow !== 'survey' && !bookingCheckInDate) {
       alert("Mohon tentukan tanggal mulai huni / check-in terlebih dahulu.");
       return;
+    }
+
+    if (checkoutFlow === 'survey' && surveyForm.isWithoutDp) {
+      setLoading(true);
+      const freeOrderId = `SRV-FREE-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      try {
+        const surveyRecord: Partial<Survey> = {
+          tenant_name: surveyForm.fullName,
+          nik: surveyForm.nik,
+          email: surveyForm.email,
+          phone: surveyForm.phone,
+          address: surveyForm.address,
+          job: surveyForm.job,
+          planned_move_in_date: surveyForm.moveInDate || '',
+          property_id: activeProperty!.id,
+          room_number: activeRoom!.room_number,
+          survey_date: surveyForm.date,
+          survey_time_slot: surveyForm.slot,
+          status: 'survey_confirmed',
+          dp_amount: 0,
+          payment_method: 'Tanpa DP (Kunjungan)',
+          invoice_id: `INV-SRV-FREE-${Math.floor(1000 + Math.random() * 9000)}`,
+          reservation_number: freeOrderId
+        };
+        const saved = await database.saveSurvey(surveyRecord);
+
+        // Send free survey confirmation email
+        if (surveyForm.email) {
+          fetch('/api/email/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: surveyForm.email,
+              subject: `[Samara Stay] Jadwal Kunjungan Survey Terkonfirmasi - Unit ${activeRoom!.room_number}`,
+              html: `
+                <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
+                  <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
+                    <h1 style="font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 0;">SAMARA</h1>
+                    <p style="font-family: monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 4px 0 0 0;">S T A Y</p>
+                  </div>
+                  <h2 style="color: #2e6f40; margin-top: 0; font-size: 20px; font-weight: 700;">Jadwal Kunjungan Survey Terkonfirmasi</h2>
+                  <p>Halo <strong>${surveyForm.fullName}</strong>,</p>
+                  <p>Jadwal kunjungan survey Anda telah berhasil didaftarkan secara resmi di sistem kami. Berikut rincian jadwal kunjungan Anda:</p>
+                  
+                  <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
+                    <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Kunjungan</h3>
+                    <table style="width: 100%; font-size: 13px; line-height: 2;">
+                      <tr><td style="color: #64748b; width: 45%;">Tanggal Kunjungan:</td><td style="color: #1e293b; font-weight: 700; text-align: right;">${surveyForm.date}</td></tr>
+                      <tr><td style="color: #64748b;">Slot Waktu:</td><td style="color: #1e293b; font-weight: 700; text-align: right;">${surveyForm.slot} WIB</td></tr>
+                      <tr><td style="color: #64748b;">Kamar yang Dituju:</td><td style="color: #1e293b; font-weight: 700; text-align: right;">Unit ${activeRoom!.room_number}</td></tr>
+                      <tr><td style="color: #64748b;">Skema Biaya:</td><td style="color: #2e6f40; font-weight: 800; text-align: right;">Gratis (Tanpa DP)</td></tr>
+                    </table>
+                  </div>
+                  <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #3b82f6; background-color: #f0f7ff; border-radius: 0 12px 12px 0;">
+                    <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Pemberitahuan Skema Kunjungan:</strong>
+                    Karena Anda memilih skema kunjungan tanpa DP komitmen, unit kamar ini tidak dikunci secara eksklusif dan dapat disewa oleh calon penghuni lain sewaktu-waktu sebelum kedatangan Anda.
+                  </div>
+                  <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
+                    <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
+                    <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi.</p>
+                  </div>
+                </div>
+              `
+            })
+          }).catch(e => console.error('Error sending free survey email:', e));
+        }
+
+        setReceiptData({
+          type: 'survey',
+          id: saved.invoice_id || '999',
+          name: surveyForm.fullName,
+          roomNo: activeRoom!.room_number,
+          propertyName: activeProperty!.name,
+          amountPaid: 0,
+          method: 'Tanpa DP (Kunjungan)',
+          date: surveyForm.date,
+          details: 'Janji Kunjungan Survey Gratis Terkonfirmasi.'
+        });
+        setLoading(false);
+        setShowReceipt(true);
+        return;
+      } catch (err: any) {
+        setLoading(false);
+        alert(`Gagal membuat jadwal survey: ${err.message}`);
+        return;
+      }
     }
 
     const orderId = `${checkoutFlow === 'survey' ? 'SRV' : 'BOOK'}-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -707,6 +794,85 @@ export default function Home({}: HomeProps) {
       };
 
       const saved = await database.saveSurvey(surveyRecord);
+
+      // Send survey payment receipt email to end user
+      if (surveyForm.email) {
+        fetch('/api/email/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: surveyForm.email,
+            subject: `[Samara Stay] Bukti Pembayaran DP Survey - Unit ${activeRoom.room_number}`,
+            html: `
+              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
+                <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
+                  <h1 style="font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 0;">SAMARA</h1>
+                  <p style="font-family: monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 4px 0 0 0;">S T A Y</p>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 30px;">
+                  <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">LUNAS / PAID</span>
+                  <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">BUKTI PEMBAYARAN DP SURVEY</h2>
+                  <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">No. Invoice: ${saved.invoice_id || 'INV-SRV-' + Math.floor(1000 + Math.random() * 9000)}</p>
+                </div>
+
+                <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
+                  <p>Halo <strong>${surveyForm.fullName}</strong>,</p>
+                  <p>Terima kasih atas pembayaran komitmen survey Anda! Reservasi unit kamar Anda telah berhasil dikonfirmasi. Berikut rincian pembayaran DP Survey Anda:</p>
+                </div>
+
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
+                  <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Komitmen Survey</h3>
+                  
+                  <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
+                    <tr>
+                      <td style="color: #64748b; width: 45%;">Nama Calon Penghuni:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${surveyForm.fullName}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">No. Handphone:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right; font-family: monospace;">${surveyForm.phone}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Kamar yang di-survey:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">Unit ${activeRoom.room_number}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Tanggal Survey:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${surveyForm.date}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Jam Kunjungan (Slot):</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${surveyForm.slot} WIB</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Metode Pembayaran:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: uppercase;">${details.paymentMethod || 'Midtrans SNAP'}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px;">Jumlah DP Komitmen:</td>
+                      <td style="color: #047857; font-weight: 900; font-size: 18px; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px; text-align: right;">
+                        Rp 500.000
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+
+                <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #f59e0b; background-color: #fbf8f3; border-radius: 0 12px 12px 0;">
+                  <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Informasi Kebijakan Jaminan:</strong>
+                  Uang jaminan DP Survey ini sepenuhnya aman. Jika Anda memutuskan untuk melanjutkan sewa setelah survey, jaminan Rp 500.000 ini akan langsung dikompensasikan (mengurangi) pembayaran sisa sewa kamar Anda. Namun jika Anda tidak hadir sesuai jadwal (No-Show), maka DP dinyatakan hangus.
+                </div>
+
+                <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
+                  <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
+                  <p style="margin: 4px 0 0 0;">Email: info@samarastay.com | Whatsapp Pengelola Hunian</p>
+                  <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi.</p>
+                </div>
+              </div>
+            `
+          })
+        }).catch(e => console.error('Error sending survey payment email:', e));
+      }
 
       setReceiptData({
         type: 'survey',
