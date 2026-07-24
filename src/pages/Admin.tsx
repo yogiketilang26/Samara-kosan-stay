@@ -81,7 +81,7 @@ export default function Admin({}: AdminProps) {
   
   // Observability real-time state trigger
   const [, setObservabilityTrigger] = useState(0);
-  const [obsSubTab, setObsSubTab] = useState<'realtime' | 'api' | 'performance' | 'errors'>('realtime');
+  const [obsSubTab, setObsSubTab] = useState<'realtime' | 'api' | 'performance' | 'errors' | 'system_logs'>('realtime');
   
   useEffect(() => {
     const unsub = observability.subscribeToChanges(() => {
@@ -4571,10 +4571,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               {/* Sub Navigation bar */}
               <div className="flex border-b border-[#E2E8F0] overflow-x-auto gap-1 pr-2 no-scrollbar">
                 {[
-                  { id: 'realtime', label: 'Websocket & Realtime', icon: LucideIcons.Radio, badge: rtHealth.connectionStatus === 'CONNECTED' ? 'Online' : 'Offline', badgeColor: rtHealth.connectionStatus === 'CONNECTED' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800' },
+                  { id: 'realtime', label: 'Websocket & Realtime', icon: LucideIcons.Radio, badge: rtHealth.connectionStatus === 'CONNECTED' ? 'Online' : rtHealth.connectionStatus === 'CONNECTING' ? 'Connecting' : 'Offline', badgeColor: rtHealth.connectionStatus === 'CONNECTED' ? 'bg-emerald-100 text-emerald-800' : rtHealth.connectionStatus === 'CONNECTING' ? 'bg-amber-100 text-amber-800 animate-pulse' : 'bg-rose-100 text-rose-800' },
                   { id: 'api', label: 'Kinerja API & Query', icon: LucideIcons.Zap, badge: `${apiStats.totalRequests} Req`, badgeColor: 'bg-[#F1F5F9] text-[#475569]' },
                   { id: 'performance', label: 'React & Browser Performance', icon: LucideIcons.Cpu, badge: `${renderCounts.length} Comp`, badgeColor: 'bg-[#F1F5F9] text-[#475569]' },
                   { id: 'errors', label: 'Error & Exception Logs', icon: LucideIcons.AlertTriangle, badge: `${errorLogs.length} Error`, badgeColor: errorLogs.length > 0 ? 'bg-rose-100 text-rose-800 animate-pulse font-bold' : 'bg-emerald-100 text-emerald-800' },
+                  { id: 'system_logs', label: 'System Logs (Buffer)', icon: LucideIcons.Terminal, badge: `${observability.getLogs().length} Logs`, badgeColor: 'bg-indigo-100 text-indigo-800 border border-indigo-200' },
                 ].map((tab) => {
                   const TabIcon = tab.icon;
                   const isActive = obsSubTab === tab.id;
@@ -4602,36 +4603,44 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               {obsSubTab === 'realtime' && (
                 <div className="space-y-6">
                   {/* Status Cards Row */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                     <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
                       <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Status Koneksi</span>
                       <div className="flex items-center gap-2">
-                        <span className={`w-3 h-3 rounded-full ${rtHealth.connectionStatus === 'CONNECTED' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                        <span className="text-sm font-extrabold text-[#1E293B] font-mono">{rtHealth.connectionStatus}</span>
+                        <span className={`w-3 h-3 rounded-full ${rtHealth.connectionStatus === 'CONNECTED' ? 'bg-emerald-500 animate-pulse' : rtHealth.connectionStatus === 'CONNECTING' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
+                        <span className="text-xs font-extrabold text-[#1E293B] font-mono">{rtHealth.connectionStatus}</span>
                       </div>
                     </div>
 
                     <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
-                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Active Gateway Channel</span>
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Websocket Gateway</span>
                       <div className="flex items-center justify-between">
                         <span className="text-xl font-extrabold text-[#1E293B] font-mono">{rtHealth.activeChannelsCount}</span>
-                        <span className="text-[10px] bg-[#E0F2FE] text-[#0369A1] font-bold px-2 py-0.5 rounded-md font-mono">GLOBAL SINGLETON</span>
+                        <span className="text-[10px] bg-[#E0F2FE] text-[#0369A1] font-bold px-2 py-0.5 rounded-md font-mono">SINGLETON</span>
                       </div>
                     </div>
 
                     <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
-                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Jumlah Listener Aktif</span>
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Listener Aktif</span>
                       <div className="flex items-center justify-between">
                         <span className="text-xl font-extrabold text-[#1E293B] font-mono">{rtHealth.totalListenersCount}</span>
-                        <span className="text-[10px] text-[#64748B] font-sans">Multiplexed Event Stream</span>
+                        <span className="text-[10px] text-[#64748B] font-sans">Multiplexed</span>
                       </div>
                     </div>
 
                     <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
-                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Waktu Event Terakhir</span>
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Reconnect Attempts</span>
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-extrabold text-[#1E293B] font-mono">{rtHealth.lastEventTime || 'Belum Ada Event'}</span>
-                        <LucideIcons.Clock className="text-[#94A3B8]" size={15} />
+                        <span className="text-xl font-extrabold text-[#1E293B] font-mono">{rtHealth.reconnectAttempts || 0}</span>
+                        <span className="text-[10px] text-[#64748B] font-sans">State-Safe</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-4 space-y-2">
+                      <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider font-mono">Safe Cleanup Drops</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xl font-extrabold text-emerald-600 font-mono">{(rtHealth as any).droppedSubscriptions || 0}</span>
+                        <span className="text-[10px] text-emerald-700 font-mono font-bold">Safe</span>
                       </div>
                     </div>
                   </div>
@@ -5070,6 +5079,82 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                         <div className="text-center py-12 text-slate-550 font-sans text-xs">
                           <p className="font-extrabold">✓ Sistem Sehat & Bersih Dari Error</p>
                           <p className="text-[10px] mt-1">Tidak ada unhandled exceptions atau crashed promises yang ditangkap pada sesi berjalan ini.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 5: System Logs (Ring Buffer) */}
+              {obsSubTab === 'system_logs' && (
+                <div className="space-y-4">
+                  <div className="bg-white border border-[#E2E8F0] p-4 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                    <div>
+                      <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <LucideIcons.Terminal size={14} className="text-[#0D9488]" />
+                        Console Log Realtime (Ring Buffer)
+                      </h4>
+                      <p className="text-[11px] text-[#64748B] mt-0.5">Ring buffer dinamis menyimpan maksimum 200 aktivitas sistem dengan deduplikasi pesan beruntun.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        (observability as any).logs = [];
+                        setObservabilityTrigger(prev => prev + 1);
+                      }}
+                      className="text-[10px] text-rose-600 hover:text-white font-bold border border-rose-200 hover:border-rose-600 rounded-xl py-1.5 px-3 hover:bg-rose-600 transition-all cursor-pointer font-mono"
+                    >
+                      Clear Log Buffer
+                    </button>
+                  </div>
+
+                  <div className="bg-slate-950 border border-slate-900 rounded-2xl p-5 font-mono text-xs text-slate-300">
+                    <div className="flex justify-between items-center border-b border-white/10 pb-3 mb-3">
+                      <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-bold">Ring Buffer Log Console (Live)</span>
+                      <span className="text-[10px] text-slate-500">Capacity: {observability.getLogs().length} / 200 entries</span>
+                    </div>
+
+                    <div className="space-y-2.5 max-h-[60vh] overflow-y-auto pr-1 no-scrollbar select-all">
+                      {observability.getLogs().map((log) => {
+                        const levelColors = {
+                          DEBUG: 'text-slate-400 border-slate-800 bg-slate-900/50',
+                          INFO: 'text-indigo-400 border-indigo-500/20 bg-indigo-500/5',
+                          WARNING: 'text-amber-500 border-amber-500/20 bg-amber-500/5',
+                          ERROR: 'text-rose-500 border-rose-500/20 bg-rose-500/5',
+                          CRITICAL: 'text-red-500 border-red-500/30 bg-red-500/10 animate-pulse font-bold'
+                        };
+                        return (
+                          <div key={log.id} className={`p-2.5 border rounded-lg flex items-start justify-between gap-4 ${levelColors[log.level]}`}>
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`px-1.5 py-0.5 rounded text-[8.5px] font-extrabold uppercase border ${
+                                  log.level === 'INFO' ? 'border-indigo-500/30 text-indigo-400' :
+                                  log.level === 'WARNING' ? 'border-amber-500/30 text-amber-500' :
+                                  log.level === 'ERROR' ? 'border-rose-500/30 text-rose-500' :
+                                  log.level === 'CRITICAL' ? 'border-red-500/40 text-red-400 font-bold' :
+                                  'border-slate-700 text-slate-400'
+                                }`}>
+                                  {log.level}
+                                </span>
+                                <span className="text-slate-500 text-[9px]">{log.timestamp}</span>
+                                <span className="text-indigo-300 font-bold text-[10px]">[{log.module}]</span>
+                              </div>
+                              <p className="text-slate-200 leading-normal text-[11px]">{log.message}</p>
+                            </div>
+                            {log.count > 1 && (
+                              <span className="px-2 py-0.5 bg-amber-500/25 text-amber-400 border border-amber-500/40 rounded text-[10px] font-extrabold shrink-0">
+                                x{log.count}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {observability.getLogs().length === 0 && (
+                        <div className="text-center py-12 text-slate-500 font-sans text-xs">
+                          <p className="font-bold text-slate-400">✓ Console Log Kosong</p>
+                          <p className="text-[10px] text-slate-500 mt-1">Belum ada log sistem yang tercatat pada sesi ini.</p>
                         </div>
                       )}
                     </div>

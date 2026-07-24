@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { useEffect } from 'react';
 import { realtimeManager } from './supabase';
 
 export interface ApiMetric {
@@ -30,12 +31,23 @@ export interface RenderCount {
   lastRendered: string;
 }
 
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  epochTime: number;
+  level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+  module: string;
+  message: string;
+  count: number;
+}
+
 class ObservabilitySystem {
   private apiMetrics: ApiMetric[] = [];
   private errorLogs: ErrorLog[] = [];
   private renderCounts: Map<string, { count: number; lastRendered: string }> = new Map();
   private maxLogsLimit = 200;
   private listeners: Set<() => void> = new Set();
+  private logs: LogEntry[] = [];
   
   // Custom user email context
   private currentUserEmail: string = 'yogiketilang33@gmail.com';
@@ -43,6 +55,11 @@ class ObservabilitySystem {
   constructor() {
     this.setupGlobalErrorHandler();
     this.setupFetchInterceptor();
+    
+    // Wire up realtime connection logging safely
+    realtimeManager.registerOnLog((level, message) => {
+      this.log(level, 'REALTIME', message);
+    });
   }
 
   public subscribeToChanges(callback: () => void): () => void {
@@ -56,6 +73,63 @@ class ObservabilitySystem {
     this.listeners.forEach((cb) => {
       try { cb(); } catch (e) { console.error('Error notifying observability listener:', e); }
     });
+  }
+
+  // --- RING BUFFER & DEDUPLICATED LOGGING ---
+  public log(level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', module: string, message: string) {
+    if (level === 'DEBUG' && process.env.NODE_ENV === 'production') {
+      return; // Hide DEBUG logs in production
+    }
+
+    const messageLower = message.toLowerCase();
+    if (
+      messageLower.includes('heartbeat') ||
+      messageLower.includes('internal monitoring') ||
+      messageLower.includes('logger event') ||
+      messageLower.includes('/api/health') ||
+      messageLower.includes('/api/midtrans/logs')
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    // Look for identical log message within last 5 seconds (5000ms)
+    const existingIndex = this.logs.findIndex(
+      (l) => l.level === level && l.module === module && l.message === message && (now - l.epochTime) < 5000
+    );
+
+    if (existingIndex !== -1) {
+      const existing = this.logs[existingIndex];
+      existing.count++;
+      existing.timestamp = new Date().toISOString();
+      existing.epochTime = now;
+      this.logs.splice(existingIndex, 1);
+      this.logs.unshift(existing);
+    } else {
+      const newEntry: LogEntry = {
+        id: `log-${Math.random().toString(36).slice(2, 9)}`,
+        timestamp: new Date().toISOString(),
+        epochTime: now,
+        level,
+        module,
+        message,
+        count: 1
+      };
+      this.logs.unshift(newEntry);
+      
+      if (this.logs.length > this.maxLogsLimit) {
+        this.logs.pop();
+      }
+    }
+
+    this.notify();
+  }
+
+  public getLogs(): LogEntry[] {
+    if (process.env.NODE_ENV === 'production') {
+      return this.logs.filter(l => l.level !== 'DEBUG');
+    }
+    return this.logs;
   }
 
   // Set active user email for error tracking context
@@ -93,6 +167,17 @@ class ObservabilitySystem {
           }
         } catch (e) {
           // Fallback
+        }
+
+        const isHeartbeatOrInternal = 
+          endpoint.includes('/api/health') || 
+          endpoint.includes('/api/midtrans/logs') ||
+          urlString.includes('heartbeat') ||
+          urlString.includes('monitoring');
+
+        if (isHeartbeatOrInternal) {
+          // Pass through directly to avoid render update loops
+          return await originalFetch.call(this, input, init);
         }
 
         try {
@@ -262,8 +347,7 @@ class ObservabilitySystem {
       lastRendered: new Date().toLocaleTimeString(),
     });
     
-    // We notify on render tracking but throttle it a bit to avoid paint storm loops
-    this.notify();
+    // We do NOT notify on render tracking to avoid infinite rendering loop and paint storms
   }
 
   public getRenderCounts(): RenderCount[] {
@@ -315,6 +399,8 @@ class ObservabilitySystem {
       lastEventTime: null,
       history: [],
       recentEvents: [],
+      reconnectAttempts: 0,
+      droppedSubscriptions: 0,
     };
 
     return {
@@ -325,6 +411,8 @@ class ObservabilitySystem {
       history: stats.history,
       recentEvents: stats.recentEvents,
       totalListenersCount: stats.listenersCount.reduce((sum: number, l: any) => sum + l.count, 0),
+      reconnectAttempts: stats.reconnectAttempts || 0,
+      droppedSubscriptions: stats.droppedSubscriptions || 0,
     };
   }
 }
@@ -333,5 +421,7 @@ export const observability = new ObservabilitySystem();
 
 // Simple React Hook for render tracking
 export function useRenderCounter(componentName: string) {
-  observability.trackRender(componentName);
+  useEffect(() => {
+    observability.trackRender(componentName);
+  });
 }

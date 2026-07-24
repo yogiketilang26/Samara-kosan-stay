@@ -31,12 +31,28 @@ class SupabaseRealtimeManager {
   private isConfigured = false;
   private globalChannel: any = null;
   private listeners: Map<string, Set<RealtimeCallback>> = new Map();
-  private connectionStatus: 'CONNECTED' | 'DISCONNECTED' = 'DISCONNECTED';
+  private connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' = 'DISCONNECTED';
   private retryTimeout: any = null;
   private retryCount = 0;
   private lastEventTime: string | null = null;
   private subscriptionHistory: { timestamp: string, type: 'SUBSCRIBE' | 'UNSUBSCRIBE', table: string }[] = [];
   private recentEvents: { timestamp: string, table: string, eventType: string, id: any }[] = [];
+  private reconnectAttempts = 0;
+  private droppedSubscriptions = 0;
+  private onLogCallbacks: Set<(level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', message: string) => void> = new Set();
+
+  public registerOnLog(callback: (level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', message: string) => void) {
+    this.onLogCallbacks.add(callback);
+    try {
+      callback('INFO', `Websocket status initialized as ${this.connectionStatus}`);
+    } catch (e) {}
+  }
+
+  private triggerLog(level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', message: string) {
+    this.onLogCallbacks.forEach((cb) => {
+      try { cb(level, message); } catch (e) {}
+    });
+  }
 
   public init(supabaseClient: any, isConfigured: boolean) {
     this.client = supabaseClient;
@@ -44,13 +60,20 @@ class SupabaseRealtimeManager {
     this.cleanupAll();
     
     if (this.isConfigured && this.client) {
-      this.connectionStatus = 'DISCONNECTED'; // Wait for SUBSCRIBED to mark CONNECTED
+      this.connectionStatus = 'DISCONNECTED';
       this.establishGlobalChannel();
     }
   }
 
   private establishGlobalChannel() {
     if (!this.client || !this.isConfigured) return;
+
+    if (this.connectionStatus === 'CONNECTED' || this.connectionStatus === 'CONNECTING') {
+      return; // DO NOTHING IF ALREADY CONNECTED OR CONNECTING
+    }
+
+    this.connectionStatus = 'CONNECTING';
+    this.triggerLog('INFO', 'Websocket status changed to CONNECTING');
 
     if (this.retryTimeout) {
       clearTimeout(this.retryTimeout);
@@ -60,7 +83,6 @@ class SupabaseRealtimeManager {
     try {
       console.log('[REALTIME MANAGER] Setting up single global database-wide listener...');
       
-      // Make sure we remove any old channel first from the client to prevent collisions
       if (this.globalChannel) {
         try {
           this.client.removeChannel(this.globalChannel).catch(() => {});
@@ -68,7 +90,6 @@ class SupabaseRealtimeManager {
         this.globalChannel = null;
       }
 
-      // Create a unique stable channel name
       const channel = this.client.channel('db-global-realtime');
       
       this.globalChannel = channel
@@ -84,7 +105,8 @@ class SupabaseRealtimeManager {
           });
           if (this.recentEvents.length > 50) this.recentEvents.pop();
 
-          // Route to specific table listeners
+          this.triggerLog('DEBUG', `Database mutation in table ${payload?.table || 'unknown'}: ${payload?.eventType || 'UNKNOWN'}`);
+
           if (payload && payload.table) {
             const tableListeners = this.listeners.get(payload.table);
             if (tableListeners) {
@@ -101,6 +123,10 @@ class SupabaseRealtimeManager {
             this.handleRealtimeConnected();
           } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             console.warn(`[REALTIME MANAGER WARNING] Global channel status offline: ${status}`, err);
+            if (this.connectionStatus === 'CONNECTED') {
+              this.droppedSubscriptions++;
+              this.triggerLog('WARNING', `Websocket channel dropped: ${status}. Total dropped: ${this.droppedSubscriptions}`);
+            }
             this.handleRealtimeDisconnected();
             this.scheduleReconnect();
           }
@@ -114,7 +140,13 @@ class SupabaseRealtimeManager {
 
   private scheduleReconnect() {
     if (this.retryTimeout) return;
+    if (this.connectionStatus === 'CONNECTING' || this.connectionStatus === 'CONNECTED') {
+      return; // DO NOTHING
+    }
     
+    this.reconnectAttempts++;
+    this.triggerLog('INFO', `Websocket scheduling reconnect attempt #${this.reconnectAttempts}`);
+
     this.retryCount++;
     const delay = Math.min(1000 * Math.pow(2, this.retryCount), 30000);
     console.log(`[REALTIME MANAGER] Reconnecting global channel in ${delay}ms (Attempt ${this.retryCount})`);
@@ -129,12 +161,14 @@ class SupabaseRealtimeManager {
     if (this.connectionStatus === 'CONNECTED') return;
     console.log('[REALTIME MANAGER] Realtime connection fully established.');
     this.connectionStatus = 'CONNECTED';
+    this.triggerLog('INFO', 'Websocket status changed to CONNECTED');
   }
 
   private handleRealtimeDisconnected() {
     if (this.connectionStatus === 'DISCONNECTED') return;
     console.warn('[REALTIME MANAGER] Realtime connection lost.');
     this.connectionStatus = 'DISCONNECTED';
+    this.triggerLog('WARNING', 'Websocket status changed to DISCONNECTED');
   }
 
   public cleanupAll() {
@@ -163,6 +197,20 @@ class SupabaseRealtimeManager {
       this.listeners.set(tableName, new Set());
     }
     const tableListeners = this.listeners.get(tableName)!;
+    
+    if (tableListeners.has(callback)) {
+      console.log(`[REALTIME MANAGER] Callback already registered for table: ${tableName}. Reusing.`);
+      return () => {
+        const currentListeners = this.listeners.get(tableName);
+        if (currentListeners) {
+          currentListeners.delete(callback);
+          if (currentListeners.size === 0) {
+            this.listeners.delete(tableName);
+          }
+        }
+      };
+    }
+
     tableListeners.add(callback);
 
     console.log(`[REALTIME MANAGER] Centralized subscription registered for table: ${tableName}. Total listeners: ${tableListeners.size}`);
@@ -173,6 +221,8 @@ class SupabaseRealtimeManager {
       table: tableName
     });
     if (this.subscriptionHistory.length > 50) this.subscriptionHistory.pop();
+
+    this.triggerLog('DEBUG', `Subscribed to table: ${tableName}. Total listeners: ${tableListeners.size}`);
 
     return () => {
       const currentListeners = this.listeners.get(tableName);
@@ -186,6 +236,8 @@ class SupabaseRealtimeManager {
           table: tableName
         });
         if (this.subscriptionHistory.length > 50) this.subscriptionHistory.pop();
+
+        this.triggerLog('DEBUG', `Unsubscribed from table: ${tableName}. Remaining listeners: ${currentListeners?.size || 0}`);
 
         if (currentListeners.size === 0) {
           this.listeners.delete(tableName);
@@ -203,7 +255,9 @@ class SupabaseRealtimeManager {
       })),
       lastEventTime: this.lastEventTime,
       history: this.subscriptionHistory,
-      recentEvents: this.recentEvents
+      recentEvents: this.recentEvents,
+      reconnectAttempts: this.reconnectAttempts,
+      droppedSubscriptions: this.droppedSubscriptions
     };
   }
 }
