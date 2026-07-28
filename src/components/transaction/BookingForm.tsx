@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Room, Property, Coupon } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
 import { Calendar, Tag, ShieldAlert } from 'lucide-react';
+import { SignaturePad } from './SignaturePad';
 
 interface BookingFormProps {
   property: Property;
@@ -43,6 +44,10 @@ interface BookingFormProps {
   };
   setBookingForm: (val: any) => void;
   onProceedToPayment: (calculatedTotal: number) => void;
+  isAgreed: boolean;
+  setIsAgreed: (agreed: boolean) => void;
+  signatureUrl: string;
+  setSignatureUrl: (url: string) => void;
 }
 
 export const BookingForm: React.FC<BookingFormProps> = ({
@@ -64,8 +69,14 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   setSurveyForm,
   bookingForm,
   setBookingForm,
-  onProceedToPayment
+  onProceedToPayment,
+  isAgreed,
+  setIsAgreed,
+  signatureUrl,
+  setSignatureUrl
 }) => {
+  const [sigError, setSigError] = useState('');
+
   const getPriceCalcs = () => {
     const rentBase = checkoutFlow === 'daily' 
       ? room.daily_price * bookingPeriodDays 
@@ -84,14 +95,15 @@ export const BookingForm: React.FC<BookingFormProps> = ({
     }
 
     const netRent = Math.max(0, rentBase - discount);
-    const tax = Math.round(netRent * 0.1);
-    const deposit = checkoutFlow === 'daily' ? 0 : 500000; // standard commitment or deposit
-    const grandTotal = netRent + tax + (checkoutFlow === 'survey' ? 0 : deposit);
+    const tax = 0; // PBJT Tax removed for end user
+    const propDeposit = property.deposit_amount ?? 500000;
+    const deposit = checkoutFlow === 'daily' ? 0 : propDeposit;
+    const grandTotal = netRent + (checkoutFlow === 'survey' ? 0 : deposit);
 
     return {
       rent: rentBase,
       discount,
-      tax,
+      tax: 0,
       deposit,
       total: checkoutFlow === 'survey' ? (surveyForm.isWithoutDp ? 0 : 500000) : grandTotal
     };
@@ -101,6 +113,17 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setSigError('');
+
+    if (!isAgreed) {
+      setSigError('Anda harus menyetujui Kebijakan & Peraturan Kos terlebih dahulu.');
+      return;
+    }
+    if (!signatureUrl) {
+      setSigError('Mohon bubuhkan Tanda Tangan Digital Anda (pada layar atau upload gambar file).');
+      return;
+    }
+
     onProceedToPayment(calcs.total);
   };
 
@@ -434,6 +457,20 @@ export const BookingForm: React.FC<BookingFormProps> = ({
         </div>
       )}
 
+      {/* Digital Signature & Rules Agreement Section */}
+      <SignaturePad
+        property={property}
+        tenantName={checkoutFlow === 'survey' ? surveyForm.fullName : bookingForm.fullName}
+        isAgreed={isAgreed}
+        setIsAgreed={setIsAgreed}
+        signatureUrl={signatureUrl}
+        setSignatureUrl={(url) => {
+          setSignatureUrl(url);
+          if (url) setSigError('');
+        }}
+        error={sigError}
+      />
+
       {/* Structured Price breakdowns summary */}
       <div className="bg-slate-50 p-4 rounded-3xl border border-[#E2E8F0] space-y-2.5 font-sans font-medium text-xs text-left">
         <h4 className="text-[10px] uppercase font-bold text-[#64748B] font-mono border-b border-[#E2E8F0] pb-1">Detail Rincian Biaya</h4>
@@ -457,14 +494,9 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               </div>
             )}
 
-            <div className="flex justify-between items-center text-[#64748B]">
-              <span>Pajak Daerah PBJT (10%)</span>
-              <span className="font-mono text-[#3A444D]">{formatRupiah(calcs.tax)}</span>
-            </div>
-
             {calcs.deposit > 0 && (
               <div className="flex justify-between items-center text-[#64748B]">
-                <span>Deposit Jaminan Kerusakan (Refundable)</span>
+                <span>Deposit Jaminan Gedung (Refundable)</span>
                 <span className="font-mono text-[#3A444D]">{formatRupiah(calcs.deposit)}</span>
               </div>
             )}

@@ -136,7 +136,7 @@ export const Footer: React.FC = () => {
       <div className="max-w-7xl mx-auto border-t border-slate-800/80 mt-10 pt-6 flex flex-col sm:flex-row justify-between items-center gap-4 text-slate-500 text-[11px] font-medium">
         <p>© 2026 SamaraStay. Seluruh hak cipta dilindungi undang-undang.</p>
         <div className="flex items-center gap-2">
-          <span className="text-slate-600">Premium Kosan Ecosystem</span>
+          <span className="text-slate-600">Hunian Eksklusif Premium</span>
           <span className="text-[10px] text-[#0D9488]/70 font-bold font-mono">v1.3.2</span>
         </div>
       </div>

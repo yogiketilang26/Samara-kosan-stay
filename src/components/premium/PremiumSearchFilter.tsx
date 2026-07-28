@@ -1,7 +1,7 @@
 import React from 'react';
 import * as LucideIcons from 'lucide-react';
 import { 
-  Search, SlidersHorizontal, Info
+  Search, SlidersHorizontal, Info, CheckCircle2, DollarSign, Filter, Layers
 } from 'lucide-react';
 import { StandardFacility } from '../../types';
 
@@ -17,6 +17,10 @@ interface PremiumSearchFilterProps {
   selectedFacilities: string[];
   setSelectedFacilities: (facilities: string[]) => void;
   masterFacilities: StandardFacility[];
+  priceRange: number;
+  setPriceRange: (val: number) => void;
+  onlyAvailable: boolean;
+  setOnlyAvailable: (val: boolean) => void;
   onClearFilters?: () => void;
   resultsCount: number;
 }
@@ -41,6 +45,10 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
   selectedFacilities,
   setSelectedFacilities,
   masterFacilities,
+  priceRange,
+  setPriceRange,
+  onlyAvailable,
+  setOnlyAvailable,
   onClearFilters,
   resultsCount
 }) => {
@@ -52,14 +60,14 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
       {/* Header Info */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="space-y-1">
-          <span className="text-[10px] font-bold text-[#2E6F40] tracking-[0.2em] uppercase font-mono bg-[#EEF7F0] px-3 py-1 rounded-full">
-            Katalog Properti
+          <span className="text-[10px] font-bold text-[#2E6F40] tracking-[0.2em] uppercase font-mono bg-[#EEF7F0] px-3 py-1 rounded-full inline-flex items-center gap-1.5">
+            <Filter size={11} /> Filter & Pencarian Real-Time
           </span>
           <h2 className="text-xl sm:text-2xl font-extrabold text-[#3A444D] tracking-tight">
             Cari Hunian Samara Stay
           </h2>
           <p className="text-xs text-[#64748B]">
-            Menemukan <strong className="text-[#3A444D]">{resultsCount}</strong> {searchMode === 'building' ? 'gedung kos' : 'pilihan kamar'} terbaik untuk Anda.
+            Menampilkan <strong className="text-[#3A444D] font-bold">{resultsCount}</strong> {searchMode === 'building' ? 'gedung kos' : 'kamar'} yang sesuai filter secara real-time.
           </p>
         </div>
 
@@ -68,53 +76,65 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
           <button
             type="button"
             onClick={() => setSearchMode('building')}
-            className={`flex-1 md:flex-none px-4 py-2 rounded-xl uppercase tracking-tight transition-all duration-300 cursor-pointer ${
+            className={`flex-1 md:flex-none px-4 py-2 rounded-xl uppercase tracking-tight transition-all duration-300 cursor-pointer flex items-center justify-center gap-1.5 ${
               searchMode === 'building' 
                 ? 'bg-[#2E6F40] text-white shadow-sm' 
                 : 'text-[#64748B] hover:text-[#2E6F40]'
             }`}
           >
+            <Layers size={13} />
             Gedung Kos
           </button>
           <button
             type="button"
             onClick={() => setSearchMode('room')}
-            className={`flex-1 md:flex-none px-4 py-2 rounded-xl uppercase tracking-tight transition-all duration-300 cursor-pointer ${
+            className={`flex-1 md:flex-none px-4 py-2 rounded-xl uppercase tracking-tight transition-all duration-300 cursor-pointer flex items-center justify-center gap-1.5 ${
               searchMode === 'room' 
                 ? 'bg-[#2E6F40] text-white shadow-sm' 
                 : 'text-[#64748B] hover:text-[#2E6F40]'
             }`}
           >
+            <CheckCircle2 size={13} />
             Kamar Langsung
           </button>
         </div>
       </div>
 
-      {/* Main Input Filters Row */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end pt-2">
-        {/* Input 1: Search Location / Name */}
-        <div className="md:col-span-8 space-y-2">
+      {/* Main Input Filters Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-end pt-2">
+        
+        {/* Input 1: Search Keyword Input Field */}
+        <div className="md:col-span-5 space-y-2">
           <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">
-            List Cabang
+            Kata Kunci / Cabang / Tipe Kamar
           </label>
           <div className="relative">
             <Search className="absolute left-3.5 top-3.5 text-[#64748B]" size={16} />
             <input 
               type="text"
-              placeholder={searchMode === 'building' ? "Cari cabang, area..." : "Cari nomor kamar, nama cabang, atau kota..."}
+              placeholder={searchMode === 'building' ? "Cari cabang, kota, area..." : "Cari nomor kamar, tipe (VIP/Standard), kota..."}
               value={searchLocation}
               onChange={(e) => setSearchLocation(e.target.value)}
               className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl pl-10 pr-4 py-3 text-sm text-[#3A444D] placeholder-[#94A3B8] focus:outline-none focus:border-[#2E6F40] focus:bg-white transition-all font-medium"
             />
+            {searchLocation && (
+              <button
+                type="button"
+                onClick={() => setSearchLocation('')}
+                className="absolute right-3 top-3 text-xs text-slate-400 hover:text-slate-600 font-bold"
+              >
+                ✕
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Input 2: Kebijakan Hunian (Gender Policy) */}
-        <div className="hidden md:col-span-4 space-y-2">
-          <label className="hidden block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">
-            Tipe Kebijakan
+        {/* Input 2: Kebijakan Tipe Hunian (Gender Policy) */}
+        <div className="md:col-span-4 space-y-2">
+          <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">
+            Tipe Hunian (Gender)
           </label>
-          <div className="hidden flex bg-[#F8FAFC] border border-[#E2E8F0] p-1 rounded-2xl w-full">
+          <div className="flex bg-[#F8FAFC] border border-[#E2E8F0] p-1 rounded-2xl w-full">
             {(['all', 'putra', 'putri', 'campur'] as const).map((t) => (
               <button
                 key={t}
@@ -122,8 +142,8 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
                 onClick={() => setSelectedType(t)}
                 className={`flex-1 py-2 rounded-xl text-xs font-bold uppercase transition-all duration-300 cursor-pointer ${
                   selectedType === t 
-                    ? 'bg-[#3A444D] text-white shadow-sm' 
-                    : 'text-[#64748B] hover:text-[#3A444D]'
+                    ? 'bg-[#2E6F40] text-white shadow-sm' 
+                    : 'text-[#64748B] hover:text-[#2E6F40]'
                 }`}
               >
                 {t === 'all' ? 'Semua' : t}
@@ -132,8 +152,8 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
           </div>
         </div>
 
-        {/* Input 3: Rent Period Duration */}
-        <div className="md:col-span-4 space-y-2">
+        {/* Input 3: Durasi Sewa */}
+        <div className="md:col-span-3 space-y-2">
           <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">
             Durasi Sewa
           </label>
@@ -152,7 +172,7 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
             <button
               type="button"
               onClick={() => setSearchDurationType('daily')}
-              className={`hidden flex-1 py-2 rounded-xl text-xs font-bold uppercase transition-all duration-300 cursor-pointer ${
+              className={`flex-1 py-2 rounded-xl text-xs font-bold uppercase transition-all duration-300 cursor-pointer ${
                 searchDurationType === 'daily' 
                   ? 'bg-[#2E6F40] text-white shadow-sm' 
                   : 'text-[#64748B] hover:text-[#2E6F40]'
@@ -162,6 +182,59 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
             </button>
           </div>
         </div>
+
+      </div>
+
+      {/* Row 2: Price Range & Ketersediaan Real-Time */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-5 pt-2 border-t border-[#F1F5F9] items-center">
+        
+        {/* Harga Maksimum Filter Slider */}
+        <div className="md:col-span-7 space-y-2">
+          <div className="flex justify-between items-center text-xs font-bold text-[#3A444D]">
+            <span className="uppercase tracking-wider flex items-center gap-1">
+              <DollarSign size={13} className="text-[#2E6F40]" /> Max Harga Sewa
+            </span>
+            <span className="text-[#2E6F40] font-mono font-black text-sm bg-[#EEF7F0] px-2.5 py-0.5 rounded-lg border border-[#2E6F40]/20">
+              {priceRange >= 15000000 ? 'Semua Harga' : `≤ Rp ${(priceRange).toLocaleString('id-ID')}`}
+            </span>
+          </div>
+          <input 
+            type="range"
+            min={500000}
+            max={15000000}
+            step={500000}
+            value={priceRange}
+            onChange={(e) => setPriceRange(Number(e.target.value))}
+            className="w-full accent-[#2E6F40] cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+            <span>Rp 500rb</span>
+            <span>Rp 5 Jt</span>
+            <span>Rp 10 Jt</span>
+            <span>Rp 15 Jt+</span>
+          </div>
+        </div>
+
+        {/* Availability Real-Time Toggle */}
+        <div className="md:col-span-5 flex items-center justify-start md:justify-end">
+          <label className="inline-flex items-center gap-3 bg-[#F8FAFC] border border-[#E2E8F0] p-3 rounded-2xl cursor-pointer hover:border-[#2E6F40] transition-all w-full sm:w-auto">
+            <input 
+              type="checkbox"
+              checked={onlyAvailable}
+              onChange={(e) => setOnlyAvailable(e.target.checked)}
+              className="w-4 h-4 accent-[#2E6F40] rounded cursor-pointer"
+            />
+            <div>
+              <span className="text-xs font-bold text-[#3A444D] block leading-tight">
+                Hanya Kamar Tersedia (Available)
+              </span>
+              <span className="text-[10px] text-[#64748B] block">
+                Sembunyikan unit yang sudah terisi
+              </span>
+            </div>
+          </label>
+        </div>
+
       </div>
 
       {/* Advanced Facilities Filter */}
@@ -231,7 +304,7 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
           <span>Fasilitas All-Inclusive termasuk Wi-Fi, laundry, token listrik, & AC.</span>
         </div>
 
-        {onClearFilters && (searchLocation || selectedType !== 'all' || searchDurationType !== 'monthly' || selectedFacilities.length > 0) && (
+        {onClearFilters && (searchLocation || selectedType !== 'all' || searchDurationType !== 'monthly' || selectedFacilities.length > 0 || priceRange < 15000000 || onlyAvailable) && (
           <button
             type="button"
             onClick={onClearFilters}
@@ -246,3 +319,4 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
 };
 
 export default PremiumSearchFilter;
+

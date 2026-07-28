@@ -469,8 +469,10 @@ INSERT INTO facilities (id, name, icon, category, description) VALUES
 (4, 'Parkir Motor Luas', 'Car', 'property', 'Area parkir motor yang aman, teduh, dan luas'),
 (5, 'Laundry Kiloan', 'Shirt', 'property', 'Fasilitas cuci gosok pakaian tersedia untuk penghuni'),
 (6, 'Cleaning Service', 'Sparkles', 'property', 'Layanan kebersihan kamar 2 kali seminggu'),
-(7, 'Dapur Bersama', 'CupSoda', 'property', 'Dapur umum lengkap dengan kompor, dispenser, dan kulkas'),
-(8, 'Kamar Mandi Dalam', 'Droplet', 'room', 'Kamar mandi pribadi dilengkapi shower dan toilet duduk')
+(7, 'Dapur Bersama', 'CupSoda', 'property', 'Dapur umum lengkap dengan kompor, dispenser, dan alat masak'),
+(8, 'Kamar Mandi Dalam', 'Droplet', 'room', 'Kamar mandi pribadi dilengkapi shower dan toilet duduk'),
+(9, 'Kulkas dan Microwave Bersama', 'Refrigerator', 'property', 'Fasilitas kulkas pendingin & microwave pemanas makanan di area dapur bersama'),
+(10, 'Area Jemuran', 'Sun', 'property', 'Area khusus penjemuran pakaian yang lapang, bersih, beratap transparan & sirkulasi udara baik')
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   icon = EXCLUDED.icon,
@@ -521,6 +523,10 @@ BEGIN
     END LOOP;
 END;
 $$;
+
+-- Add digital signature columns to bookings and surveys tables
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS signature_url TEXT;
+ALTER TABLE IF EXISTS surveys ADD COLUMN IF NOT EXISTS signature_url TEXT;
 
 
 

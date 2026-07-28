@@ -33,7 +33,7 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
               <span className="font-extrabold text-white font-display text-lg tracking-tight">SAMARA</span>
               <span className="font-extrabold text-brand-beige font-display text-lg tracking-tight">STAY</span>
             </div>
-            <p className="text-[10px] text-slate-400 font-medium font-mono uppercase tracking-wider">Premium Kosan Ecosystem</p>
+            <p className="text-[10px] text-slate-400 font-medium font-mono uppercase tracking-wider">Hunian Eksklusif Premium</p>
           </div>
         </div>
 

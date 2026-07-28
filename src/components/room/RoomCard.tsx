@@ -15,10 +15,13 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect }) => {
       {room.image_url && (
         <div className="h-40 -mx-4 -mt-4 mb-1 relative overflow-hidden rounded-t-2xl">
           <img 
-            src={room.image_url || null} 
+            src={room.image_url} 
             alt={`Kamar ${room.room_number}`}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+            }}
           />
         </div>
       )}

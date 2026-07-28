@@ -313,7 +313,7 @@ const tableSchemas: Record<string, string[]> = {
   properties: [
     'id', 'name', 'address', 'price', 'type', 'total_rooms', 'available_rooms',
     'facilities', 'image_url', 'images', 'lat', 'lng', 'created_at', 'description',
-    'additional_rules', 'policies', 'terms', 'regulations'
+    'additional_rules', 'policies', 'terms', 'regulations', 'deposit_amount'
   ],
   rooms: [
     'id', 'property_id', 'room_number', 'room_type', 'price', 'size_sqm', 'floor',
@@ -332,7 +332,7 @@ const tableSchemas: Record<string, string[]> = {
     'duration_days', 'check_in_date', 'check_out_date', 'nik', 'ktp_image', 'is_dp',
     'dp_amount', 'coupon_code', 'discount_amount', 'is_for_other', 'occupant_name',
     'occupant_phone', 'occupant_email', 'occupant_nik', 'occupant_ktp_image',
-    'is_occupant_verified', 'occupant_arrival_status', 'created_at'
+    'is_occupant_verified', 'occupant_arrival_status', 'signature_url', 'created_at'
   ],
   payments: [
     'id', 'tenant_name', 'property_id', 'amount', 'method', 'status', 'payment_date',
@@ -352,7 +352,7 @@ const tableSchemas: Record<string, string[]> = {
     'id', 'reservation_number', 'tenant_name', 'nik', 'email', 'phone', 'address', 'job',
     'ktp_url', 'selfie_url', 'planned_move_in_date', 'property_id', 'room_number',
     'survey_date', 'survey_time_slot', 'status', 'dp_amount', 'invoice_id', 'payment_method',
-    'pelunasan_deadline_days', 'pelunasan_deadline_date', 'created_at'
+    'pelunasan_deadline_days', 'pelunasan_deadline_date', 'signature_url', 'created_at'
   ],
   accounts: [
     'id', 'name', 'type', 'balance', 'created_at'
@@ -392,33 +392,49 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
     const payloadKeys = Object.keys(activePayload);
     const invalidKeys = payloadKeys.filter(k => !allowedCols.includes(k));
     if (invalidKeys.length > 0) {
-      const errMsg = `Skema tidak valid: Kolom [${invalidKeys.join(', ')}] tidak ada di tabel '${table}'.`;
-      console.error(`[SUPABASE SHIELD ERROR] ${errMsg}`);
-      return { error: new Error(errMsg) };
+      invalidKeys.forEach(k => delete activePayload[k]);
     }
   }
 
   try {
+    let result: any;
     if (id !== undefined && id !== null) {
-      const { data, error } = await supabase.from(table).update(activePayload).eq('id', id).select();
-      if (error) {
-        return { error };
-      }
-      if (!data || data.length === 0) {
-        // Fallback: if update affected 0 rows, the row with this ID doesn't exist yet (e.g. settings ID 1). Insert it.
-        const { data: insertData, error: insertError } = await supabase.from(table).insert({ ...activePayload, id }).select();
-        if (insertError) {
-          return { error: insertError };
+      result = await supabase.from(table).update(activePayload).eq('id', id).select();
+      if (result.error && result.error.message?.includes('Could not find the')) {
+        const match = result.error.message.match(/Could not find the '([^']+)' column/);
+        if (match && match[1]) {
+          const badCol = match[1];
+          console.warn(`[SUPABASE SHIELD] Column '${badCol}' missing in remote '${table}' table. Stripping and retrying update...`);
+          delete activePayload[badCol];
+          result = await supabase.from(table).update(activePayload).eq('id', id).select();
         }
-        return { data: insertData, error: null };
       }
-      return { data, error: null };
+      if (!result.data || result.data.length === 0) {
+        // Fallback: if update affected 0 rows, the row with this ID doesn't exist yet (e.g. settings ID 1). Insert it.
+        result = await supabase.from(table).insert({ ...activePayload, id }).select();
+        if (result.error && result.error.message?.includes('Could not find the')) {
+          const match = result.error.message.match(/Could not find the '([^']+)' column/);
+          if (match && match[1]) {
+            const badCol = match[1];
+            console.warn(`[SUPABASE SHIELD] Column '${badCol}' missing in remote '${table}' table. Stripping and retrying insert...`);
+            delete activePayload[badCol];
+            result = await supabase.from(table).insert({ ...activePayload, id }).select();
+          }
+        }
+      }
+      return result;
     } else {
-      const { data, error } = await supabase.from(table).insert(activePayload).select();
-      if (error) {
-        return { error };
+      result = await supabase.from(table).insert(activePayload).select();
+      if (result.error && result.error.message?.includes('Could not find the')) {
+        const match = result.error.message.match(/Could not find the '([^']+)' column/);
+        if (match && match[1]) {
+          const badCol = match[1];
+          console.warn(`[SUPABASE SHIELD] Column '${badCol}' missing in remote '${table}' table. Stripping and retrying insert...`);
+          delete activePayload[badCol];
+          result = await supabase.from(table).insert(activePayload).select();
+        }
       }
-      return { data, error: null };
+      return result;
     }
   } catch (err: any) {
     console.error(`safeSupabaseUpsert exception in ${table}:`, err);
@@ -475,7 +491,21 @@ export const database = {
             description: f.description
           }));
         
-        const cleanProperty = { ...p, facilities: resolvedFacilities };
+        let depositVal = p.deposit_amount;
+        if (depositVal === undefined || depositVal === null) {
+          if (p.terms && typeof p.terms === 'string') {
+            const match = p.terms.match(/\[DEPOSIT:(\d+)\]/);
+            if (match) {
+              depositVal = Number(match[1]);
+            }
+          }
+        }
+
+        const cleanProperty = { 
+          ...p, 
+          facilities: resolvedFacilities,
+          deposit_amount: depositVal ?? 500000
+        };
         delete cleanProperty.property_facilities;
         return cleanProperty;
       });
@@ -496,6 +526,16 @@ export const database = {
       const facilitiesToSync = payload.facilities;
       delete (payload as any).facilities;
       delete (payload as any).id;
+
+      if (payload.deposit_amount !== undefined && payload.deposit_amount !== null) {
+        let termsStr = payload.terms || '';
+        if (termsStr.includes('[DEPOSIT:')) {
+          termsStr = termsStr.replace(/\[DEPOSIT:\d+\]/, `[DEPOSIT:${payload.deposit_amount}]`);
+        } else {
+          termsStr = termsStr ? `${termsStr}\n[DEPOSIT:${payload.deposit_amount}]` : `[DEPOSIT:${payload.deposit_amount}]`;
+        }
+        payload.terms = termsStr;
+      }
 
       // Save/Update the main property record
       const { data, error } = await safeSupabaseUpsert('properties', payload, id);
@@ -1366,7 +1406,46 @@ export const database = {
         logSupabaseError('fetchMasterFacilities', error);
         return [];
       }
-      return data as Facility[];
+
+      let facilitiesList = (data || []) as Facility[];
+
+      // Ensure new master facilities exist in Supabase database
+      const hasFridgeMicrowave = facilitiesList.some(f => f.name.toLowerCase().includes('kulkas') || f.name.toLowerCase().includes('microwave'));
+      const hasDryingArea = facilitiesList.some(f => f.name.toLowerCase().includes('jemuran'));
+
+      const toInsert: any[] = [];
+      if (!hasFridgeMicrowave) {
+        toInsert.push({
+          name: 'Kulkas dan Microwave Bersama',
+          icon: 'Refrigerator',
+          category: 'property',
+          description: 'Fasilitas kulkas pendingin & microwave pemanas makanan di area dapur bersama'
+        });
+      }
+      if (!hasDryingArea) {
+        toInsert.push({
+          name: 'Area Jemuran',
+          icon: 'Sun',
+          category: 'property',
+          description: 'Area khusus penjemuran pakaian yang lapang, bersih, beratap transparan & sirkulasi udara baik'
+        });
+      }
+
+      if (toInsert.length > 0) {
+        try {
+          const { data: insertedData, error: insertErr } = await supabase
+            .from('facilities')
+            .insert(toInsert)
+            .select('*');
+          if (!insertErr && insertedData) {
+            facilitiesList = [...facilitiesList, ...insertedData];
+          }
+        } catch (e) {
+          console.warn('Auto-seed facilities error:', e);
+        }
+      }
+
+      return facilitiesList;
     } catch (err) {
       logSupabaseError('fetchMasterFacilities', err, true);
       return [];
@@ -1502,6 +1581,54 @@ export const database = {
       return finalTenant;
     } catch (err: any) {
       console.error('saveTenant failed:', err);
+      throw err;
+    }
+  },
+
+  async deleteTenant(id: string | number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase.from('tenants').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteTenant', error);
+        throw new Error(`Gagal menghapus tenant: ${error.message}`);
+      }
+      await this.logActivity("System", "DELETE_TENANT", `Menghapus data tenant ID: ${id}`);
+      return true;
+    } catch (err: any) {
+      console.error('deleteTenant failed:', err);
+      throw err;
+    }
+  },
+
+  async deleteSurvey(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase.from('surveys').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteSurvey', error);
+        throw new Error(`Gagal menghapus survey: ${error.message}`);
+      }
+      await this.logActivity("System", "DELETE_SURVEY", `Menghapus data survey ID: ${id}`);
+      return true;
+    } catch (err: any) {
+      console.error('deleteSurvey failed:', err);
+      throw err;
+    }
+  },
+
+  async deleteBooking(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase.from('bookings').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteBooking', error);
+        throw new Error(`Gagal menghapus booking: ${error.message}`);
+      }
+      await this.logActivity("System", "DELETE_BOOKING", `Menghapus data booking ID: ${id}`);
+      return true;
+    } catch (err: any) {
+      console.error('deleteBooking failed:', err);
       throw err;
     }
   },

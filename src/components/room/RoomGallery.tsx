@@ -358,10 +358,13 @@ export default function RoomGallery({ rooms, properties }: RoomGalleryProps) {
               {/* Image element with required referrerPolicy */}
               <div className="relative overflow-hidden select-none">
                 <img 
-                  src={item.url || null} 
+                  src={item.url} 
                   alt={item.title}
                   className="w-full h-auto object-cover opacity-90 group-hover:scale-105 group-hover:opacity-100 transition-all duration-500 rounded-t-2xl"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+                  }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-brand-darker/90 via-brand-darker/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
                   <div className="flex items-center justify-between text-white">
@@ -432,10 +435,13 @@ export default function RoomGallery({ rooms, properties }: RoomGalleryProps) {
               onClick={(e) => e.stopPropagation()}
             >
               <img 
-                src={currentLightboxItem.url || null} 
+                src={currentLightboxItem.url} 
                 alt={currentLightboxItem.title}
                 className="max-h-[70vh] max-w-full rounded-2xl object-contain border border-brand-steel/30 shadow-2xl"
                 referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+                }}
               />
 
               {/* Meta Description Banner */}

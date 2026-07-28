@@ -12,16 +12,124 @@ import MidtransSimulator from '../components/MidtransSimulator';
 import { compressImage } from '../utils/imageCompressor';
 import { 
   Sparkles, HelpCircle, Phone, BookOpen, Clock, HardDrive, Shield,
-  MapPin, Wifi, Zap, ChevronLeft, Building2, Search, Calendar, Map, 
+  MapPin, Wifi, Zap, ChevronLeft, ChevronDown, Building2, Search, Calendar, Map, 
   User, CheckCircle, Heart, Tv, Utensils, Car, Info, X, Bed, RotateCw, 
   Play, Volume2, ArrowRight, Star, AlertCircle, ChevronRight, MapPinned,
   Shirt, Sparkle, Compass, Grid, MapIcon, CompassIcon, InfoIcon, LogIn, Droplet, Check,
-  MessageSquare, Mail, UploadCloud
+  MessageSquare, Mail, UploadCloud, ExternalLink, Globe, Languages
 } from 'lucide-react';
 import PremiumSearchFilter from '../components/premium/PremiumSearchFilter';
 import PremiumRoomGrid from '../components/premium/PremiumRoomGrid';
 
 interface HomeProps {}
+
+// Interactive Detail Map Component for selected property cabang
+const PropertyDetailMap: React.FC<{ property: Property }> = ({ property }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const lat = property.lat || -6.368;
+    const lng = property.lng || 106.83;
+
+    if (mapRef.current) {
+      try {
+        mapRef.current.remove();
+      } catch (e) {
+        console.warn('Cleanup leaflet map error:', e);
+      }
+      mapRef.current = null;
+    }
+
+    const map = L.map(containerRef.current, {
+      zoomControl: true,
+      scrollWheelZoom: false,
+    }).setView([lat, lng], 16);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: 'abcd',
+      maxZoom: 20
+    }).addTo(map);
+
+    const customIcon = L.divIcon({
+      className: 'custom-leaflet-detail-marker',
+      html: `
+        <div class="flex flex-col items-center cursor-pointer transform -translate-y-1/2 scale-110 z-50">
+          <div class="px-3 py-1 rounded-xl text-[10px] font-black font-mono shadow-xl bg-[#2E6F40] text-white border-2 border-white whitespace-nowrap">
+            📍 ${property.name}
+          </div>
+          <div class="w-3.5 h-3.5 rounded-full border-2 border-white shadow-lg bg-amber-500 ring-4 ring-amber-500/30 -mt-1"></div>
+        </div>
+      `,
+      iconSize: [120, 50],
+      iconAnchor: [60, 25]
+    });
+
+    const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
+
+    const popupHtml = `
+      <div style="font-family: sans-serif; padding: 4px; max-width: 220px;">
+        <strong style="font-size: 12px; color: #3A444D; display: block; margin-bottom: 2px;">${property.name}</strong>
+        <p style="font-size: 10px; color: #64748B; margin: 0; line-height: 1.3;">${property.address}</p>
+        <span style="font-size: 10px; font-weight: bold; color: #2E6F40; display: inline-block; margin-top: 4px;">Lat: ${lat}, Lng: ${lng}</span>
+      </div>
+    `;
+    marker.bindPopup(popupHtml).openPopup();
+
+    mapRef.current = map;
+
+    const timer = setTimeout(() => {
+      try {
+        map.invalidateSize();
+      } catch (e) {}
+    }, 250);
+
+    return () => {
+      clearTimeout(timer);
+      if (mapRef.current) {
+        try {
+          mapRef.current.remove();
+        } catch (e) {}
+        mapRef.current = null;
+      }
+    };
+  }, [property.id, property.lat, property.lng, property.name, property.address]);
+
+  return (
+    <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 overflow-hidden relative flex flex-col justify-between min-h-[220px] h-full shadow-xs text-left space-y-3">
+      <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-2">
+        <div>
+          <h4 className="font-extrabold text-[#3A444D] text-xs flex items-center gap-1.5 uppercase tracking-wide">
+            <MapPin size={13} className="text-[#2E6F40]" />
+            Titik Lokasi Gedung & Alamat
+          </h4>
+          <p className="text-[10px] text-[#64748B] font-mono mt-0.5">LAT: {property.lat || -6.368} | LNG: {property.lng || 106.83}</p>
+        </div>
+        <a
+          href={`https://www.google.com/maps/search/?api=1&query=${property.lat || -6.368},${property.lng || 106.83}`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[10px] font-bold text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#d8ebd8] px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
+        >
+          Buka GMaps ↗
+        </a>
+      </div>
+
+      <div className="w-full h-44 rounded-xl overflow-hidden relative border border-[#E2E8F0] z-10 bg-slate-100">
+        <div ref={containerRef} className="w-full h-full min-h-[160px] absolute inset-0 z-10" />
+      </div>
+
+      <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl text-[10px] leading-relaxed text-[#64748B] flex items-start gap-1.5">
+        <MapPin size={12} className="text-[#2E6F40] shrink-0 mt-0.5" />
+        <div>
+          <strong className="text-[#3A444D]">{property.name}</strong> — {property.address}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default function Home({}: HomeProps) {
   // Use granular real-time table hooks to fetch data and receive live changes
@@ -60,13 +168,18 @@ export default function Home({}: HomeProps) {
   );
   const [searchDurationType, setSearchDurationType] = useState<'monthly' | 'daily'>('monthly');
 
+  // Language state (Indonesian / English)
+  const [lang, setLang] = useState<'id' | 'en'>('id');
+
   // Filters State (Connected with Search catalogue page)
   const [selectedType, setSelectedType] = useState<'all' | 'putra' | 'putri' | 'campur'>('all');
   const [priceRange, setPriceRange] = useState<number>(15000000);
+  const [onlyAvailable, setOnlyAvailable] = useState<boolean>(false);
   const [selectedRoomFacilities, setSelectedRoomFacilities] = useState<string[]>([]);
   const [selectedSharedFacilities, setSelectedSharedFacilities] = useState<string[]>([]);
 
   // Selected contexts for active workflows
+  const [selectedContactPropertyId, setSelectedContactPropertyId] = useState<number | 'all'>('all');
   const [activeProperty, setActiveProperty] = useState<Property | null>(null);
   const [activeRoom, setActiveRoom] = useState<Room | null>(null);
   const [checkoutFlow, setCheckoutFlow] = useState<'none' | 'survey' | 'monthly' | 'daily'>('none');
@@ -91,6 +204,10 @@ export default function Home({}: HomeProps) {
   // Completed receipt state
   const [showReceipt, setShowReceipt] = useState<boolean>(false);
   const [receiptData, setReceiptData] = useState<any | null>(null);
+
+  // Signature and Rules Agreement state
+  const [isAgreed, setIsAgreed] = useState<boolean>(false);
+  const [signatureUrl, setSignatureUrl] = useState<string>('');
 
   // Survey Form states
   const [surveyForm, setSurveyForm] = useState({
@@ -294,9 +411,12 @@ export default function Home({}: HomeProps) {
       { icon: "Shield", title: "Security", subtitle: "24 Jam" },
       { icon: "Wifi", title: "WiFi", subtitle: "100 Mbps" },
       { icon: "Droplet", title: "Air", subtitle: "Bersih 24 Jam" },
-      { icon: "Car", title: "Parkir", subtitle: "Hanya Motor" },
+      { icon: "Bike", title: "Parkir Motor", subtitle: "Aman & Luas" },
+      { icon: "Car", title: "Parkir Mobil", subtitle: "Tersedia" },
       { icon: "Shirt", title: "Laundry", subtitle: "Tersedia" },
-      { icon: "Sparkles", title: "Cleaning", subtitle: "2x / Minggu" }
+      { icon: "Refrigerator", title: "Kulkas & Microwave", subtitle: "Bersama" },
+      { icon: "Sun", title: "Area Jemuran", subtitle: "Bersih & Luas" },
+      { icon: "Sparkles", title: "Cleaning", subtitle: "Tersedia" }
     ];
   })();
 
@@ -328,7 +448,7 @@ export default function Home({}: HomeProps) {
     const fallback = [
       {
         question: "Bagaimana cara booking kamar di Samara Stay?",
-        answer: "Anda dapat memilih gedung dan kamar kost di aplikasi kami, tentukan tanggal mulai sewa, dan selesaikan pembayaran DP atau sewa bulan pertama secara instan menggunakan sistem pembayaran digital terintegrasi."
+        answer: "• Anda dapat memilih cabang dan kamar kos di website kami, lalu tentukan tanggal mulai sewa dan selesaikan pembayaran untuk sewa harian/ bulanan secara instan dengan menggunakan sistem pembayaran digital terintegrasi"
       },
       {
         question: "Apa saja fasilitas yang tersedia di setiap kamar?",
@@ -336,7 +456,7 @@ export default function Home({}: HomeProps) {
       },
       {
         question: "Berapa biaya administrasi dan deposit yang harus dibayar?",
-        answer: "Di Samara Stay bebas dari biaya administrasi tersembunyi. Kami menerapkan deposit komitmen sewa yang transparan dan akan dikembalikan utuh pada saat masa sewa Anda selesai."
+        answer: "• Samara Stay tidak membebankan biaya administrasi, kami hanya menerapkan deposit untuk komitmen sewa. Deposit akan dikembalikan utuh pada saat masa sewa selesai apabila tidak ada kerusakan atau kehilangan pada fasilitas kos."
       },
       {
         question: "Apakah ada kontrak jangka panjang?",
@@ -378,6 +498,8 @@ export default function Home({}: HomeProps) {
   const handleSelectRoom = (room: Room, flowType: 'monthly' | 'daily' | 'survey') => {
     setActiveRoom(room);
     setCheckoutFlow(flowType);
+    setIsAgreed(false);
+    setSignatureUrl('');
   };
 
   const handleProceedToPayment = async (calculatedTotal: number) => {
@@ -406,7 +528,8 @@ export default function Home({}: HomeProps) {
           dp_amount: 0,
           payment_method: 'Tanpa DP (Kunjungan)',
           invoice_id: `INV-SRV-FREE-${Math.floor(1000 + Math.random() * 9000)}`,
-          reservation_number: freeOrderId
+          reservation_number: freeOrderId,
+          signature_url: signatureUrl
         };
         const saved = await database.saveSurvey(surveyRecord);
 
@@ -522,7 +645,8 @@ export default function Home({}: HomeProps) {
               dp_amount: 500000,
               payment_method: 'Midtrans SNAP',
               invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
-              reservation_number: orderId
+              reservation_number: orderId,
+              signature_url: signatureUrl
             };
             await database.saveSurvey(surveyRecord);
           } else {
@@ -554,7 +678,8 @@ export default function Home({}: HomeProps) {
               occupant_phone: bookingForm.isForOther ? bookingForm.occupantPhone : undefined,
               occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
               occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
-              occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined
+              occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
+              signature_url: signatureUrl
             };
             await database.saveBooking(bookingRecord);
           }
@@ -670,7 +795,8 @@ export default function Home({}: HomeProps) {
         status: 'pending_payment',
         dp_amount: 500000,
         payment_method: details.paymentMethod,
-        invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`
+        invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
+        signature_url: signatureUrl
       };
 
       const saved = await database.saveSurvey(surveyRecord);
@@ -728,7 +854,8 @@ export default function Home({}: HomeProps) {
         occupant_phone: bookingForm.isForOther ? bookingForm.occupantPhone : undefined,
         occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
         occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
-        occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined
+        occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
+        signature_url: signatureUrl
       };
 
       const updatedRoom: Room = { 
@@ -790,7 +917,8 @@ export default function Home({}: HomeProps) {
         status: 'survey_confirmed',
         dp_amount: 500000,
         payment_method: details.paymentMethod,
-        invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`
+        invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
+        signature_url: signatureUrl
       };
 
       const saved = await database.saveSurvey(surveyRecord);
@@ -914,7 +1042,8 @@ export default function Home({}: HomeProps) {
         occupant_phone: bookingForm.isForOther ? bookingForm.occupantPhone : undefined,
         occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
         occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
-        occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined
+        occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
+        signature_url: signatureUrl
       };
 
       // Set room status to occupied if direct booking
@@ -949,7 +1078,31 @@ export default function Home({}: HomeProps) {
     e.preventDefault();
     setSelectedType('all');
     setUserPage('search');
+    if (searchLocation && properties.length > 0) {
+      const matched = properties.find(p => 
+        p.name.toLowerCase().includes(searchLocation.toLowerCase()) || 
+        p.address.toLowerCase().includes(searchLocation.toLowerCase()) ||
+        p.id.toString() === searchLocation
+      );
+      if (matched) {
+        setSelectedMapProperty(matched);
+      }
+    }
   };
+
+  // Sync searchLocation selection directly to selectedMapProperty so the map pans immediately
+  useEffect(() => {
+    if (searchLocation && properties.length > 0) {
+      const matched = properties.find(p => 
+        p.name.toLowerCase().includes(searchLocation.toLowerCase()) || 
+        p.address.toLowerCase().includes(searchLocation.toLowerCase()) ||
+        p.id.toString() === searchLocation
+      );
+      if (matched) {
+        setSelectedMapProperty(matched);
+      }
+    }
+  }, [searchLocation, properties]);
 
   // Filter properties based on the search inputs + advanced sidebar filter
   const filteredProperties = properties.filter(p => {
@@ -960,16 +1113,19 @@ export default function Home({}: HomeProps) {
     const matchType = selectedType === 'all' || p.type === selectedType;
     const matchPrice = p.price <= priceRange;
 
+    const pRooms = rooms.filter(r => r.property_id === p.id);
+    const matchAvailability = !onlyAvailable || pRooms.some(r => r.status === 'available');
+
     // Advanced facilities filters (connected to master facilities list from Supabase)
     const matchFacilities = selectedRoomFacilities.length === 0 ||
       selectedRoomFacilities.every(f => 
         (p.facilities || []).some((pf: any) => pf.name.toLowerCase().includes(f.toLowerCase())) ||
-        rooms.filter(r => r.property_id === p.id).some(r => 
+        pRooms.some(r => 
           (r.facilities || []).some((rf: any) => rf.name.toLowerCase().includes(f.toLowerCase()))
         )
       );
 
-    return matchLocation && matchType && matchPrice && matchFacilities;
+    return matchLocation && matchType && matchPrice && matchAvailability && matchFacilities;
   });
 
   // Filter individual rooms for direct interactive room search
@@ -980,10 +1136,12 @@ export default function Home({}: HomeProps) {
     const matchLocation = !searchLocation.trim() || 
       parentProperty.address.toLowerCase().includes(searchLocation.toLowerCase()) || 
       parentProperty.name.toLowerCase().includes(searchLocation.toLowerCase()) ||
-      r.room_number.toLowerCase().includes(searchLocation.toLowerCase());
+      r.room_number.toLowerCase().includes(searchLocation.toLowerCase()) ||
+      (r.type || '').toLowerCase().includes(searchLocation.toLowerCase());
 
     const matchType = selectedType === 'all' || parentProperty.type === selectedType;
     const matchPrice = r.price <= priceRange;
+    const matchAvailability = !onlyAvailable || r.status === 'available';
 
     // Advanced facilities filters (connected to master facilities list from Supabase)
     const matchFacilities = selectedRoomFacilities.length === 0 || 
@@ -992,7 +1150,7 @@ export default function Home({}: HomeProps) {
         (parentProperty.facilities || []).some((pf: any) => pf.name.toLowerCase().includes(f.toLowerCase()))
       );
 
-    return matchLocation && matchType && matchPrice && matchFacilities;
+    return matchLocation && matchType && matchPrice && matchAvailability && matchFacilities;
   });
 
   // Leaflet map initialization and updates hook
@@ -1080,21 +1238,27 @@ export default function Home({}: HomeProps) {
           .addTo(map)
           .on('click', () => {
             setSelectedMapProperty(p);
-            map.setView([p.lat!, p.lng!], 14, { animate: true });
+            map.setView([p.lat!, p.lng!], 16, { animate: true });
           });
 
         markersRef.current[p.id] = marker;
       }
     });
 
-    // Fit map bounds to show all markers if there are any
-    const validCoords = filteredProperties
-      .filter(p => p.lat && p.lng)
-      .map(p => [p.lat!, p.lng!] as [number, number]);
+    // Directly focus on selected branch coordinate, or single result, or fit bounds
+    if (selectedMapProperty?.lat && selectedMapProperty?.lng) {
+      map.setView([selectedMapProperty.lat, selectedMapProperty.lng], 16, { animate: true });
+    } else {
+      const validCoords = filteredProperties
+        .filter(p => p.lat && p.lng)
+        .map(p => [p.lat!, p.lng!] as [number, number]);
 
-    if (validCoords.length > 0) {
-      const bounds = L.latLngBounds(validCoords);
-      map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+      if (validCoords.length === 1) {
+        map.setView(validCoords[0], 16, { animate: true });
+      } else if (validCoords.length > 1) {
+        const bounds = L.latLngBounds(validCoords);
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+      }
     }
 
   }, [filteredProperties, selectedMapProperty, userPage]);
@@ -1102,7 +1266,7 @@ export default function Home({}: HomeProps) {
   // Handle zooming/panning to property when selectedMapProperty changes outside map
   useEffect(() => {
     if (mapRef.current && selectedMapProperty?.lat && selectedMapProperty?.lng) {
-      mapRef.current.setView([selectedMapProperty.lat, selectedMapProperty.lng], 14, { animate: true });
+      mapRef.current.setView([selectedMapProperty.lat, selectedMapProperty.lng], 16, { animate: true });
     }
   }, [selectedMapProperty]);
 
@@ -1171,7 +1335,7 @@ export default function Home({}: HomeProps) {
     <div className="bg-[#F8F9FA] min-h-screen text-brand-primary font-sans pb-16">
       
       {/* Dynamic Sub-header Navigation Bar */}
-      <div className="bg-brand-primary border-b border-brand-steel/30 sticky top-[65px] z-40 px-4 md:px-8 py-3.5 shadow-sm flex justify-between items-center text-xs text-[#F8F9FA]">
+      <div className="bg-brand-primary border-b border-brand-steel/30 sticky top-[65px] z-40 px-4 md:px-8 py-3.5 shadow-sm flex flex-wrap justify-between items-center gap-2 text-xs text-[#F8F9FA]">
         <div className="flex items-center gap-1.5 md:gap-3">
           <button 
             onClick={() => {
@@ -1180,7 +1344,7 @@ export default function Home({}: HomeProps) {
             }} 
             className={`font-semibold px-3 py-1.5 rounded-lg transition-all ${userPage === 'home' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-350 hover:text-white'}`}
           >
-            Beranda
+            {lang === 'id' ? 'Beranda' : 'Home'}
           </button>
           <button 
             onClick={() => {
@@ -1189,7 +1353,7 @@ export default function Home({}: HomeProps) {
             }} 
             className={`font-semibold px-3 py-1.5 rounded-lg transition-all ${userPage === 'search' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-350 hover:text-white'}`}
           >
-            Cari & Sewa Kosan
+            {lang === 'id' ? 'Cari dan Sewa Kos' : 'Search & Rent Rooms'}
           </button>
           {activeProperty && (
             <div className="flex items-center gap-2 text-[#64748B]">
@@ -1199,9 +1363,41 @@ export default function Home({}: HomeProps) {
           )}
         </div>
 
-        <div className="hidden sm:flex items-center gap-2 text-brand-beige/85 font-mono text-[10px]">
-          <Sparkles size={12} className="text-brand-beige animate-pulse" />
-          <span>GARANSI HARGA ALL-INCLUSIVE JUJUR</span>
+        <div className="flex items-center gap-3 md:gap-4">
+          <div className="hidden sm:flex items-center gap-2 text-brand-beige/85 font-mono text-[10px]">
+            <Sparkles size={12} className="text-brand-beige animate-pulse" />
+            <span>{lang === 'id' ? 'GARANSI HARGA ALL-IN JUJUR' : 'HONEST ALL-IN PRICE GUARANTEE'}</span>
+          </div>
+
+          {/* Translation Toggle Switcher (Indonesia / English) */}
+          <div className="flex items-center bg-black/30 p-1 rounded-xl border border-white/20 shadow-inner">
+            <button
+              type="button"
+              onClick={() => setLang('id')}
+              className={`px-2.5 py-1 rounded-lg font-extrabold text-[11px] flex items-center gap-1.5 transition-all cursor-pointer ${
+                lang === 'id'
+                  ? 'bg-brand-beige text-brand-primary shadow-md scale-105'
+                  : 'text-slate-300 hover:text-white hover:bg-white/10'
+              }`}
+              title="Bahasa Indonesia"
+            >
+              <span className="text-sm">🇮🇩</span>
+              <span>ID</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setLang('en')}
+              className={`px-2.5 py-1 rounded-lg font-extrabold text-[11px] flex items-center gap-1.5 transition-all cursor-pointer ${
+                lang === 'en'
+                  ? 'bg-brand-beige text-brand-primary shadow-md scale-105'
+                  : 'text-slate-300 hover:text-white hover:bg-white/10'
+              }`}
+              title="English"
+            >
+              <span className="text-sm">🇬🇧</span>
+              <span>EN</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1245,8 +1441,8 @@ export default function Home({}: HomeProps) {
             >
               <div className="w-9 h-9 rounded-full bg-brand-beige flex items-center justify-center text-brand-primary text-xs font-black shadow">1K+</div>
               <div className="text-left">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-brand-beige">PENGHUNI AKTIF</p>
-                <p className="text-[9px] text-slate-350">Sudah Menetap Nyaman</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-brand-beige">{lang === 'id' ? 'PENGHUNI AKTIF' : 'ACTIVE TENANTS'}</p>
+                <p className="text-[9px] text-slate-350">{lang === 'id' ? 'Sudah Menetap Nyaman' : 'Living Comfortably'}</p>
               </div>
             </div>
 
@@ -1260,8 +1456,8 @@ export default function Home({}: HomeProps) {
                 <Sparkles size={14} className="text-[#0D9488] animate-bounce" />
               </div>
               <div className="text-left">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-brand-beige">All-Inclusive</p>
-                <p className="text-[9px] text-slate-350">Sewa Jujur Tanpa Admin</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-brand-beige">{lang === 'id' ? 'Garansi Harga All-In' : 'All-In Price Guarantee'}</p>
+                <p className="text-[9px] text-slate-350">{lang === 'id' ? 'Sewa Mudah Tanpa Drama' : 'Hassle-Free Renting'}</p>
               </div>
             </div>
 
@@ -1279,11 +1475,13 @@ export default function Home({}: HomeProps) {
               </div>
 
               <h1 className="text-4xl md:text-6xl font-black font-display tracking-tight leading-tight max-w-4xl mx-auto text-white">
-                Standar Baru Hunian Modern yang Praktis.
+                {lang === 'id' ? 'Standar Baru Hunian Modern yang Praktis.' : 'The New Standard for Modern & Practical Living.'}
               </h1>
               
               <p className="text-slate-200 text-sm md:text-base max-w-2xl mx-auto font-light leading-relaxed">
-                Di mana pun cabangnya, nikmati kenyamanan kos eksklusif dengan sistem all-inclusive. Lengkap dengan Wi-Fi, token listrik, laundry, dan housekeeping berkala tanpa biaya tambahan.
+                {lang === 'id' 
+                  ? 'Di mana pun cabangnya, nikmati kenyamanan kos eksklusif dengan sistem all-inclusive. Lengkap dengan Wi-Fi, token listrik, dan laundry tanpa biaya tambahan.'
+                  : 'Wherever the branch, enjoy exclusive boarding comfort with an all-inclusive system. Complete with Wi-Fi, electricity, and laundry with no hidden costs.'}
               </p>
 
               {/* Large Interactive Search Bar with full 3D interactive tilt */}
@@ -1297,7 +1495,7 @@ export default function Home({}: HomeProps) {
               >
                 
                 <div className="transition-all duration-300 hover:translate-z-6">
-                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">CABANG YANG TERSEDIA</label>
+                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">{lang === 'id' ? 'CABANG YANG TERSEDIA' : 'AVAILABLE BRANCHES'}</label>
                   <div className="relative">
                     <MapPin className="absolute left-3 top-3 text-brand-taupe" size={16} />
                     <select
@@ -1305,7 +1503,7 @@ export default function Home({}: HomeProps) {
                       onChange={(e) => setSearchLocation(e.target.value)}
                       className="w-full bg-[#F8F9FA] border border-brand-beige rounded-xl pl-9 pr-3 py-2.5 text-xs font-medium text-brand-primary focus:outline-none focus:border-brand-primary cursor-pointer"
                     >
-                      <option value="">Semua Cabang</option>
+                      <option value="">{lang === 'id' ? 'Semua Cabang' : 'All Branches'}</option>
                       {properties.map(p => (
                         <option key={p.id} value={p.name}>{p.name}</option>
                       ))}
@@ -1314,7 +1512,7 @@ export default function Home({}: HomeProps) {
                 </div>
 
                 <div className="transition-all duration-300 hover:translate-z-6">
-                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">TANGGAL MASUK</label>
+                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">{lang === 'id' ? 'TANGGAL MASUK' : 'CHECK-IN DATE'}</label>
                   <div className="relative">
                     <Calendar className="absolute left-3 top-3 text-brand-taupe" size={16} />
                     <input 
@@ -1333,7 +1531,7 @@ export default function Home({}: HomeProps) {
                     className="w-full bg-brand-primary hover:bg-brand-steel text-white font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer h-[42px]"
                   >
                     <Search size={15} />
-                    CARI KOS SEKARANG
+                    {lang === 'id' ? 'CARI KOS SEKARANG' : 'SEARCH ROOMS NOW'}
                   </button>
                 </div>
 
@@ -1345,7 +1543,7 @@ export default function Home({}: HomeProps) {
           {/* Fasilitas Standar Setiap Cabang */}
           <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-8">
             <h2 className="text-2xl md:text-3xl font-black text-brand-primary font-display tracking-tight text-left">
-              Fasilitas Standar Setiap Cabang
+              {lang === 'id' ? 'Fasilitas Standar Setiap Cabang' : 'Standard Amenities in Every Branch'}
             </h2>
             
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-4">
@@ -1370,10 +1568,10 @@ export default function Home({}: HomeProps) {
           <div id="cabang-samara-stay-section" className="max-w-6xl mx-auto px-4 space-y-12 py-12">
             <div className="text-center space-y-2">
               <span className="text-[10px] md:text-xs font-bold text-[#1D603A] tracking-[0.2em] uppercase font-mono">
-                LOKASI KAMI
+                {lang === 'id' ? 'LOKASI KAMI' : 'OUR LOCATIONS'}
               </span>
               <h2 className="text-3xl md:text-4xl font-bold text-brand-primary tracking-tight font-serif">
-                Pilih Cabang Samara Stay
+                {lang === 'id' ? 'Pilih Cabang Samara Stay' : 'Select a Samara Stay Branch'}
               </h2>
             </div>
 
@@ -1382,42 +1580,53 @@ export default function Home({}: HomeProps) {
                 const pRooms = rooms.filter(r => r.property_id === p.id);
                 const availableCount = pRooms.filter(r => r.status === 'available').length;
                 
-                // Color themes alternating between green and navy precisely as requested
+                // Check if property is Kost Atikah Kemayoran (strictly excluding Tiara/Cempaka/Ciputra)
+                const nameLower = p.name.toLowerCase();
+                const isTiaraCempaka = nameLower.includes('ciputra') || nameLower.includes('cempaka') || nameLower.includes('tiara');
+                const isAtikah = !isTiaraCempaka && (nameLower.includes('atikah') || nameLower.includes('kemayoran') || nameLower.includes('putri') || p.id === 2);
+
+                const propertyDisplayName = p.name;
+
+                // Color themes alternating between green and navy
                 const isGreen = idx % 2 === 0;
                 const themeBadgeClass = isGreen ? 'bg-[#1D603A]' : 'bg-[#2E3545]';
                 const themeBtnClass = isGreen 
                   ? 'bg-[#205D41] hover:bg-[#164731] text-white' 
                   : 'bg-[#374457] hover:bg-[#273241] text-white';
 
-                // Determine beautiful taglines & descriptions based on actual data
-                const tagLine = p.id === 1 
-                  ? "Hunian Tenang di Jantung Jakarta Pusat" 
-                  : p.id === 2 
-                    ? "Hunian Minimalis Modern di Pusat Kota" 
-                    : p.description?.split('.')[0] || "Hunian Nyaman, Strategis & Aman";
+                // Determine taglines & descriptions
+                const tagLine = isAtikah
+                  ? (lang === 'id' ? "Hunian Kos Eksklusif & Kamar Harian di Pusat Kota" : "Exclusive Boarding & Daily Rooms in City Center")
+                  : (p.id === 1 
+                      ? (lang === 'id' ? "Hunian Tenang di Jantung Jakarta Pusat" : "Peaceful Living in the Heart of Central Jakarta")
+                      : p.description?.split('.')[0] || (lang === 'id' ? "Hunian Nyaman, Strategis & Aman" : "Comfortable, Strategic & Secure Living"));
 
-                const detailedDesc = p.id === 1
-                  ? "Terletak di kawasan residensial yang asri dan tenang, Samara Stay Cempaka Putih menawarkan pengalaman tinggal premium dengan sentuhan alam yang menenangkan."
-                  : p.id === 2
-                    ? "Berlokasi sangat strategis di Kemayoran Jakarta, menghadirkan konsep hunian minimalis modern yang nyaman, tenang, dan fungsional untuk profesional muda dan mahasiswa."
-                    : p.description?.split('.').slice(1).join('.').trim() || p.address;
+                const detailedDesc = isAtikah
+                  ? (lang === 'id' 
+                      ? "Terletak sangat strategis di pusat kota, menghadirkan konsep hunian kos modern serta opsi sewa kamar harian fully furnished yang nyaman, tenang, dan praktis."
+                      : "Strategically located in the city center, offering modern boarding concepts and fully furnished daily room rentals that are comfortable, quiet, and convenient.")
+                  : (p.id === 1
+                      ? (lang === 'id' 
+                          ? "Terletak di kawasan residensial yang asri dan tenang, Samara Stay Cempaka Putih menawarkan pengalaman tinggal premium dengan sentuhan alam yang menenangkan."
+                          : "Located in a lush and serene residential area, Samara Stay Cempaka Putih offers a premium living experience with a relaxing touch of nature.")
+                      : p.description?.split('.').slice(1).join('.').trim() || p.address);
 
                 return (
                   <div 
                     key={p.id}
                     id={`cabang-card-${p.id}`}
-                    className="bg-white border border-brand-beige rounded-[24px] overflow-hidden shadow-sm flex flex-col group transition-all duration-300 hover:shadow-md"
+                    className="bg-white border border-brand-beige rounded-[24px] overflow-hidden shadow-sm flex flex-col group transition-all duration-300 hover:shadow-md text-left"
                   >
                     <div className="relative h-[280px] sm:h-[340px] bg-slate-100 overflow-hidden select-none">
                       <img 
                         src={p.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=600&q=80"} 
-                        alt={p.name}
+                        alt={propertyDisplayName}
                         className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-500"
                         referrerPolicy="no-referrer"
                       />
                       <div className="absolute top-4 right-4">
                         <span className={`px-4 py-1 rounded-md text-[10px] font-bold text-white uppercase tracking-wider ${themeBadgeClass}`}>
-                          Tersedia
+                          {lang === 'id' ? 'Tersedia' : 'Available'}
                         </span>
                       </div>
                     </div>
@@ -1425,7 +1634,7 @@ export default function Home({}: HomeProps) {
                     <div className="p-6 md:p-8 flex-1 flex flex-col justify-between space-y-6 text-left">
                       <div className="space-y-3.5">
                         <h3 className="font-extrabold text-brand-primary text-xl md:text-2xl tracking-tight">
-                          {p.name.replace("Kosan Ciputra", "Cempaka Putih").replace("Exclusive Putri", "Kemayoran Jakarta")}
+                          {propertyDisplayName}
                         </h3>
                         
                         <div className="flex items-start gap-1.5 text-brand-steel text-xs">
@@ -1438,19 +1647,22 @@ export default function Home({}: HomeProps) {
                         </p>
                       </div>
 
-                      <div className="space-y-5 pt-5 border-t border-brand-beige/50">
+                      <div className="space-y-4 pt-5 border-t border-brand-beige/50">
                         <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-                          <div className="flex items-center gap-3 text-brand-steel">
+                          {/* Rating & Tipe Kamar Only */}
+                          <div className="flex items-center gap-2.5 text-brand-steel">
                             <span className="flex items-center gap-1 font-bold text-brand-primary">
                               <Star size={14} className="text-[#0D9488] fill-amber-500" />
                               4.9
                             </span>
                             <span className="w-1.5 h-1.5 rounded-full bg-brand-beige" />
-                            <span className="font-medium">60+ penghuni</span>
+                            <span className="text-[10px] font-extrabold font-mono uppercase bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2.5 py-0.5 rounded-md">
+                              Kos {p.type.toUpperCase()}
+                            </span>
                           </div>
                           
                           <div className="flex items-baseline gap-1">
-                            <span className="text-brand-steel text-[10px] font-medium uppercase font-mono tracking-wider">Mulai Rp</span>
+                            <span className="text-brand-steel text-[10px] font-medium uppercase font-mono tracking-wider">{lang === 'id' ? 'Mulai Rp' : 'From IDR'}</span>
                             <span className="text-base font-extrabold text-brand-primary">
                               {p.price === 1800000 ? "3.200.000" : p.price === 2200000 ? "2.800.000" : formatRupiah(p.price).replace("Rp", "").trim()}
                             </span>
@@ -1466,7 +1678,7 @@ export default function Home({}: HomeProps) {
                           }}
                           className={`w-fit inline-flex items-center gap-2 px-6 py-2.5 rounded-full font-bold text-xs cursor-pointer transition-all ${themeBtnClass}`}
                         >
-                          Lihat Detail Cabang
+                          {lang === 'id' ? 'Lihat Detail Cabang' : 'View Branch Details'}
                           <ArrowRight size={14} />
                         </button>
                       </div>
@@ -1483,13 +1695,15 @@ export default function Home({}: HomeProps) {
             <div className="max-w-6xl mx-auto px-4 grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
               <div className="md:col-span-5 space-y-4 text-left">
                 <span className="text-[10px] font-extrabold text-[#2E6F40] tracking-widest uppercase font-mono bg-[#EEF7F0] px-3 py-1 rounded-md border border-[#2E6F40]/25">
-                  Kenapa Samara Stay?
+                  {lang === 'id' ? 'Kenapa Samara Stay?' : 'Why Samara Stay?'}
                 </span>
                 <h2 className="text-3xl font-black text-brand-primary font-display tracking-tight leading-tight">
-                  Mengapa Memilih Samara Stay
+                  {lang === 'id' ? 'Mengapa Memilih Samara Stay' : 'Why Choose Samara Stay'}
                 </h2>
                 <p className="text-brand-steel text-sm font-light leading-relaxed">
-                  Kami berkomitmen menyediakan standar hunian kost terbaik dengan kenyamanan ekstra, kepastian layanan, dan transparansi penuh tanpa ribet untuk kelancaran masa depan Anda.
+                  {lang === 'id' 
+                    ? 'Kami berkomitmen untuk menyediakan standar hunian kost terbaik dengan kenyamanan ekstra, kepastian layanan, dan transparansi penuh tanpa adanya drama untuk memudahkan anda dalam mencari hunian yang nyaman'
+                    : 'We are committed to providing top-standard boarding residences with extra comfort, guaranteed service, and full transparency to make finding your ideal home effortless.'}
                 </p>
               </div>
               
@@ -1515,9 +1729,15 @@ export default function Home({}: HomeProps) {
           <div className="bg-[#F8F9FA] py-16 border-y border-brand-beige">
             <div className="max-w-6xl mx-auto px-4 space-y-10">
               <div className="text-center space-y-3">
-                <span className="text-[10px] font-extrabold text-brand-primary tracking-widest uppercase font-mono bg-brand-beige/35 px-2.5 py-1 rounded-md border border-brand-beige/70">Testimoni Penghuni</span>
-                <h2 className="text-2xl font-black text-brand-primary">Dipercaya Oleh 1,000+ Penghuni Aktif</h2>
-                <p className="text-brand-steel text-xs max-w-lg mx-auto font-light">Simak ulasan tulus dari rekan mahasiswa dan pekerja muda yang telah menetap nyaman bersama kami.</p>
+                <span className="text-[10px] font-extrabold text-brand-primary tracking-widest uppercase font-mono bg-brand-beige/35 px-2.5 py-1 rounded-md border border-brand-beige/70">
+                  {lang === 'id' ? 'Testimoni Penghuni' : 'Tenant Testimonials'}
+                </span>
+                <h2 className="text-2xl font-black text-brand-primary">
+                  {lang === 'id' ? 'Dipercaya Oleh 1,000+ Penghuni Aktif' : 'Trusted by 1,000+ Active Tenants'}
+                </h2>
+                <p className="text-brand-steel text-xs max-w-lg mx-auto font-light">
+                  {lang === 'id' ? 'Simak ulasan tulus dari rekan mahasiswa dan pekerja muda yang telah menetap nyaman bersama kami.' : 'Read honest reviews from students and young working professionals who live comfortably with us.'}
+                </p>
               </div>
 
               {/* Interactive Testimonial Slider */}
@@ -1549,7 +1769,7 @@ export default function Home({}: HomeProps) {
                     type="button"
                     onClick={() => setActiveTestimonialIdx(prev => (prev - 1 + testimonials.length) % testimonials.length)}
                     className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
-                    title="Sebelumnya"
+                    title={lang === 'id' ? 'Sebelumnya' : 'Previous'}
                   >
                     <ChevronLeft size={16} />
                   </button>
@@ -1573,7 +1793,7 @@ export default function Home({}: HomeProps) {
                     type="button"
                     onClick={() => setActiveTestimonialIdx(prev => (prev + 1) % testimonials.length)}
                     className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
-                    title="Selanjutnya"
+                    title={lang === 'id' ? 'Selanjutnya' : 'Next'}
                   >
                     <ChevronRight size={16} />
                   </button>
@@ -1586,10 +1806,10 @@ export default function Home({}: HomeProps) {
           <div id="faq-section" className="max-w-4xl mx-auto px-4 py-16 space-y-8">
             <div className="text-center space-y-3">
               <h2 className="text-3xl font-black text-brand-primary font-display tracking-tight">
-                Pertanyaan yang Sering Diajukan
+                {lang === 'id' ? 'Pertanyaan yang Sering Diajukan' : 'Frequently Asked Questions'}
               </h2>
               <p className="text-brand-steel text-sm font-light">
-                Temukan jawaban untuk pertanyaan umum tentang Samara Stay
+                {lang === 'id' ? 'Temukan jawaban untuk pertanyaan umum tentang Samara Stay' : 'Find answers to common questions about Samara Stay'}
               </p>
             </div>
 
@@ -1624,69 +1844,157 @@ export default function Home({}: HomeProps) {
           </div>
 
           {/* Kontak Kami Section */}
-          <div id="kontak-section" className="max-w-6xl mx-auto px-4 py-16 space-y-12">
-            <div className="text-center space-y-3">
-              <span className="text-[10px] font-extrabold text-[#2E6F40] tracking-widest uppercase font-mono bg-[#EEF7F0] px-3 py-1 rounded-md border border-[#2E6F40]/25">
-                Hubungi Kami
-              </span>
-              <h2 className="text-3xl font-black text-brand-primary font-display tracking-tight leading-tight">
-                Ada Pertanyaan? Hubungi Kontak Kami
-              </h2>
-              <p className="text-[#64748B] text-sm max-w-lg mx-auto font-light leading-relaxed">
-                Tim support kami siap membantu menjawab pertanyaan Anda atau menjadwalkan kunjungan langsung ke lokasi.
-              </p>
-            </div>
+          {(() => {
+            const selectedProp = selectedContactPropertyId === 'all'
+              ? null
+              : properties.find(p => p.id === selectedContactPropertyId);
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Card 1: WhatsApp */}
-              <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all">
-                <div className="w-12 h-12 rounded-full bg-[#E8F5E9] flex items-center justify-center text-[#2E6F40]">
-                  <MessageSquare size={22} />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">WhatsApp Hotline</h4>
-                  <p className="text-[11px] text-[#64748B] font-medium mt-1">Layanan respon cepat untuk reservasi & pertanyaan langsung.</p>
-                </div>
-                <a 
-                  href="https://wa.me/6281234567890" 
-                  target="_blank" 
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs font-black text-[#2E6F40] hover:text-[#235531]"
-                >
-                  Hubungi WhatsApp →
-                </a>
-              </div>
+            const waNumRaw = selectedProp 
+              ? `628128888${(selectedProp.id * 1111).toString().padStart(4, '0').slice(-4)}`
+              : "6281234567890";
 
-              {/* Card 2: Email */}
-              <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all">
-                <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
-                  <Mail size={22} />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">Email Support</h4>
-                  <p className="text-[11px] text-[#64748B] font-medium mt-1">Kirimkan penawaran kerjasama, pertanyaan bisnis, atau komplain.</p>
-                </div>
-                <a 
-                  href="mailto:support@samarastay.com" 
-                  className="inline-flex items-center gap-1.5 text-xs font-black text-[#2E6F40] hover:text-[#235531]"
-                >
-                  Kirim Email →
-                </a>
-              </div>
+            const waNumFormatted = selectedProp
+              ? `+62 812-8888-${(selectedProp.id * 1111).toString().padStart(4, '0').slice(-4)}`
+              : "+62 812-3456-7890";
 
-              {/* Card 3: Lokasi Kantor */}
-              <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all">
-                <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-600">
-                  <MapPin size={22} />
+            const emailAddr = selectedProp
+              ? `admin.${selectedProp.name.toLowerCase().replace(/[^a-z0-9]/g, '')}@samarastay.com`
+              : "info@samarastay.com";
+
+            const locationTitle = selectedProp
+              ? selectedProp.name
+              : "Kantor Pusat Samara Stay";
+
+            const locationDesc = selectedProp
+              ? selectedProp.address
+              : "Cempaka Putih Barat, Jakarta Pusat";
+
+            return (
+              <div id="kontak-section" className="max-w-6xl mx-auto px-4 py-16 space-y-10">
+                <div className="text-center space-y-3">
+                  <span className="text-[10px] font-extrabold text-[#2E6F40] tracking-widest uppercase font-mono bg-[#EEF7F0] px-3 py-1 rounded-md border border-[#2E6F40]/25">
+                    {lang === 'id' ? 'Hubungi Kami' : 'Contact Us'}
+                  </span>
+                  <h2 className="text-3xl font-black text-brand-primary font-display tracking-tight leading-tight">
+                    {lang === 'id' ? 'Ada Pertanyaan? Hubungi Kontak Kami' : 'Have Questions? Contact Our Support'}
+                  </h2>
+                  <p className="text-[#64748B] text-sm max-w-lg mx-auto font-light leading-relaxed">
+                    {lang === 'id' 
+                      ? 'Tim support kami siap membantu menjawab pertanyaan Anda atau menjadwalkan kunjungan langsung ke lokasi.'
+                      : 'Our support team is ready to answer your inquiries or schedule an in-person site visit.'}
+                  </p>
+
+                  {/* Select Dropdown untuk memilih cabang gedung kost */}
+                  <div className="max-w-md mx-auto pt-4 text-left">
+                    <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-mono mb-2 text-center">
+                      {lang === 'id' ? 'Pilih Gedung Kost / Cabang Admin:' : 'Select Property Branch Admin:'}
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={selectedContactPropertyId}
+                        onChange={(e) => setSelectedContactPropertyId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                        className="w-full bg-white border-2 border-[#2E6F40] rounded-2xl px-4 py-3 text-sm font-extrabold text-[#3A444D] shadow-md focus:outline-none focus:ring-2 focus:ring-[#2E6F40] cursor-pointer transition-all appearance-none pr-10"
+                      >
+                        <option value="all">🏢 {lang === 'id' ? 'Semua Cabang / Kontak Pusat Samara Stay' : 'All Branches / Samara Stay HQ'}</option>
+                        {properties.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            📍 {p.name} ({p.address.split(',')[0]})
+                          </option>
+                        ))}
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-[#2E6F40]">
+                        <ChevronDown size={18} />
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">Kantor Pusat</h4>
-                  <p className="text-[11px] text-[#64748B] font-medium mt-1">Kunjungi kantor pusat administrasi Samara Stay Indonesia.</p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Card 1: WhatsApp Admin */}
+                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm">
+                    <div className="w-12 h-12 rounded-full bg-[#E8F5E9] flex items-center justify-center text-[#2E6F40]">
+                      <MessageSquare size={22} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">
+                          WhatsApp Admin
+                        </h4>
+                        {selectedProp && (
+                          <span className="text-[9px] font-bold font-mono bg-[#EEF7F0] text-[#2E6F40] px-2 py-0.5 rounded-full">
+                            {selectedProp.name.split(' ')[0]}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[#64748B] font-medium mt-1">
+                        {selectedProp ? `Admin WhatsApp untuk ${selectedProp.name}` : 'Layanan respon cepat untuk reservasi & pertanyaan langsung.'}
+                      </p>
+                      <p className="text-sm font-black font-mono text-[#2E6F40] mt-2">
+                        {waNumFormatted}
+                      </p>
+                    </div>
+                    <a 
+                      href={`https://wa.me/${waNumRaw}?text=Halo%20Admin%20${encodeURIComponent(selectedProp ? selectedProp.name : 'Samara Stay')},%20saya%20ingin%20bertanya%20mengenai%20sewa%20kost`} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs font-black text-[#2E6F40] hover:text-[#235531]"
+                    >
+                      Hubungi WhatsApp Admin →
+                    </a>
+                  </div>
+
+                  {/* Card 2: Email Admin */}
+                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm">
+                    <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+                      <Mail size={22} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">
+                          Email Admin
+                        </h4>
+                        {selectedProp && (
+                          <span className="text-[9px] font-bold font-mono bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
+                            {selectedProp.name.split(' ')[0]}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[#64748B] font-medium mt-1">
+                        {selectedProp ? `Email resmi admin ${selectedProp.name}` : 'Kirimkan penawaran kerjasama, pertanyaan bisnis, atau komplain.'}
+                      </p>
+                      <p className="text-xs font-bold font-mono text-[#3A444D] mt-2 break-all">
+                        {emailAddr}
+                      </p>
+                    </div>
+                    <a 
+                      href={`mailto:${emailAddr}?subject=Tanya%20Sewa%20${encodeURIComponent(selectedProp ? selectedProp.name : 'Samara Stay')}`} 
+                      className="inline-flex items-center gap-1.5 text-xs font-black text-[#2E6F40] hover:text-[#235531]"
+                    >
+                      Kirim Email Admin →
+                    </a>
+                  </div>
+
+                  {/* Card 3: Lokasi Gedung / Kantor */}
+                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm">
+                    <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-600">
+                      <MapPin size={22} />
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">
+                        {selectedProp ? 'Lokasi Gedung' : 'Kantor Pusat'}
+                      </h4>
+                      <p className="text-[11px] text-[#64748B] font-medium mt-1">
+                        {locationTitle}
+                      </p>
+                    </div>
+                    <span className="text-xs font-semibold text-[#3A444D] block leading-relaxed">
+                      📍 {locationDesc}
+                    </span>
+                  </div>
                 </div>
-                <span className="text-xs font-semibold text-[#3A444D]">Cempaka Putih Barat, Jakarta Pusat</span>
               </div>
-            </div>
-          </div>
+            );
+          })()}
 
         </div>
       )}
@@ -1710,12 +2018,18 @@ export default function Home({}: HomeProps) {
             selectedFacilities={selectedRoomFacilities}
             setSelectedFacilities={setSelectedRoomFacilities}
             masterFacilities={standardFacilities}
+            priceRange={priceRange}
+            setPriceRange={setPriceRange}
+            onlyAvailable={onlyAvailable}
+            setOnlyAvailable={setOnlyAvailable}
             resultsCount={searchMode === 'building' ? filteredProperties.length : filteredRooms.length}
             onClearFilters={() => {
               setSearchLocation('');
               setSelectedType('all');
               setSearchDurationType('monthly');
               setSelectedRoomFacilities([]);
+              setPriceRange(15000000);
+              setOnlyAvailable(false);
             }}
           />
 
@@ -1981,15 +2295,25 @@ export default function Home({}: HomeProps) {
                       
                       <div className="flex justify-between items-center pt-1 gap-2">
                         <span className="font-bold text-[#2E6F40] font-mono text-[11px] whitespace-nowrap">{formatRupiah(selectedMapProperty.price)}<span className="text-[11px] text-[#64748B] font-sans font-light">/bln</span></span>
-                        <button
-                          onClick={() => {
-                            setActiveProperty(selectedMapProperty);
-                            setUserPage('detail');
-                          }}
-                          className="bg-amber-500 text-black px-2.5 py-1 rounded-md text-[9px] font-black hover:bg-amber-600 cursor-pointer transition-colors"
-                        >
-                          Detail
-                        </button>
+                        <div className="flex gap-1.5 items-center">
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${selectedMapProperty.lat || -6.368},${selectedMapProperty.lng || 106.83}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="bg-slate-800 text-slate-200 hover:bg-slate-700 px-2 py-1 rounded-md text-[9px] font-bold transition-colors flex items-center gap-1"
+                          >
+                            🗺️ GMaps
+                          </a>
+                          <button
+                            onClick={() => {
+                              setActiveProperty(selectedMapProperty);
+                              setUserPage('detail');
+                            }}
+                            className="bg-amber-500 text-black px-2.5 py-1 rounded-md text-[9px] font-black hover:bg-amber-600 cursor-pointer transition-colors"
+                          >
+                            Detail
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2088,10 +2412,13 @@ export default function Home({}: HomeProps) {
                       onClick={() => setSelectedRoomImage(url)}
                     >
                       <img 
-                        src={url || null} 
+                        src={url} 
                         alt={label}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+                        }}
                       />
                       <div className="absolute bottom-2 left-2 bg-black/65 px-2 py-1 rounded-md text-[9px] font-semibold text-white tracking-wide">{label}</div>
                       
@@ -2241,10 +2568,10 @@ export default function Home({}: HomeProps) {
                   <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-2xl space-y-2.5">
                     <h4 className="font-extrabold text-[#2E6F40] font-sans text-xs flex items-center gap-1.5">
                       <Info size={14} className="text-[#2E6F40]" />
-                      Ketentuan Sewa & Deposit
+                      Ketentuan Sewa & Deposit Gedung
                     </h4>
                     <p className="text-[#64748B] font-medium text-[11px] leading-relaxed whitespace-pre-line">
-                      {activeProperty.terms || "Uang jaminan deposit (refundable) sebesar Rp 500.000 wajib dilunasi sebelum serah terima kunci properti dan disetujui pengelola."}
+                      {(activeProperty.terms ? activeProperty.terms.replace(/\[DEPOSIT:\d+\]/g, '').trim() : '') || `Uang jaminan deposit (refundable) sebesar ${formatRupiah(activeProperty.deposit_amount ?? 500000)} wajib dilunasi sebelum serah terima kunci properti dan disetujui pengelola.`}
                     </p>
                   </div>
 
@@ -2267,31 +2594,62 @@ export default function Home({}: HomeProps) {
                   <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full"></span>
                   Info Singkat
                 </h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
-                    <div className="text-2xl font-black text-[#1E293B] font-display">
-                      {(() => {
-                        const propertyRooms = rooms.filter(r => r.property_id === activeProperty.id);
-                        const uniqueTypes = new Set(propertyRooms.map(r => r.room_type));
-                        return uniqueTypes.size || 3;
-                      })()}
+                {(() => {
+                  const activeNameLower = activeProperty.name.toLowerCase();
+                  const isTiaraCempakaActive = activeNameLower.includes('ciputra') || activeNameLower.includes('cempaka') || activeNameLower.includes('tiara');
+                  const isAtikahActive = !isTiaraCempakaActive && (activeNameLower.includes('atikah') || activeNameLower.includes('kemayoran') || activeNameLower.includes('putri'));
+                  return (
+                    <div className="space-y-3">
+                      <div className={`grid gap-3 ${isAtikahActive ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
+                        <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
+                          <div className="text-2xl font-black text-[#1E293B] font-display">
+                            {(() => {
+                              const propertyRooms = rooms.filter(r => r.property_id === activeProperty.id);
+                              const uniqueTypes = new Set(propertyRooms.map(r => r.room_type));
+                              return uniqueTypes.size || 3;
+                            })()}
+                          </div>
+                          <div className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider font-sans">Tipe Kamar</div>
+                        </div>
+                        <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
+                          <div className="text-2xl font-black text-[#1E293B] font-display">4.9★</div>
+                          <div className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider font-sans">Rating</div>
+                        </div>
+                        {isAtikahActive && (
+                          <a
+                            href="https://www.airbnb.co.id/users/profile/1469644070216777538?previous_page_name=PdpHomeMarketplace"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="bg-[#FFF8F9] hover:bg-[#FFEBEF] border border-[#FF385C]/35 p-4 rounded-2xl text-center flex flex-col items-center justify-center space-y-1 transition-all group cursor-pointer shadow-2xs"
+                          >
+                            <div className="flex items-center gap-1.5 text-[#FF385C] font-extrabold text-sm group-hover:scale-105 transition-transform">
+                              <svg className="w-4 h-4 fill-current shrink-0" viewBox="0 0 32 32">
+                                <path d="M16 1c2.008 0 3.463.963 4.751 3.269l.533 1.025c1.954 3.83 6.114 12.54 7.1 14.836l.145.353c.667 1.591.91 2.472.96 3.396l.011.315c0 4.298-3.322 7.806-7.5 7.806-3.13 0-5.836-1.956-6.953-4.758l-.147-.384-.131-.383C13.782 29.28 11.027 31.25 7.8 31.25 3.522 31.25.2 27.742.2 23.444c0-1.127.283-2.222.844-3.332l.272-.505c1.036-1.84 5.37-10.824 7.382-14.814l.551-1.058C10.537 1.963 11.992 1 14 1zm0 2c-1.11 0-2.072.585-3.082 2.387l-.46.884c-1.97 3.908-6.241 12.782-7.243 14.562l-.213.394c-.426.84-.602 1.623-.602 2.217 0 3.197 2.483 5.806 5.6 5.806 2.502 0 4.678-1.637 5.385-4.084l.113-.424.113-.424C12.392 20.355 13.9 18.5 16 18.5s3.608 1.855 4.194 5.815l.113.424.113.424c.707 2.447 2.883 4.084 5.385 4.084 3.117 0 5.6-2.609 5.6-5.806 0-.594-.176-1.377-.602-2.217l-.213-.394c-1.002-1.78-5.273-10.654-7.243-14.562l-.46-.884C21.072 3.585 20.11 3 19 3zm0 17.5c-1.105 0-2 .895-2 2s.895 2 2 2 2-.895 2-2-.895-2-2-2z"/>
+                              </svg>
+                              <span>Sewa Airbnb</span>
+                            </div>
+                            <div className="text-[10px] text-[#FF385C] font-extrabold uppercase tracking-wider font-sans flex items-center gap-1">
+                              <span>Pesan Harian</span>
+                              <ExternalLink size={10} />
+                            </div>
+                          </a>
+                        )}
+                      </div>
+
+                      {isAtikahActive && (
+                        <div className="bg-[#FFF8F9] border border-[#FF385C]/20 rounded-2xl p-3.5 text-left space-y-1">
+                          <div className="flex items-center gap-1.5 text-[#FF385C] font-extrabold text-xs">
+                            <Sparkles size={13} className="text-[#FF385C] shrink-0" />
+                            <span>Pesan Kamar Harian via Airbnb</span>
+                          </div>
+                          <p className="text-[#484848] text-[11px] leading-relaxed font-medium">
+                            Khusus Kost Atikah Kemayoran: Menyediakan layanan sewa kamar harian fully furnished (AC, Smart TV, Wi-Fi kencang, & kamar mandi dalam) dengan fasilitas check-in instan mandiri melalui Airbnb.
+                          </p>
+                        </div>
+                      )}
                     </div>
-                    <div className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider font-sans">Tipe Kamar</div>
-                  </div>
-                  <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
-                    <div className="text-2xl font-black text-[#1E293B] font-display">4.9★</div>
-                    <div className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider font-sans">Rating</div>
-                  </div>
-                  <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
-                    <div className="text-2xl font-black text-[#1E293B] font-display">
-                      {(() => {
-                        const liveOccupantCount = tenants.filter(t => t.property_id === activeProperty.id).length;
-                        return liveOccupantCount > 0 ? liveOccupantCount : "60+";
-                      })()}
-                    </div>
-                    <div className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider font-sans">Penghuni</div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
 
               {/* Immersive 360° Virtual Tour / Video Showcase section */}
@@ -2359,19 +2717,8 @@ export default function Home({}: HomeProps) {
                     </div>
                   </div>
 
-                  {/* Stylized Local Mini-Map represent */}
-                  <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 overflow-hidden relative flex flex-col justify-between min-h-[160px] h-full shadow-xs text-left">
-                    <div className="absolute inset-0 bg-[#09090b]/40 opacity-20 bg-cover bg-center" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=300&q=80')" }} />
-                    <div className="relative z-10 flex flex-col justify-between h-full space-y-3">
-                      <div>
-                        <h4 className="font-extrabold text-[#3A444D] text-sm">Mini GPS Spotter</h4>
-                        <p className="text-[10px] text-[#64748B] font-mono mt-0.5">LAT: {activeProperty.lat || -6.2} | LNG: {activeProperty.lng || 106.8}</p>
-                      </div>
-                      <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-3 rounded-xl text-[11px] leading-relaxed text-[#64748B]">
-                        📍 <strong>Samara Stay</strong> terletak strategis di zona aman, dikelilingi pagar kawat harmonika, satpam 24 jam & terintegrasi kamera pemantau kota.
-                      </div>
-                    </div>
-                  </div>
+                  {/* Live Interactive Leaflet Map for Active Property */}
+                  <PropertyDetailMap property={activeProperty} />
                 </div>
               </div>
 
@@ -2393,9 +2740,12 @@ export default function Home({}: HomeProps) {
                     <div className="bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#E2E8F0] flex gap-3">
                       {activeRoom.image_url ? (
                         <img 
-                          src={activeRoom.image_url || null} 
+                          src={activeRoom.image_url} 
                           alt={`Kamar ${activeRoom.room_number}`} 
                           className="w-14 h-14 object-cover rounded-xl border border-slate-800"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+                          }}
                         />
                       ) : (
                         <div className="w-14 h-14 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center">
@@ -2416,21 +2766,21 @@ export default function Home({}: HomeProps) {
                         <span className="text-[#2E6F40] font-bold">Bulanan (Sewa Tetap)</span>
                       </div>
                       <div className="flex justify-between border-t border-[#E2E8F0] pt-1.5">
-                        <span className="text-[#64748B]">Tarif Dasar Bulanan</span>
+                        <span className="text-[#64748B]">Tarif Kamar Bulanan</span>
                         <span className="text-[#3A444D]">
                           {formatRupiah(activeRoom.price)}
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-[#64748B]">PBJT Tax (10%)</span>
+                        <span className="text-[#64748B]">Deposit Gedung (Refundable)</span>
                         <span className="text-[#3A444D]">
-                          {formatRupiah(Math.floor(activeRoom.price * 0.1))}
+                          {formatRupiah(activeProperty?.deposit_amount ?? 500000)}
                         </span>
                       </div>
                       <div className="flex justify-between border-t border-[#E2E8F0] pt-1.5 font-bold">
-                        <span className="text-[#2E6F40]">Estimasi Total</span>
+                        <span className="text-[#2E6F40]">Total Awal Masuk</span>
                         <span className="text-[#2E6F40]">
-                          {formatRupiah(Math.floor(activeRoom.price * 1.1))}
+                          {formatRupiah(activeRoom.price + (activeProperty?.deposit_amount ?? 500000))}
                         </span>
                       </div>
                     </div>
@@ -2561,9 +2911,12 @@ export default function Home({}: HomeProps) {
                       {r.image_url ? (
                         <div className="w-full h-36 rounded-xl overflow-hidden bg-[#F8FAFC] border border-[#E2E8F0] relative group">
                           <img 
-                            src={r.image_url || null} 
+                            src={r.image_url} 
                             alt={`Kamar ${r.room_number}`} 
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+                            }}
                           />
                           <div className="absolute top-2 left-2 bg-black/75 px-2 py-0.5 rounded text-[8px] font-bold text-white tracking-wide uppercase">
                             LANTAI {r.floor}
@@ -2730,6 +3083,10 @@ export default function Home({}: HomeProps) {
               setSurveyForm={setSurveyForm}
               bookingForm={bookingForm}
               setBookingForm={setBookingForm}
+              isAgreed={isAgreed}
+              setIsAgreed={setIsAgreed}
+              signatureUrl={signatureUrl}
+              setSignatureUrl={setSignatureUrl}
               onProceedToPayment={handleProceedToPayment}
             />
           </div>
@@ -2879,10 +3236,13 @@ export default function Home({}: HomeProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <img 
-              src={selectedRoomImage || null} 
+              src={selectedRoomImage} 
               alt="Pratinjau Kamar Terbuka" 
               className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-slate-850 animate-fade-in"
               referrerPolicy="no-referrer"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+              }}
             />
           </div>
           <p className="text-[#64748B] text-xs font-mono tracking-wider mt-4 text-center">Klik di luar gambar atau tombol X untuk menutup pratinjau</p>

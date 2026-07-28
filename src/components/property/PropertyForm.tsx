@@ -29,6 +29,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     name: '',
     address: '',
     price: 1500000,
+    deposit_amount: 500000,
     type: 'campur' as 'putra' | 'putri' | 'campur',
     image_url: '',
     images: [] as string[],
@@ -62,6 +63,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         name: property.name,
         address: property.address,
         price: property.price,
+        deposit_amount: property.deposit_amount ?? 500000,
         type: property.type,
         image_url: property.image_url,
         images: property.images || [],
@@ -159,6 +161,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       name: formData.name,
       address: formData.address,
       price: Number(formData.price),
+      deposit_amount: Number(formData.deposit_amount),
       type: formData.type,
       facilities: selectedFacilityIds as any,
       image_url: formData.image_url,
@@ -199,9 +202,9 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="space-y-1">
-          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Tarif Mulai (IDR / Bulan)</label>
+          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Tarif Mulai (IDR / Bln)</label>
           <input 
             type="number" 
             required
@@ -212,7 +215,19 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         </div>
 
         <div className="space-y-1">
-          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Kategori Penghuni Kos</label>
+          <label className="text-[10px] uppercase font-bold tracking-wider text-amber-400 font-mono">Deposit Gedung (IDR)</label>
+          <input 
+            type="number" 
+            required
+            value={formData.deposit_amount}
+            onChange={(e) => setFormData({ ...formData, deposit_amount: Number(e.target.value) })}
+            placeholder="500000"
+            className="w-full bg-slate-950 border border-amber-500/50 p-2 rounded-xl text-amber-400 font-mono font-bold text-[11px]"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Kategori Penghuni</label>
           <select 
             value={formData.type}
             onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
@@ -270,9 +285,12 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         {formData.image_url ? (
           <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
             <img 
-              src={formData.image_url || null} 
+              src={formData.image_url || PRESETS[0].dataUrl} 
               alt="Pratinjau Sampul" 
               className="w-full h-40 object-cover rounded-xl"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = PRESETS[0].dataUrl;
+              }}
             />
             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
               <button
@@ -346,9 +364,12 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           {formData.images.map((img, idx) => (
             <div key={idx} className="relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950 aspect-video group">
               <img 
-                src={img || null} 
+                src={img || PRESETS[0].dataUrl} 
                 alt={`Galeri ${idx + 1}`} 
                 className="w-full h-full object-cover"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = PRESETS[0].dataUrl;
+                }}
               />
               <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <button

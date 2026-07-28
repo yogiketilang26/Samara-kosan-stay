@@ -338,9 +338,12 @@ export const RoomForm: React.FC<RoomFormProps> = ({
           {formData.image_url ? (
             <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
               <img 
-                src={formData.image_url || null} 
+                src={formData.image_url || PRESETS[3]?.dataUrl || PRESETS[0].dataUrl} 
                 alt="Pratinjau Kamar" 
                 className="w-full h-36 object-cover rounded-xl animate-fade-in"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = PRESETS[3]?.dataUrl || PRESETS[0].dataUrl;
+                }}
               />
               <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                 <button
@@ -423,7 +426,14 @@ export const RoomForm: React.FC<RoomFormProps> = ({
           <div className="grid grid-cols-4 gap-2">
             {formData.images.map((img, idx) => (
               <div key={idx} className="relative group h-16 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
-                <img src={img || null} alt={`Galeri ${idx + 1}`} className="w-full h-full object-cover" />
+                <img 
+                  src={img || PRESETS[3]?.dataUrl || PRESETS[0].dataUrl} 
+                  alt={`Galeri ${idx + 1}`} 
+                  className="w-full h-full object-cover" 
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = PRESETS[3]?.dataUrl || PRESETS[0].dataUrl;
+                  }}
+                />
                 <button
                   type="button"
                   disabled={isSaving}

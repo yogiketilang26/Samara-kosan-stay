@@ -17,10 +17,13 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({ property, onSelect }
       <div className="relative h-48 bg-slate-950 overflow-hidden flex items-center justify-center">
         {property.image_url ? (
           <img 
-            src={property.image_url || null} 
+            src={property.image_url} 
             alt={property.name}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover select-none transition-transform duration-500 hover:scale-105"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1555854877-bab0e564b8d5?auto=format&fit=crop&w=800&q=80';
+            }}
           />
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-slate-900 via-slate-930 to-slate-950 flex flex-col items-center justify-center text-slate-550 p-4">

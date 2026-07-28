@@ -606,6 +606,36 @@ async function startServer() {
                       ${propertyAddress}
                     </div>
 
+                    <!-- Persetujuan Kebijakan, Peraturan Kos & Tanda Tangan Digital -->
+                    <div style="margin-top: 25px; border-top: 2px dashed #cbd5e1; padding-top: 20px; background-color: #f8fafc; border-radius: 16px; padding: 20px; border: 1px solid #e2e8f0;">
+                      <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">
+                        PERSETUJUAN KEBIJAKAN & PERATURAN KOS (${propertyName})
+                      </h4>
+                      
+                      <div style="font-size: 12px; color: #334155; line-height: 1.6; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; margin-bottom: 15px;">
+                        <strong style="color: #0f172a; display: block; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">1. Kebijakan & Ketentuan Hunian:</strong>
+                        <p style="margin: 0 0 10px 0; white-space: pre-line; font-size: 11px; color: #475569;">${property?.policies || property?.terms || "1. Wajib menyerahkan identitas diri (KTP/SIM) yang sah.\n2. Pembayaran sewa wajib dilunasi sesuai periode kontrak yang dipilih.\n3. Deposit jaminan dikembalikan saat check-out bilamana unit dalam kondisi baik."}</p>
+
+                        <strong style="color: #0f172a; display: block; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">2. Tata Tertib & Peraturan Kos:</strong>
+                        <p style="margin: 0; white-space: pre-line; font-size: 11px; color: #475569;">${property?.regulations || property?.additional_rules || "1. Menjaga ketenangan dan kerapihan fasilitas bersama.\n2. Tamu berkunjung maksimal pukul 22:00 WIB.\n3. Dilarang membawa barang berbahaya, senjata, atau obat terlarang."}</p>
+                      </div>
+
+                      ${booking.signature_url ? `
+                      <div style="background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 15px; text-align: center;">
+                        <p style="font-size: 10px; color: #047857; font-weight: 800; text-transform: uppercase; margin: 0 0 8px 0; letter-spacing: 0.5px;">
+                          ✓ TELAH DISETUJUI & DITANDATANGANI SECARA DIGITAL OLEH PENYEWA
+                        </p>
+                        <img src="${booking.signature_url}" alt="Tanda Tangan Digital ${booking.tenant_name}" style="max-height: 80px; max-width: 240px; display: block; margin: 0 auto 8px auto; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;" />
+                        <p style="margin: 0; font-size: 12px; font-weight: 800; color: #1e293b;">
+                          ${booking.tenant_name} (${booking.phone || '-'})
+                        </p>
+                        <p style="margin: 2px 0 0 0; font-size: 10px; color: #64748b; font-family: monospace;">
+                          Disetujui secara elektronik pada saat proses reservasi
+                        </p>
+                      </div>
+                      ` : ''}
+                    </div>
+
                     <!-- Next Steps -->
                     <div style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 25px;">
                       <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Petunjuk Check-In:</h4>

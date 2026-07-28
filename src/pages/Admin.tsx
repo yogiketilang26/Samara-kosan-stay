@@ -15,7 +15,7 @@ import InvoiceCard from '../components/transaction/InvoiceCard';
 import { formatRupiah } from '../utils/formatCurrency';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { 
-  Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, AlertCircle,
+  Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, AlertCircle, XCircle,
   Trash2, Edit2, PlayCircle, Plus, Eye, Check, X, FileSpreadsheet,
   History, Users, UserPlus, Download, Search, UserCheck, Activity,
   FileText, Printer, ShieldPlus, Trash, UserCog, Terminal, HelpCircle,
@@ -167,6 +167,20 @@ export default function Admin({}: AdminProps) {
   const [ledgerSearch, setLedgerSearch] = useState('');
   const [ledgerAccountFilter, setLedgerAccountFilter] = useState('all');
 
+  // Petty cash approval workflow states
+  const [pettyCashFilterStatus, setPettyCashFilterStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [pettyCashSearchTerm, setPettyCashSearchTerm] = useState('');
+  const [showNewPettyCashModal, setShowNewPettyCashModal] = useState(false);
+  const [newPettyCashForm, setNewPettyCashForm] = useState({
+    applicant: '',
+    amount: '',
+    purpose: '',
+    date: new Date().toISOString().split('T')[0]
+  });
+  const [showRejectPettyModal, setShowRejectPettyModal] = useState<PettyCashRequest | null>(null);
+  const [pettyCashRejectReason, setPettyCashRejectReason] = useState('');
+  const [isProcessingPetty, setIsProcessingPetty] = useState(false);
+
   const exportToCSV = (headers, rows, filename) => {
     const csvContent = [
       headers.join(','),
@@ -308,7 +322,7 @@ export default function Admin({}: AdminProps) {
   });
 
   // Realtime granular hooks for administrative modules
-  const { data: pettyCashRequestsData } = useRealtimeTable<PettyCashRequest>(
+  const { data: pettyCashRequestsData, refetch: refetchPettyCashRequests } = useRealtimeTable<PettyCashRequest>(
     'petty_cash_requests',
     () => database.fetchPettyCashRequests());
   const { data: assetsData } = useRealtimeTable<FixedAsset>(
@@ -368,6 +382,135 @@ export default function Admin({}: AdminProps) {
   useEffect(() => {
     if (bankStatementData) setBankStatement(bankStatementData);
   }, [bankStatementData]);
+
+  // Filtered petty cash requests
+  const filteredPettyCashRequests = pettyCashRequests.filter(req => {
+    const matchesStatus = pettyCashFilterStatus === 'all' || req.status === pettyCashFilterStatus;
+    const matchesSearch = !pettyCashSearchTerm.trim() || 
+      (req.applicant || '').toLowerCase().includes(pettyCashSearchTerm.toLowerCase()) ||
+      (req.purpose || '').toLowerCase().includes(pettyCashSearchTerm.toLowerCase());
+    return matchesStatus && matchesSearch;
+  });
+
+  // Handle Petty Cash Approval & Automatic Financial Transaction creation
+  const handleApprovePettyCash = async (req: PettyCashRequest) => {
+    if (!confirm(`Apakah Anda yakin ingin menyetujui pengajuan Kas Kecil oleh ${req.applicant} sebesar ${formatRupiah(req.amount)}?\n\nSistem akan otomatis mencatat entri financial_transaction, jurnal buku besar, dan memotong saldo Kas Kecil (1000).`)) {
+      return;
+    }
+
+    setIsProcessingPetty(true);
+    try {
+      // 1. Post atomic financial_transaction & double-entry journal (Debit 5100 Beban Operasional, Credit 1000 Kas Kecil)
+      await database.postFinancialTransaction({
+        category: "Beban Operasional",
+        description: `[PETTY CASH OK] Reimbursement ${req.applicant} - ${req.purpose}`,
+        amount: Number(req.amount),
+        type: "expense",
+        reference_type: "petty_cash_request",
+        reference_id: String(req.id),
+        created_by: "Admin Finance",
+        debit_account_id: 5100,
+        credit_account_id: 1000
+      });
+
+      // 2. Save approved status to petty_cash_requests table
+      await database.savePettyCashRequest({
+        ...req,
+        status: 'approved'
+      });
+
+      // 3. Log activity
+      await database.logActivity("System Finance", "APPROVE_PETTY_CASH", `Disetujui Kas Kecil #${req.id} (${req.applicant}) Rp ${req.amount}`);
+
+      // 4. Update local state & trigger refetch
+      const updatedList = pettyCashRequests.map(p => p.id === req.id ? { ...p, status: 'approved' as const } : p);
+      setPettyCashRequests(updatedList);
+
+      if (refetchPettyCashRequests) refetchPettyCashRequests();
+      if (refetchTransactions) refetchTransactions();
+      if (refetchAccounts) refetchAccounts();
+      if (refetchJournalEntries) refetchJournalEntries();
+
+      alert(`✅ Pengajuan Kas Kecil #${req.id} (${req.applicant}) berhasil disetujui!\n\nEntri 'financial_transaction' baru telah otomatis dibuat dan saldo Kas Kecil (1000) telah disesuaikan.`);
+    } catch (err: any) {
+      console.error("Gagal memproses persetujuan kas kecil:", err);
+      alert("❌ Gagal memproses persetujuan kas kecil: " + (err.message || err));
+    } finally {
+      setIsProcessingPetty(false);
+    }
+  };
+
+  // Handle Petty Cash Rejection
+  const handleConfirmRejectPettyCash = async () => {
+    if (!showRejectPettyModal) return;
+    const req = showRejectPettyModal;
+
+    setIsProcessingPetty(true);
+    try {
+      // Save rejected status
+      await database.savePettyCashRequest({
+        ...req,
+        status: 'rejected'
+      });
+
+      // Log activity
+      const note = pettyCashRejectReason.trim() ? ` (Alasan: ${pettyCashRejectReason.trim()})` : '';
+      await database.logActivity("System Finance", "REJECT_PETTY_CASH", `Ditolak Kas Kecil #${req.id} (${req.applicant}) Rp ${req.amount}${note}`);
+
+      // Update local state & refetch
+      const updatedList = pettyCashRequests.map(p => p.id === req.id ? { ...p, status: 'rejected' as const } : p);
+      setPettyCashRequests(updatedList);
+
+      if (refetchPettyCashRequests) refetchPettyCashRequests();
+
+      setShowRejectPettyModal(null);
+      setPettyCashRejectReason('');
+      alert(`⚠️ Pengajuan Kas Kecil #${req.id} oleh ${req.applicant} telah ditolak.`);
+    } catch (err: any) {
+      console.error("Gagal menolak kas kecil:", err);
+      alert("❌ Gagal menolak pengajuan kas kecil: " + (err.message || err));
+    } finally {
+      setIsProcessingPetty(false);
+    }
+  };
+
+  // Handle Submit New Petty Cash Request
+  const handleCreatePettyCashRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPettyCashForm.applicant.trim() || !newPettyCashForm.amount || !newPettyCashForm.purpose.trim()) {
+      alert("Harap isi semua kolom pengajuan kas kecil.");
+      return;
+    }
+
+    setIsProcessingPetty(true);
+    try {
+      await database.savePettyCashRequest({
+        applicant: newPettyCashForm.applicant.trim(),
+        amount: Number(newPettyCashForm.amount),
+        purpose: newPettyCashForm.purpose.trim(),
+        status: 'pending',
+        date: newPettyCashForm.date || new Date().toISOString().split('T')[0]
+      });
+
+      await database.logActivity("System Finance", "CREATE_PETTY_CASH_REQUEST", `Pengajuan Kas Kecil Baru oleh ${newPettyCashForm.applicant} Rp ${newPettyCashForm.amount}`);
+
+      if (refetchPettyCashRequests) refetchPettyCashRequests();
+
+      setNewPettyCashForm({
+        applicant: '',
+        amount: '',
+        purpose: '',
+        date: new Date().toISOString().split('T')[0]
+      });
+      setShowNewPettyCashModal(false);
+      alert("✅ Pengajuan Kas Kecil baru berhasil dibuat dan masuk dalam status 'pending' menunggu persetujuan.");
+    } catch (err: any) {
+      console.error("Gagal membuat pengajuan kas kecil:", err);
+      alert("❌ Gagal membuat pengajuan kas kecil: " + (err.message || err));
+    } finally {
+      setIsProcessingPetty(false);
+    }
+  };
 
   // AI Insights text state
   const [aiInsightText, setAiInsightText] = useState<string>('');
@@ -1031,11 +1174,12 @@ export default function Admin({}: AdminProps) {
       const isFreeSurvey = Number(s.dp_amount) === 0;
       const dpDeduction = isFreeSurvey ? 0 : 500000;
 
+      const propObj = properties.find(p => p.id === s.property_id);
       const monthlyPrice = Number(roomData.price);
       const rentTotal = monthlyPrice * pelunasanDurationMonths;
-      const tax = Math.round(rentTotal * 0.1);
-      const deposit = 500000;
-      const grossTotal = rentTotal + tax + deposit;
+      const tax = 0;
+      const deposit = propObj?.deposit_amount ?? 500000;
+      const grossTotal = rentTotal + deposit;
       const remainingBalance = grossTotal - dpDeduction;
 
       const tenantPayload = {
@@ -1147,11 +1291,7 @@ export default function Admin({}: AdminProps) {
                       <td style="color: #1e293b; font-weight: 700; text-align: right;">Rp ${(rentTotal).toLocaleString('id-ID')}</td>
                     </tr>
                     <tr>
-                      <td style="color: #64748b;">PBJT (10%):</td>
-                      <td style="color: #1e293b; font-weight: 700; text-align: right;">Rp ${(tax).toLocaleString('id-ID')}</td>
-                    </tr>
-                    <tr>
-                      <td style="color: #64748b;">Deposit Jaminan:</td>
+                      <td style="color: #64748b;">Deposit Jaminan Gedung:</td>
                       <td style="color: #1e293b; font-weight: 700; text-align: right;">Rp ${(deposit).toLocaleString('id-ID')}</td>
                     </tr>
                     <tr>
@@ -1485,6 +1625,120 @@ export default function Admin({}: AdminProps) {
     );
   };
 
+  const handleSaveTenant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload: Partial<Tenant> = {
+      ...(activeTenantEdit ? { id: activeTenantEdit.id } : {}),
+      full_name: tenantForm.full_name,
+      phone: tenantForm.phone,
+      email: tenantForm.email || 'tenant@samarastay.com',
+      avatar_initials: tenantForm.full_name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(),
+      avatar_color: "bg-teal-600",
+      property_id: Number(tenantForm.property_id) || properties[0]?.id || 1,
+      room_number: tenantForm.room_number,
+      start_date: tenantForm.start_date || new Date().toISOString().split('T')[0],
+      duration_months: Number(tenantForm.duration_months) || 1,
+      payment_status: tenantForm.payment_status,
+      status: 'active'
+    };
+    setIsSavingOccupant(true);
+    try {
+      await database.saveTenant(payload);
+      const matchedRoom = rooms.find(r => r.room_number.toLowerCase() === tenantForm.room_number.toLowerCase());
+      if (matchedRoom) {
+        await database.saveRoom({ ...matchedRoom, status: 'occupied', current_tenant_name: tenantForm.full_name });
+      }
+      setShowTenantModal(false);
+      setActiveTenantEdit(null);
+      setTenantForm({
+        full_name: '',
+        phone: '',
+        email: '',
+        property_id: properties[0]?.id || 1,
+        room_number: '',
+        start_date: new Date().toISOString().split('T')[0],
+        duration_months: 1,
+        payment_status: 'paid'
+      });
+      startModuleRefresh('tenants');
+      await refetchTenants();
+      await refetchRooms();
+      showToast('Data penghuni berhasil disimpan!');
+    } catch (err: any) {
+      console.error('[Admin] Error saving tenant:', err);
+      showToast(err.message || 'Gagal menyimpan data penghuni.', 'error');
+    } finally {
+      setIsSavingOccupant(false);
+      endModuleRefresh('tenants');
+    }
+  };
+
+  const handleDeleteTenant = async (id: string | number) => {
+    customConfirm(
+      'Hapus Data Penghuni',
+      'Apakah Anda yakin ingin menghapus data penghuni ini secara permanen dari database?',
+      async () => {
+        startItemProcessing(id);
+        try {
+          await database.deleteTenant(id);
+          startModuleRefresh('tenants');
+          await refetchTenants();
+          showToast('Data penghuni berhasil dihapus!');
+        } catch (err: any) {
+          console.error('[Admin] Error deleting tenant:', err);
+          showToast(err.message || 'Gagal menghapus data penghuni.', 'error');
+        } finally {
+          endItemProcessing(id);
+          endModuleRefresh('tenants');
+        }
+      }
+    );
+  };
+
+  const handleDeleteSurvey = async (id: number) => {
+    customConfirm(
+      'Hapus Data Survey',
+      'Apakah Anda yakin ingin menghapus catatan pengajuan survey ini?',
+      async () => {
+        startItemProcessing(id);
+        try {
+          await database.deleteSurvey(id);
+          startModuleRefresh('surveys');
+          await refetchSurveys();
+          showToast('Data survey berhasil dihapus!');
+        } catch (err: any) {
+          console.error('[Admin] Error deleting survey:', err);
+          showToast(err.message || 'Gagal menghapus survey.', 'error');
+        } finally {
+          endItemProcessing(id);
+          endModuleRefresh('surveys');
+        }
+      }
+    );
+  };
+
+  const handleDeleteBooking = async (id: number) => {
+    customConfirm(
+      'Hapus Reservasi Sewa',
+      'Apakah Anda yakin ingin menghapus data reservasi sewa ini?',
+      async () => {
+        startItemProcessing(id);
+        try {
+          await database.deleteBooking(id);
+          startModuleRefresh('bookings');
+          await refetchBookings();
+          showToast('Data reservasi berhasil dihapus!');
+        } catch (err: any) {
+          console.error('[Admin] Error deleting booking:', err);
+          showToast(err.message || 'Gagal menghapus reservasi.', 'error');
+        } finally {
+          endItemProcessing(id);
+          endModuleRefresh('bookings');
+        }
+      }
+    );
+  };
+
   // Aggregated pricing math
   const totalOccupied = rooms.filter(r=>r.status === 'occupied').length;
   const occupancyRate = rooms.length > 0 ? Math.round((totalOccupied / rooms.length) * 100) : 0;
@@ -1627,7 +1881,7 @@ export default function Admin({}: AdminProps) {
                   <div key={p.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
                     <div>
                       <h4 className="font-extrabold text-[#3A444D] uppercase font-sans text-sm">{p.name}</h4>
-                      <span className="text-[11px] text-[#64748B] font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln</span>
+                      <span className="text-[11px] text-[#64748B] font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln | Deposit Gedung: {formatRupiah(p.deposit_amount ?? 500000)}</span>
                     </div>
                     <div className="flex gap-2 w-full sm:w-auto">
                       <button 
@@ -3145,67 +3399,234 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                  {activeFinanceSubTab === 'petty' && (
                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-in">
                      
-                     {/* Petty Cash Panel (Module 8) */}
-                     <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
-                       <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                     {/* Petty Cash Approval Workflow Panel */}
+                     <div className="bg-white rounded-3xl p-5 sm:p-6 border border-gray-100 shadow-xs space-y-5">
+                       {/* Header */}
+                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-gray-100 pb-4">
                          <div>
-                           <span className="text-[10px] text-gray-400 font-bold uppercase font-mono tracking-wider block">Kas Kecil (Petty Cash)</span>
-                           <h3 className="text-sm font-bold text-slate-800 font-display">Penggantian Pengeluaran Staff (Reimbursements)</h3>
-                         </div>
-                         <span className="bg-slate-900 text-white font-mono text-[11px] font-bold px-2.5 py-1 rounded-xl">
-                           Saldo: {formatRupiah(accounts.find(a=>a.id===1000)?.balance || 0)}
-                         </span>
-                       </div>
- 
-                       <div className="space-y-3">
-                         {pettyCashRequests.map((req) => (
-                           <div key={req.id} className="p-3.5 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                             <div>
-                               <div className="flex items-center gap-1.5 flex-wrap">
-                                 <span className="text-[10px] font-bold text-slate-800 font-sans">{req.applicant}</span>
-                                 <span className={`text-[8px] px-1 rounded font-extrabold uppercase font-mono ${
-                                   req.status === 'approved' ? 'bg-emerald-50 text-brand-green' : 'bg-amber-50 text-amber-600 animate-pulse'
-                                 }`}>
-                                   {req.status}
-                                 </span>
-                               </div>
-                               <p className="text-xs text-slate-700 font-medium mt-0.5">{req.purpose}</p>
-                               <span className="text-[9px] text-[#64748B] block font-mono">Tgl Pengajuan: {req.date}</span>
-                             </div>
-                             <div className="flex items-center gap-3 self-stretch sm:self-auto justify-between border-t sm:border-t-0 border-slate-150 pt-2 sm:pt-0 font-sans">
-                               <span className="font-mono text-xs font-bold text-slate-800">{formatRupiah(req.amount)}</span>
-                               {req.status === 'pending' && (
-                                 <button
-                                   onClick={async () => {
-                                     try {
-                                       // Debit Beban Operasional Lain-lain (5100), Credit Kas Kecil/Petty Cash (1000)
-                                       await database.recordFinancialExpense(5100, 1000, req.amount, `[PETTY CASH OK] Reimbursement ${req.applicant} - ${req.purpose}`, "Beban Operasional");
-                                       
-                                       // Save to database
-                                       await database.savePettyCashRequest({ ...req, status: 'approved' });
-                                       
-                                       // Update local status
-                                       const updatedPetty = pettyCashRequests.map(p => p.id === req.id ? { ...p, status: 'approved' } : p);
-                                       setPettyCashRequests(updatedPetty);
-                                       
-                                       database.logActivity("System Finance", "APPROVE_REIMBURSEMENT", `Setuju Kas Kecil ${req.applicant} Rp ${req.amount}`);
-                                       alert("Permohonan Kas Kecil disetujui dan dicairkan otomatis dari Petty Cash!");
-                                       
-                                     } catch(err: any) {
-                                       alert("Gagal mem-proses kas kecil: " + err.message);
-                                     }
-                                   }}
-                                   className="bg-brand-green hover:bg-emerald-600 text-white font-bold text-[9px] px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                                 >
-                                   Cairkan Dana
-                                 </button>
-                               )}
-                             </div>
+                           <div className="flex items-center gap-2">
+                             <span className="text-[10px] text-emerald-700 bg-emerald-50 font-bold uppercase font-mono tracking-wider px-2 py-0.5 rounded-full border border-emerald-200">
+                               Approval Workflow Interface
+                             </span>
                            </div>
-                         ))}
+                           <h3 className="text-base font-bold text-slate-800 font-display mt-1">
+                             Persetujuan Kas Kecil (Petty Cash Requests)
+                           </h3>
+                           <p className="text-xs text-slate-500 mt-0.5">
+                             Persetujuan (Approve) memicu otomatis terbitnya entri <code className="text-emerald-700 bg-emerald-50 px-1 py-0.5 rounded font-mono text-[10px]">financial_transaction</code> & jurnal umum.
+                           </p>
+                         </div>
+                         
+                         <div className="flex items-center gap-2 self-end sm:self-auto">
+                           <button
+                             onClick={() => setShowNewPettyCashModal(true)}
+                             className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3 py-2 rounded-xl transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
+                           >
+                             <Plus size={14} />
+                             <span>Ajukan Kas Kecil</span>
+                           </button>
+                         </div>
+                       </div>
+
+                       {/* Summary Metrics Cards */}
+                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                         <div className="p-3 bg-slate-900 text-white rounded-2xl border border-slate-800">
+                           <span className="text-[9px] text-slate-400 font-bold uppercase font-mono block">Saldo Kas Kecil</span>
+                           <span className="text-xs sm:text-sm font-extrabold font-mono text-emerald-400 mt-1 block truncate">
+                             {formatRupiah(accounts.find(a=>a.id===1000)?.balance || 0)}
+                           </span>
+                         </div>
+
+                         <div className="p-3 bg-amber-50/80 border border-amber-200/60 rounded-2xl">
+                           <span className="text-[9px] text-amber-700 font-bold uppercase font-mono block">Pending</span>
+                           <div className="flex items-baseline justify-between mt-1">
+                             <span className="text-xs sm:text-sm font-extrabold font-mono text-amber-900">
+                               {pettyCashRequests.filter(r => r.status === "pending").length} Req
+                             </span>
+                             <span className="text-[10px] text-amber-700 font-mono font-bold hidden sm:inline">
+                               {formatRupiah(pettyCashRequests.filter(r => r.status === "pending").reduce((sum, r) => sum + Number(r.amount), 0))}
+                             </span>
+                           </div>
+                         </div>
+
+                         <div className="p-3 bg-emerald-50/80 border border-emerald-200/60 rounded-2xl">
+                           <span className="text-[9px] text-emerald-700 font-bold uppercase font-mono block">Disetujui</span>
+                           <div className="flex items-baseline justify-between mt-1">
+                             <span className="text-xs sm:text-sm font-extrabold font-mono text-emerald-900">
+                               {pettyCashRequests.filter(r => r.status === "approved").length} Req
+                             </span>
+                             <span className="text-[10px] text-emerald-700 font-mono font-bold hidden sm:inline">
+                               {formatRupiah(pettyCashRequests.filter(r => r.status === "approved").reduce((sum, r) => sum + Number(r.amount), 0))}
+                             </span>
+                           </div>
+                         </div>
+
+                         <div className="p-3 bg-rose-50/80 border border-rose-200/60 rounded-2xl">
+                           <span className="text-[9px] text-rose-700 font-bold uppercase font-mono block">Ditolak</span>
+                           <span className="text-xs sm:text-sm font-extrabold font-mono text-rose-900 mt-1 block">
+                             {pettyCashRequests.filter(r => r.status === "rejected").length} Req
+                           </span>
+                         </div>
+                       </div>
+
+                       {/* Action & Filter Bar */}
+                       <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 pt-1">
+                         {/* Status Filter Tabs */}
+                         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
+                           {(["all", "pending", "approved", "rejected"] as const).map((st) => {
+                             const count = st === "all" 
+                               ? pettyCashRequests.length 
+                               : pettyCashRequests.filter(r => r.status === st).length;
+                             const labelMap = {
+                               all: "Semua",
+                               pending: "Pending",
+                               approved: "Disetujui",
+                               rejected: "Ditolak"
+                             };
+                             return (
+                               <button
+                                 key={st}
+                                 onClick={() => setPettyCashFilterStatus(st)}
+                                 className={`px-2.5 py-1.2 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                                   pettyCashFilterStatus === st
+                                     ? "bg-white text-slate-800 shadow-xs"
+                                     : "text-slate-500 hover:text-slate-800"
+                                 }`}
+                               >
+                                 <span>{labelMap[st]}</span>
+                                 <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${
+                                   pettyCashFilterStatus === st ? "bg-slate-900 text-white" : "bg-slate-200 text-slate-600"
+                                 }`}>
+                                   {count}
+                                 </span>
+                               </button>
+                             );
+                           })}
+                         </div>
+
+                         {/* Search Input */}
+                         <div className="relative">
+                           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                           <input
+                             type="text"
+                             value={pettyCashSearchTerm}
+                             onChange={(e) => setPettyCashSearchTerm(e.target.value)}
+                             placeholder="Cari pemohon / rincian..."
+                             className="w-full sm:w-44 pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:border-emerald-500 font-medium"
+                           />
+                         </div>
+                       </div>
+
+                       {/* Petty Cash Request List */}
+                       <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                         {filteredPettyCashRequests.length === 0 ? (
+                           <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-400">
+                             <Wallet size={28} className="mx-auto mb-2 opacity-40 text-slate-500" />
+                             <p className="text-xs font-semibold text-slate-600">Tidak ada data pengajuan kas kecil</p>
+                             <p className="text-[11px] text-slate-400 mt-0.5">Silakan sesuaikan filter atau tambahkan pengajuan baru.</p>
+                           </div>
+                         ) : (
+                           filteredPettyCashRequests.map((req) => {
+                             // Find matched financial_transaction for approved request
+                             const linkedTrx = transactions.find(t => 
+                               t.reference_type === "petty_cash_request" && String(t.reference_id) === String(req.id)
+                             ) || transactions.find(t => t.description.includes("[PETTY CASH OK]") && t.description.includes(req.applicant));
+
+                             return (
+                               <div 
+                                 key={req.id} 
+                                 className={`p-3.5 rounded-2xl border transition-all ${
+                                   req.status === "pending"
+                                     ? "bg-amber-50/50 border-amber-200 hover:border-amber-300 shadow-xs"
+                                     : req.status === "approved"
+                                     ? "bg-emerald-50/20 border-emerald-100 hover:border-emerald-200"
+                                     : "bg-rose-50/20 border-rose-100 hover:border-rose-200"
+                                 }`}
+                               >
+                                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                                   <div className="space-y-1 flex-1">
+                                     <div className="flex items-center gap-2 flex-wrap">
+                                       <span className="text-xs font-bold text-slate-900 font-sans">{req.applicant}</span>
+                                       
+                                       {/* Status Badge */}
+                                       {req.status === "pending" && (
+                                         <span className="text-[9px] px-2 py-0.5 rounded-full font-bold uppercase font-mono bg-amber-100 text-amber-800 border border-amber-300/60 flex items-center gap-1 animate-pulse">
+                                           <Clock size={10} />
+                                           <span>Pending Approval</span>
+                                         </span>
+                                       )}
+                                       {req.status === "approved" && (
+                                         <span className="text-[9px] px-2 py-0.5 rounded-full font-bold uppercase font-mono bg-emerald-100 text-emerald-800 border border-emerald-300/60 flex items-center gap-1">
+                                           <CheckCircle size={10} />
+                                           <span>Approved & Paid</span>
+                                         </span>
+                                       )}
+                                       {req.status === "rejected" && (
+                                         <span className="text-[9px] px-2 py-0.5 rounded-full font-bold uppercase font-mono bg-rose-100 text-rose-800 border border-rose-300/60 flex items-center gap-1">
+                                           <XCircle size={10} />
+                                           <span>Rejected</span>
+                                         </span>
+                                       )}
+
+                                       <span className="text-[9px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                         #REQ-{req.id}
+                                       </span>
+                                     </div>
+
+                                     <p className="text-xs text-slate-700 font-medium leading-relaxed">{req.purpose}</p>
+
+                                     <div className="flex items-center gap-3 text-[10px] text-slate-500 font-mono flex-wrap pt-0.5">
+                                       <span>Tgl: {req.date}</span>
+                                       
+                                       {linkedTrx && (
+                                         <span className="text-emerald-700 bg-emerald-100/80 px-1.5 py-0.2 rounded font-bold flex items-center gap-1">
+                                           <Receipt size={10} />
+                                           Trx: {linkedTrx.transaction_no}
+                                         </span>
+                                       )}
+                                     </div>
+                                   </div>
+
+                                   <div className="flex flex-col sm:items-end gap-2 self-stretch sm:self-auto border-t sm:border-t-0 border-slate-200/60 pt-2 sm:pt-0">
+                                     <span className="font-mono text-sm font-extrabold text-slate-900">
+                                       {formatRupiah(req.amount)}
+                                     </span>
+
+                                     {/* Workflow Buttons for Pending Requests */}
+                                     {req.status === "pending" && (
+                                       <div className="flex items-center gap-1.5">
+                                         <button
+                                           disabled={isProcessingPetty}
+                                           onClick={() => handleApprovePettyCash(req)}
+                                           className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-xl transition-all shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                           title="Setujui dan otomatis terbitkan entri financial_transaction"
+                                         >
+                                           <CheckCircle size={11} />
+                                           <span>Approve</span>
+                                         </button>
+
+                                         <button
+                                           disabled={isProcessingPetty}
+                                           onClick={() => {
+                                             setShowRejectPettyModal(req);
+                                             setPettyCashRejectReason("");
+                                           }}
+                                           className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[10px] px-2 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                                           title="Tolak pengajuan kas kecil"
+                                         >
+                                           <XCircle size={11} />
+                                           <span>Reject</span>
+                                         </button>
+                                       </div>
+                                     )}
+                                   </div>
+                                 </div>
+                               </div>
+                             );
+                           })
+                         )}
                        </div>
                      </div>
- 
                      {/* Bank Management & Reconciliation (Module 9) */}
                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
                        <div className="flex justify-between items-center border-b border-gray-100 pb-3">
@@ -3837,15 +4258,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       duration_months: Number(durationInMonthsInput) || 1,
                       payment_status: 'paid'
                     };
-                    // Save directly to the database
                     await database.saveTenant(payload);
-                    
-                    // Also mark room as occupied if it exists
                     if (matchedRoom) {
                       database.saveRoom({ ...matchedRoom, status: 'occupied', current_tenant_name: nameInput });
                     }
                     database.logActivity("System", "MANUAL_TENANT_ADD", `Menambah penghuni manual: ${nameInput} di kamar ${roomInput}`);
-                    
                   }
                 }}
                 className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all shadow-sm focus:outline-none cursor-pointer"
@@ -3896,9 +4313,42 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       {t.avatar_initials || t.full_name.slice(0, 2).toUpperCase()}
                     </div>
                     <div className="space-y-1.5 flex-1 min-w-0">
-                      <div>
-                        <h4 className="font-extrabold text-[#3A444D] text-base tracking-tight truncate capitalize">{t.full_name}</h4>
-                        <p className="text-[10px] text-[#64748B] font-mono font-bold uppercase">{propertyName}</p>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-extrabold text-[#3A444D] text-base tracking-tight truncate capitalize">{t.full_name}</h4>
+                          <p className="text-[10px] text-[#64748B] font-mono font-bold uppercase">{propertyName}</p>
+                        </div>
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTenantEdit(t);
+                              setTenantForm({
+                                full_name: t.full_name,
+                                phone: t.phone,
+                                email: t.email || '',
+                                property_id: t.property_id,
+                                room_number: t.room_number,
+                                start_date: t.start_date,
+                                duration_months: t.duration_months || 1,
+                                payment_status: (t.payment_status as any) || 'paid'
+                              });
+                              setShowTenantModal(true);
+                            }}
+                            className="p-1.5 text-[#0D9488] hover:bg-[#EEF7F0] rounded-lg transition-colors cursor-pointer"
+                            title="Ubah Informasi Penghuni"
+                          >
+                            <Edit2 size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTenant(t.id)}
+                            className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Hapus Permanent Data Penghuni"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </div>
 
                       <div className="space-y-1 text-[#64748B] text-[11px]">
@@ -3928,16 +4378,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 'Check Out Penghuni',
                                 `Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`,
                                 async () => {
-                                  // Mark tenant status as checkout and update
                                   await database.saveTenant({ ...t, status: 'checkout' });
-                                  
-                                  // return room back to available 
                                   const rList = rooms.filter(x => x.room_number === t.room_number);
                                   for (const matchedRoom of rList) {
                                     await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
                                   }
-
-                                  // Also update corresponding bookings to 'checkout' status
                                   const matchedBooking = bookings.find(b => 
                                     b.room_number === t.room_number && 
                                     b.property_id === t.property_id && 
@@ -3948,15 +4393,17 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                   if (matchedBooking) {
                                     await database.saveBooking({ ...matchedBooking, status: 'checkout' });
                                   }
-
                                   database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name} (Status: Checkout)`);
-                                  
+                                  startModuleRefresh('tenants');
+                                  await refetchTenants();
+                                  await refetchRooms();
+                                  showToast(`Penghuni ${t.full_name} berhasil di-checkout.`);
                                 }
                               );
                             }}
-                            className="text-rose-450 hover:text-rose-400 text-[10px] font-bold font-sans transition-colors cursor-pointer"
+                            className="text-amber-600 hover:text-amber-700 text-[10px] font-bold font-sans transition-colors cursor-pointer bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg"
                           >
-                            Check Out / Hapus
+                            Proses Check-Out
                           </button>
                         )}
                       </div>
@@ -5230,7 +5677,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               {[
                 { name: 'Wifi', label: 'WiFi' },
                 { name: 'Zap', label: 'Listrik' },
-                { name: 'Car', label: 'Parkir' },
+                { name: 'Bike', label: 'Motor' },
+                { name: 'Car', label: 'Mobil' },
                 { name: 'Shirt', label: 'Laundry' },
                 { name: 'Sparkles', label: 'Cleaning' },
                 { name: 'Droplet', label: 'Air' },
@@ -5241,6 +5689,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 { name: 'Wind', label: 'AC' },
                 { name: 'Coffee', label: 'Pantry' },
                 { name: 'Refrigerator', label: 'Kulkas' },
+                { name: 'Microwave', label: 'Microwave' },
+                { name: 'Sun', label: 'Jemuran' },
+                { name: 'Flame', label: 'Kompor' },
+                { name: 'CupSoda', label: 'Dapur' },
+                { name: 'Utensils', label: 'Makan' },
                 { name: 'Key', label: 'Akses Kunci' },
                 { name: 'Bath', label: 'Mandi' },
                 { name: 'Lock', label: 'Gembok' },
@@ -5619,14 +6072,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>PBJT / Pajak Hunian (10%):</span>
+                  <span>Deposit Jaminan Gedung:</span>
                   <span className="font-bold">
-                    Rp {(Math.round((properties.find(p => p.id === selectedSurveyForPelunasan.property_id)?.price || 2500000) * pelunasanDurationMonths * 0.1)).toLocaleString('id-ID')}
+                    Rp {((properties.find(p => p.id === selectedSurveyForPelunasan.property_id)?.deposit_amount ?? 500000)).toLocaleString('id-ID')}
                   </span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Deposit Jaminan (Standard):</span>
-                  <span className="font-bold">Rp 500.000</span>
                 </div>
                 {Number(selectedSurveyForPelunasan.dp_amount) > 0 ? (
                   <div className="flex justify-between text-emerald-700 font-bold">
@@ -5644,12 +6093,12 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   <span>Total Pelunasan Bersih:</span>
                   <span className="text-emerald-700">
                     Rp {(() => {
-                      const basePrice = properties.find(p => p.id === selectedSurveyForPelunasan.property_id)?.price || 2500000;
+                      const prop = properties.find(p => p.id === selectedSurveyForPelunasan.property_id);
+                      const basePrice = prop?.price || 2500000;
                       const rent = basePrice * pelunasanDurationMonths;
-                      const tax = Math.round(rent * 0.1);
-                      const deposit = 500000;
+                      const deposit = prop?.deposit_amount ?? 500000;
                       const dp = Number(selectedSurveyForPelunasan.dp_amount) === 0 ? 0 : 500000;
-                      return (rent + tax + deposit - dp).toLocaleString('id-ID');
+                      return (rent + deposit - dp).toLocaleString('id-ID');
                     })()}
                   </span>
                 </div>
@@ -5771,6 +6220,141 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
         )}
       </Modal>
 
+      {/* Tenant Creator / Modifier Modal */}
+      <Modal
+        isOpen={showTenantModal}
+        onClose={() => {
+          setShowTenantModal(false);
+          setActiveTenantEdit(null);
+        }}
+        title={activeTenantEdit ? "UBAH INFORMASI PENGHUNI" : "PENDAFTARAN PENGHUNI MANUAL"}
+      >
+        <form onSubmit={handleSaveTenant} className="space-y-4 font-sans text-xs text-[#3A444D]">
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap Penghuni</label>
+            <input 
+              type="text" required
+              value={tenantForm.full_name}
+              onChange={(e) => setTenantForm({ ...tenantForm, full_name: e.target.value })}
+              placeholder="Contoh: Rian Pratama"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs font-semibold focus:border-[#0D9488]"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">No. WhatsApp / HP</label>
+              <input 
+                type="tel" required
+                value={tenantForm.phone}
+                onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
+                placeholder="Contoh: 08129837482"
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono text-xs focus:border-[#0D9488]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Email Penghuni</label>
+              <input 
+                type="email"
+                value={tenantForm.email}
+                onChange={(e) => setTenantForm({ ...tenantForm, email: e.target.value })}
+                placeholder="penghuni@gmail.com"
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs focus:border-[#0D9488]"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Pilih Properti Kos</label>
+              <select
+                value={tenantForm.property_id}
+                onChange={(e) => setTenantForm({ ...tenantForm, property_id: Number(e.target.value) })}
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl cursor-pointer text-xs font-bold focus:border-[#0D9488]"
+              >
+                {properties.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Nomor Kamar Alokasi</label>
+              <input 
+                type="text" required
+                value={tenantForm.room_number}
+                onChange={(e) => setTenantForm({ ...tenantForm, room_number: e.target.value })}
+                placeholder="Contoh: R201"
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono font-bold text-xs focus:border-[#0D9488]"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Tanggal Mulai Sewa</label>
+              <input 
+                type="date" required
+                value={tenantForm.start_date}
+                onChange={(e) => setTenantForm({ ...tenantForm, start_date: e.target.value })}
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl font-mono text-xs focus:border-[#0D9488]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Jangka Waktu (Bulan)</label>
+              <input 
+                type="number" min={1} max={36} required
+                value={tenantForm.duration_months}
+                onChange={(e) => setTenantForm({ ...tenantForm, duration_months: Number(e.target.value) })}
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl font-mono text-xs focus:border-[#0D9488]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Status Pembayaran</label>
+              <select
+                value={tenantForm.payment_status}
+                onChange={(e) => setTenantForm({ ...tenantForm, payment_status: e.target.value as any })}
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl cursor-pointer text-xs font-bold focus:border-[#0D9488]"
+              >
+                <option value="paid">LUNAS (PAID)</option>
+                <option value="unpaid">BELUM BAYAR</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              disabled={isSavingOccupant}
+              onClick={() => {
+                setShowTenantModal(false);
+                setActiveTenantEdit(null);
+              }}
+              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all text-xs cursor-pointer disabled:opacity-50"
+            >
+              Batalkan
+            </button>
+            <button
+              type="submit"
+              disabled={isSavingOccupant}
+              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all text-xs cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              {isSavingOccupant ? (
+                <>
+                  <RotateCw size={13} className="animate-spin text-white" />
+                  <span>Menyimpan...</span>
+                </>
+              ) : (
+                'Simpan Penghuni'
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
       {/* Custom Confirmation Dialog */}
       <Modal
         isOpen={confirmDialog.isOpen}
@@ -5798,6 +6382,120 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
         </div>
       </Modal>
 
+      {/* Modal: Ajukan Petty Cash Baru */}
+      {showNewPettyCashModal && (
+        <Modal
+          isOpen={showNewPettyCashModal}
+          onClose={() => setShowNewPettyCashModal(false)}
+          title="Pengajuan Kas Kecil Baru (Petty Cash Request)"
+        >
+          <form onSubmit={handleCreatePettyCashRequest} className="space-y-4 font-sans">
+            <p className="text-xs text-slate-500">
+              Isi rincian pengajuan reimbursh / kas kecil staff. Pengajuan akan berstatus <span className="font-bold text-amber-600">Pending</span> hingga Admin menyetujui.
+            </p>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Nama Pemohon (Applicant)</label>
+              <input
+                type="text"
+                required
+                value={newPettyCashForm.applicant}
+                onChange={(e) => setNewPettyCashForm(prev => ({ ...prev, applicant: e.target.value }))}
+                placeholder="Contoh: Budi (Staff Operasional)"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-emerald-500 font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Keperluan (Purpose)</label>
+              <textarea
+                required
+                rows={3}
+                value={newPettyCashForm.purpose}
+                onChange={(e) => setNewPettyCashForm(prev => ({ ...prev, purpose: e.target.value }))}
+                placeholder="Contoh: Pembelian perlengkapan kebersihan & lampu pengganti Kos An-Nur"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-emerald-500 font-medium resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Jumlah Pengajuan (Nominal Rp)</label>
+              <input
+                type="number"
+                required
+                min={1000}
+                value={newPettyCashForm.amount || ""}
+                onChange={(e) => setNewPettyCashForm(prev => ({ ...prev, amount: Number(e.target.value) }))}
+                placeholder="250000"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-emerald-500 font-mono font-bold"
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowNewPettyCashModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                disabled={isProcessingPetty}
+                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all text-xs cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isProcessingPetty ? "Menyimpan..." : "Kirim Pengajuan"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Modal: Tolak Petty Cash */}
+      {showRejectPettyModal && (
+        <Modal
+          isOpen={!!showRejectPettyModal}
+          onClose={() => setShowRejectPettyModal(null)}
+          title={`Tolak Pengajuan Kas Kecil #${showRejectPettyModal.id}`}
+        >
+          <div className="space-y-4 font-sans text-slate-800">
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs space-y-1">
+              <p className="font-bold text-rose-900">Pemohon: {showRejectPettyModal.applicant}</p>
+              <p className="text-rose-700">Keperluan: {showRejectPettyModal.purpose}</p>
+              <p className="font-mono font-extrabold text-rose-900">Nominal: {formatRupiah(showRejectPettyModal.amount)}</p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Alasan Penolakan (Opsional)</label>
+              <textarea
+                rows={3}
+                value={pettyCashRejectReason}
+                onChange={(e) => setPettyCashRejectReason(e.target.value)}
+                placeholder="Contoh: Nota tidak terlampir atau anggaran belum disetujui."
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-rose-500 font-medium resize-none"
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowRejectPettyModal(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isProcessingPetty}
+                onClick={handleConfirmRejectPettyCash}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold transition-all text-xs cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isProcessingPetty ? "Memproses..." : "Konfirmasi Tolak"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

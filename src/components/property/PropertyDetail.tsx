@@ -37,10 +37,13 @@ export const PropertyDetail: React.FC<PropertyDetailProps> = ({
         <div className="relative h-64 md:h-80 bg-slate-950 overflow-hidden flex items-center justify-center">
           {property.image_url ? (
             <img 
-              src={property.image_url || null} 
+              src={property.image_url} 
               alt={property.name}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover select-none"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1555854877-bab0e564b8d5?auto=format&fit=crop&w=800&q=80';
+              }}
             />
           ) : (
             <div className="w-full h-full bg-gradient-to-br from-slate-900 via-slate-930 to-slate-950 flex flex-col items-center justify-center text-slate-550 p-4">
@@ -106,12 +109,12 @@ export const PropertyDetail: React.FC<PropertyDetailProps> = ({
             </div>
             
             <div className="space-y-2 border-t border-slate-800 pt-3">
-              <span className="text-[10px] uppercase font-bold text-slate-450 font-mono flex items-center gap-1.5">
+              <span className="text-[10px] uppercase font-bold text-slate-400 font-mono flex items-center gap-1.5">
                 <Shield size={12} className="text-brand-success" />
-                Jaminan Kepatuhan PBJT
+                Deposit Jaminan Gedung
               </span>
               <p className="text-[9px] text-slate-400 leading-relaxed font-light">
-                Tarif kamar bersifat transparan dan telah diformulasikan untuk penyisihan pajak PBJT (10%) untuk kontribusi daerah kabupaten/kota masing-masing.
+                Deposit jaminan untuk gedung kost ini adalah <strong className="text-amber-400 font-mono">{formatRupiah(property.deposit_amount ?? 500000)}</strong> (Dikembalikan utuh saat masa sewa berakhir).
               </p>
             </div>
           </div>

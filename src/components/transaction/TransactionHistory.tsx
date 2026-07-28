@@ -2,7 +2,8 @@ import React from 'react';
 import { Booking, Survey } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
 import TransactionStatusBadge from './TransactionStatusBadge';
-import { Calendar, Layers, Printer, ShieldCheck } from 'lucide-react';
+import { Calendar, Layers, Printer, ShieldCheck, Download, FileText } from 'lucide-react';
+import { generateInvoicePDF } from '../../utils/pdfGenerator';
 
 interface TransactionHistoryProps {
   bookings: Booking[];
@@ -43,24 +44,43 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                   <span className="font-mono font-bold text-amber-500 mt-0.5 block">{formatRupiah(b.total_price)}</span>
                 </div>
                 
-                {b.status === 'approved' && (
-                  <button
-                    onClick={() => onPrintReceipt({
-                      type: 'booking',
-                      id: b.midtrans_order_id || `INV-${b.id}`,
-                      name: b.tenant_name,
-                      roomNo: b.room_number,
-                      propertyName: `Samara Stay Unit`,
-                      amountPaid: b.total_price,
-                      method: b.payment_method || 'VIRTUAL_ACCOUNT',
-                      date: b.booking_date,
-                      details: `Pajak PBJT DKI Jakarta/Depok (10%) Terbayar`
-                    })}
-                    className="p-1 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl border border-slate-750 flex items-center gap-1.5 font-bold transition cursor-pointer text-[10px]"
-                  >
-                    <Printer size={11} />
-                    Cetak Bukti Bayar
-                  </button>
+                {(b.status === 'approved' || b.status === 'completed' || b.status === 'active') && (
+                  <div className="flex gap-1.5 mt-1">
+                    <button
+                      onClick={() => onPrintReceipt({
+                        type: 'booking',
+                        id: b.midtrans_order_id || `INV-${b.id}`,
+                        name: b.tenant_name,
+                        roomNo: b.room_number,
+                        propertyName: `Samara Stay Unit`,
+                        amountPaid: b.total_price,
+                        method: b.payment_method || 'VIRTUAL_ACCOUNT',
+                        date: b.booking_date,
+                        details: `Sewa Kamar + Deposit Jaminan Gedung Lunas`
+                      })}
+                      className="p-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl border border-slate-700 flex items-center gap-1 font-bold transition cursor-pointer text-[10px]"
+                    >
+                      <FileText size={11} />
+                      Lihat Invoice
+                    </button>
+                    <button
+                      onClick={() => generateInvoicePDF({
+                        type: 'booking',
+                        id: b.midtrans_order_id || `INV-${b.id}`,
+                        name: b.tenant_name,
+                        roomNo: b.room_number,
+                        propertyName: `Samara Stay Unit`,
+                        amountPaid: b.total_price,
+                        method: b.payment_method || 'VIRTUAL_ACCOUNT',
+                        date: b.booking_date,
+                        details: `Sewa Kamar + Deposit Jaminan Gedung Lunas`
+                      })}
+                      className="p-1 px-2.5 bg-[#2E6F40] hover:bg-[#1f4b2b] text-white rounded-xl flex items-center gap-1 font-bold transition cursor-pointer text-[10px] shadow-xs"
+                    >
+                      <Download size={11} />
+                      Unduh PDF
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -95,24 +115,43 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                   <span className="font-mono font-bold text-amber-500 mt-0.5 block">Rp 500.000</span>
                 </div>
                 
-                {s.status === 'survey_confirmed' && (
-                  <button
-                    onClick={() => onPrintReceipt({
-                      type: 'survey',
-                      id: `SRV-${s.id}`,
-                      name: s.client_name,
-                      roomNo: s.room_number,
-                      propertyName: `Samara Stay Unit`,
-                      amountPaid: 500000,
-                      method: 'MIDTRANS_SNAP',
-                      date: s.survey_date,
-                      details: `Komitmen Pengamanan Kamar`
-                    })}
-                    className="p-1 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl border border-slate-750 flex items-center gap-1.5 font-bold transition cursor-pointer text-[10px]"
-                  >
-                    <Printer size={11} />
-                    Bukti Janji Kunjungan
-                  </button>
+                {(s.status === 'survey_confirmed' || s.status === 'approved') && (
+                  <div className="flex gap-1.5 mt-1">
+                    <button
+                      onClick={() => onPrintReceipt({
+                        type: 'survey',
+                        id: `SRV-${s.id}`,
+                        name: s.client_name,
+                        roomNo: s.room_number,
+                        propertyName: `Samara Stay Unit`,
+                        amountPaid: 500000,
+                        method: 'MIDTRANS_SNAP',
+                        date: s.survey_date,
+                        details: `Komitmen Pengamanan Kamar`
+                      })}
+                      className="p-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl border border-slate-700 flex items-center gap-1 font-bold transition cursor-pointer text-[10px]"
+                    >
+                      <FileText size={11} />
+                      Lihat Invoice
+                    </button>
+                    <button
+                      onClick={() => generateInvoicePDF({
+                        type: 'survey',
+                        id: `SRV-${s.id}`,
+                        name: s.client_name,
+                        roomNo: s.room_number,
+                        propertyName: `Samara Stay Unit`,
+                        amountPaid: 500000,
+                        method: 'MIDTRANS_SNAP',
+                        date: s.survey_date,
+                        details: `Komitmen Pengamanan Kamar`
+                      })}
+                      className="p-1 px-2.5 bg-[#2E6F40] hover:bg-[#1f4b2b] text-white rounded-xl flex items-center gap-1 font-bold transition cursor-pointer text-[10px] shadow-xs"
+                    >
+                      <Download size={11} />
+                      Unduh PDF
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

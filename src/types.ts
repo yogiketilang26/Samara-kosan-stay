@@ -25,6 +25,7 @@ export interface Property {
   images: string[];
   lat?: number;
   lng?: number;
+  deposit_amount?: number;
   created_at?: string;
   description?: string;
   additional_rules?: string;
@@ -108,6 +109,7 @@ export interface Booking {
   occupant_ktp_image?: string;
   is_occupant_verified?: boolean;
   occupant_arrival_status?: 'pending' | 'checked_in';
+  signature_url?: string;
   created_at?: string;
 }
 
@@ -192,6 +194,7 @@ export interface Survey {
   payment_method?: string;
   pelunasan_deadline_days?: number;
   pelunasan_deadline_date?: string;
+  signature_url?: string;
   created_at?: string;
 }
 

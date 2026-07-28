@@ -1,19 +1,10 @@
 import React from 'react';
 import { formatRupiah } from '../../utils/formatCurrency';
-import { BadgeCheck, FileText, Printer, CheckCircle } from 'lucide-react';
+import { BadgeCheck, FileText, Printer, CheckCircle, Download } from 'lucide-react';
+import { generateInvoicePDF, InvoiceReceipt } from '../../utils/pdfGenerator';
 
 interface InvoiceCardProps {
-  receipt: {
-    type: 'survey' | 'booking';
-    id: string;
-    name: string;
-    roomNo: string;
-    propertyName: string;
-    amountPaid: number;
-    method: string;
-    date: string;
-    details?: string;
-  };
+  receipt: InvoiceReceipt;
   onClose: () => void;
 }
 
@@ -57,8 +48,8 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ receipt, onClose }) =>
         </div>
 
         <div className="flex justify-between border-b border-slate-100 py-1">
-          <span className="text-[#64748B] uppercase font-mono text-[9px]">Klasifikasi PBJT</span>
-          <span className="text-slate-700 font-sans italic">Pajak (10%) Disisihkan</span>
+          <span className="text-[#64748B] uppercase font-mono text-[9px]">Garansi Harga</span>
+          <span className="text-slate-700 font-sans italic">Bebas Pajak & Biaya Tambahan</span>
         </div>
       </div>
 
@@ -75,18 +66,26 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ receipt, onClose }) =>
         Dokumen ini diterbitkan oleh integrator sistem billing Samara Stay & Bank Mandiri sebagai dokumen setoran setelmen transaksi yang sah demi hukum.
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row gap-2 pt-2">
         <button
           onClick={onClose}
-          className="flex-1 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold cursor-pointer text-center text-[10px]"
+          className="py-2.5 px-3 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold cursor-pointer text-center text-[10px]"
         >
-          Selesai
+          Tutup
         </button>
         <button
           onClick={() => window.print()}
-          className="flex-1 py-2 bg-[#2E6F40] hover:bg-[#1f4b2b] font-bold border border-[#2E6F40] text-white rounded-xl cursor-pointer text-[10px]"
+          className="flex-1 py-2.5 px-3 bg-slate-200 hover:bg-slate-300 font-bold border border-slate-300 text-slate-800 rounded-xl cursor-pointer text-[10px] flex items-center justify-center gap-1.5"
         >
-          Cetak PDF
+          <Printer size={12} />
+          Cetak
+        </button>
+        <button
+          onClick={() => generateInvoicePDF(receipt)}
+          className="flex-1 py-2.5 px-3 bg-[#2E6F40] hover:bg-[#1f4b2b] font-bold border border-[#2E6F40] text-white rounded-xl cursor-pointer text-[10px] flex items-center justify-center gap-1.5 shadow-sm"
+        >
+          <Download size={12} />
+          Unduh PDF Invoice
         </button>
       </div>
 

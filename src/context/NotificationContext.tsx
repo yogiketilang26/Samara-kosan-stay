@@ -144,6 +144,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     // 1. SUPABASE REALTIME SUBSCRIPTION
     let unsubscribeBookings = () => {};
     let unsubscribeActivity = () => {};
+    let unsubscribeFacilities = () => {};
 
     if (isConfigured && client) {
       console.log('[NOTIFICATION SYSTEM] Setting up Supabase real-time listeners via realtimeManager...');
@@ -165,6 +166,37 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         console.log('[NOTIFICATION SYSTEM] Received activity log:', payload);
         if (payload.eventType === 'INSERT') {
           handleNewActivityLog(payload.new);
+        }
+      });
+
+      // Listen to changes in facilities table
+      unsubscribeFacilities = realtimeManager.subscribe('facilities', {}, (payload: any) => {
+        if (payload.eventType === 'POLLING_REFRESH') return;
+        console.log('[NOTIFICATION SYSTEM] Received facility update:', payload);
+        const { eventType, new: newRow, old: oldRow } = payload;
+        const facName = newRow?.name || oldRow?.name || 'Fasilitas';
+
+        if (eventType === 'INSERT') {
+          addToast({
+            title: '✨ Master Fasilitas Baru',
+            message: `Fasilitas "${facName}" telah ditambahkan ke data Master Fasilitas.`,
+            type: 'success',
+            duration: 6000,
+          });
+        } else if (eventType === 'UPDATE') {
+          addToast({
+            title: '🔄 Master Fasilitas Diperbarui',
+            message: `Fasilitas "${facName}" telah diperbarui secara real-time.`,
+            type: 'info',
+            duration: 6000,
+          });
+        } else if (eventType === 'DELETE') {
+          addToast({
+            title: '🗑️ Fasilitas Dihapus',
+            message: `Fasilitas "${facName}" telah dihapus dari Master Fasilitas.`,
+            type: 'error',
+            duration: 6000,
+          });
         }
       });
     }
@@ -193,6 +225,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       // Cleanup Supabase subscriptions safely using central unsubscribe
       unsubscribeBookings();
       unsubscribeActivity();
+      unsubscribeFacilities();
 
       // Cleanup local event listeners
       window.removeEventListener('samara_activity_log', handleLocalActivity);
