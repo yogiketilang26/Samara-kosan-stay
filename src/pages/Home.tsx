@@ -1056,6 +1056,86 @@ export default function Home({}: HomeProps) {
 
       const saved = await database.saveBooking(bookingRecord);
 
+      // Send booking confirmation email
+      const targetEmails = Array.from(new Set([bookingForm.email, bookingForm.isForOther ? bookingForm.occupantEmail : ''].filter(Boolean)));
+      for (const targetEmail of targetEmails) {
+        const formattedPrice = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(snapPaymentContext.grossAmount);
+        fetch('/api/email/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: targetEmail,
+            subject: `[Samara Stay] Invoice Pembayaran & Konfirmasi Sewa - Unit ${activeRoom.room_number}`,
+            html: `
+              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
+                <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
+                  <h1 style="font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 0;">SAMARA</h1>
+                  <p style="font-family: monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 4px 0 0 0;">S T A Y</p>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 30px;">
+                  <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">LUNAS / PAID</span>
+                  <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">INVOICE PEMBAYARAN</h2>
+                  <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">Order ID: ${snapPaymentContext.orderId}</p>
+                </div>
+
+                <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
+                  <p>Halo <strong>${bookingForm.fullName}</strong>,</p>
+                  <p>Terima kasih atas pembayaran Anda! Transaksi pemesanan kamar sewa Anda telah berhasil dikonfirmasi. Berikut adalah rincian tagihan lunas Anda:</p>
+                </div>
+
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
+                  <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Transaksi Hunian</h3>
+                  
+                  <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
+                    <tr>
+                      <td style="color: #64748b; width: 45%;">Nama Kos / Unit:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${activeProperty.name}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Nomor Kamar:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right; font-size: 14px; color: #334155;">Unit ${activeRoom.room_number}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Tipe Kontrak:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: capitalize;">${isDaily ? 'Harian (Daily)' : 'Bulanan (Monthly)'}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Tanggal Check-In:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${bookingCheckInDate || '-'}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Metode Pembayaran:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: uppercase;">${details.paymentMethod}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px;">Total Bayar:</td>
+                      <td style="color: #047857; font-weight: 900; font-size: 18px; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px; text-align: right;">
+                        ${formattedPrice}
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+
+                <div style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 25px;">
+                  <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Petunjuk Check-In:</h4>
+                  <ol style="font-size: 13px; color: #475569; padding-left: 20px; line-height: 1.7; margin: 0;">
+                    <li style="margin-bottom: 8px;">Simpan invoice digital ini sebagai bukti pelunasan yang sah saat serah terima unit.</li>
+                    <li style="margin-bottom: 8px;">Akses smart lock atau kunci fisik kamar beserta kartu akses akan diberikan oleh asisten hunian saat Anda tiba di lokasi.</li>
+                    <li>Harap membawa kartu identitas diri asli (KTP / Passport) yang sesuai saat check-in.</li>
+                  </ol>
+                </div>
+
+                <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
+                  <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
+                  <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi.</p>
+                </div>
+              </div>
+            `
+          })
+        }).catch(err => console.error('Error sending booking confirmation email:', err));
+      }
+
       setReceiptData({
         type: 'booking',
         id: saved.midtrans_order_id || '999',

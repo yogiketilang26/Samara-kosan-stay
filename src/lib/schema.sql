@@ -155,89 +155,114 @@ ALTER TABLE IF EXISTS settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS coupons ENABLE ROW LEVEL SECURITY;
 
 -- 1. properties table policies
+DROP POLICY IF EXISTS "Public Read Access for Properties" ON properties;
 CREATE POLICY "Public Read Access for Properties" ON properties
   FOR SELECT TO public USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Properties" ON properties;
 CREATE POLICY "Admin All Access for Properties" ON properties
   FOR ALL TO authenticated USING (true);
 
 -- 2. rooms table policies
+DROP POLICY IF EXISTS "Public Read Access for Rooms" ON rooms;
 CREATE POLICY "Public Read Access for Rooms" ON rooms
   FOR SELECT TO public USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Rooms" ON rooms;
 CREATE POLICY "Admin All Access for Rooms" ON rooms
   FOR ALL TO authenticated USING (true);
 
 -- 3. coupons table policies
+DROP POLICY IF EXISTS "Public Read Access for Coupons" ON coupons;
 CREATE POLICY "Public Read Access for Coupons" ON coupons
   FOR SELECT TO public USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Coupons" ON coupons;
 CREATE POLICY "Admin All Access for Coupons" ON coupons
   FOR ALL TO authenticated USING (true);
 
 -- 4. bookings table policies
+DROP POLICY IF EXISTS "Enable insert for public bookings" ON bookings;
 CREATE POLICY "Enable insert for public bookings" ON bookings
   FOR INSERT TO public WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Users can select their own bookings" ON bookings;
 CREATE POLICY "Users can select their own bookings" ON bookings
   FOR SELECT TO public USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Bookings" ON bookings;
 CREATE POLICY "Admin All Access for Bookings" ON bookings
   FOR ALL TO authenticated USING (true);
 
 -- 5. surveys table policies
+DROP POLICY IF EXISTS "Enable insert for public surveys" ON surveys;
 CREATE POLICY "Enable insert for public surveys" ON surveys
   FOR INSERT TO public WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Public select surveys" ON surveys;
 CREATE POLICY "Public select surveys" ON surveys
   FOR SELECT TO public USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Surveys" ON surveys;
 CREATE POLICY "Admin All Access for Surveys" ON surveys
   FOR ALL TO authenticated USING (true);
 
 -- 6. tenants table policies
+DROP POLICY IF EXISTS "Admin All Access for Tenants" ON tenants;
 CREATE POLICY "Admin All Access for Tenants" ON tenants
   FOR ALL TO authenticated USING (true);
 
 -- 7. payments table policies
+DROP POLICY IF EXISTS "Admin All Access for Payments" ON payments;
 CREATE POLICY "Admin All Access for Payments" ON payments
   FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Enable insert for payments via webhooks" ON payments;
 CREATE POLICY "Enable insert for payments via webhooks" ON payments
   FOR INSERT TO public WITH CHECK (true);
 
 -- 8. maintenance table policies
+DROP POLICY IF EXISTS "Enable insert for public maintenance" ON maintenance;
 CREATE POLICY "Enable insert for public maintenance" ON maintenance
   FOR INSERT TO public WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Maintenance" ON maintenance;
 CREATE POLICY "Admin All Access for Maintenance" ON maintenance
   FOR ALL TO authenticated USING (true);
 
 -- 9. users table policies
+DROP POLICY IF EXISTS "Admin All Access for Users" ON users;
 CREATE POLICY "Admin All Access for Users" ON users
   FOR ALL TO authenticated USING (true);
 
 -- 10. activity_logs table policies
+DROP POLICY IF EXISTS "Enable insert for activity logging" ON activity_logs;
 CREATE POLICY "Enable insert for activity logging" ON activity_logs
   FOR INSERT TO public WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Activity Logs" ON activity_logs;
 CREATE POLICY "Admin All Access for Activity Logs" ON activity_logs
   FOR ALL TO authenticated USING (true);
 
 -- 11. accounting & bookkeeping (accounts, financial_transactions, journal_entries)
+DROP POLICY IF EXISTS "Admin All Access for Accounts" ON accounts;
 CREATE POLICY "Admin All Access for Accounts" ON accounts
   FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Transactions" ON financial_transactions;
 CREATE POLICY "Admin All Access for Transactions" ON financial_transactions
   FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Journal Entries" ON journal_entries;
 CREATE POLICY "Admin All Access for Journal Entries" ON journal_entries
   FOR ALL TO authenticated USING (true);
 
 -- 12. system settings policies
+DROP POLICY IF EXISTS "Public Read Access for Settings" ON settings;
 CREATE POLICY "Public Read Access for Settings" ON settings
   FOR SELECT TO public USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for Settings" ON settings;
 CREATE POLICY "Admin All Access for Settings" ON settings
   FOR ALL TO authenticated USING (true);
 
@@ -347,18 +372,25 @@ ALTER TABLE IF EXISTS inventory_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS bank_statement_items ENABLE ROW LEVEL SECURITY;
 
 -- Select to public, full access to authenticated users
+DROP POLICY IF EXISTS "Admin All Access for petty_cash_requests" ON petty_cash_requests;
 CREATE POLICY "Admin All Access for petty_cash_requests" ON petty_cash_requests FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for fixed_assets" ON fixed_assets;
 CREATE POLICY "Admin All Access for fixed_assets" ON fixed_assets FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for budgets" ON budgets;
 CREATE POLICY "Admin All Access for budgets" ON budgets FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for vendors" ON vendors;
 CREATE POLICY "Admin All Access for vendors" ON vendors FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for purchase_orders" ON purchase_orders;
 CREATE POLICY "Admin All Access for purchase_orders" ON purchase_orders FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for inventory_items" ON inventory_items;
 CREATE POLICY "Admin All Access for inventory_items" ON inventory_items FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Admin All Access for bank_statement_items" ON bank_statement_items;
 CREATE POLICY "Admin All Access for bank_statement_items" ON bank_statement_items FOR ALL TO authenticated USING (true);
 
 -- Seed Data insertion
@@ -378,7 +410,7 @@ INSERT INTO budgets (id, category, limit_amount, spent) VALUES
 (2, 'Gaji & Bonus Karyawan', 12000000, 10000000),
 (3, 'Listrik & Air (Utilities)', 6000000, 5800000),
 (4, 'Marketing & Voucher', 3000000, 3200000)
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (category) DO NOTHING;
 
 INSERT INTO vendors (id, name, phone, category) VALUES
 (1, 'Depo Bangunan Jaya', '0811223344', 'Material Pemeliharaan'),
@@ -396,7 +428,7 @@ INSERT INTO inventory_items (id, name, stock, unit, min_stock, category) VALUES
 (2, 'Lampu LED Philips 12W', 2, 'Pcs', 5, 'Spare Parts'),
 (3, 'Tabung Gas Elpiji 12kg', 4, 'Tabung', 1, 'Kitchen Supplies'),
 (4, 'Sprei Kasur Standard', 8, 'Pcs', 2, 'Amenities')
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO bank_statement_items (id, date, "desc", amount, type, matched, matched_ref) VALUES
 (1, '2026-06-26', 'Settle Midtrans INV-001', 1800000, 'credit', true, 'INV-001'),
@@ -440,24 +472,39 @@ ALTER TABLE IF EXISTS property_facilities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS room_facilities ENABLE ROW LEVEL SECURITY;
 
 -- 5. RLS Policies
+DROP POLICY IF EXISTS "Public Select for facilities" ON facilities;
 CREATE POLICY "Public Select for facilities" ON facilities 
   FOR SELECT TO public USING (true);
+
+DROP POLICY IF EXISTS "Authenticated Select for facilities" ON facilities;
 CREATE POLICY "Authenticated Select for facilities" ON facilities 
   FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Admin All Access for facilities" ON facilities;
 CREATE POLICY "Admin All Access for facilities" ON facilities 
   FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Public Select for property_facilities" ON property_facilities;
 CREATE POLICY "Public Select for property_facilities" ON property_facilities 
   FOR SELECT TO public USING (true);
+
+DROP POLICY IF EXISTS "Authenticated Select for property_facilities" ON property_facilities;
 CREATE POLICY "Authenticated Select for property_facilities" ON property_facilities 
   FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Admin All Access for property_facilities" ON property_facilities;
 CREATE POLICY "Admin All Access for property_facilities" ON property_facilities 
   FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Public Select for room_facilities" ON room_facilities;
 CREATE POLICY "Public Select for room_facilities" ON room_facilities 
   FOR SELECT TO public USING (true);
+
+DROP POLICY IF EXISTS "Authenticated Select for room_facilities" ON room_facilities;
 CREATE POLICY "Authenticated Select for room_facilities" ON room_facilities 
   FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Admin All Access for room_facilities" ON room_facilities;
 CREATE POLICY "Admin All Access for room_facilities" ON room_facilities 
   FOR ALL TO authenticated USING (true);
 
@@ -473,8 +520,7 @@ INSERT INTO facilities (id, name, icon, category, description) VALUES
 (8, 'Kamar Mandi Dalam', 'Droplet', 'room', 'Kamar mandi pribadi dilengkapi shower dan toilet duduk'),
 (9, 'Kulkas dan Microwave Bersama', 'Refrigerator', 'property', 'Fasilitas kulkas pendingin & microwave pemanas makanan di area dapur bersama'),
 (10, 'Area Jemuran', 'Sun', 'property', 'Area khusus penjemuran pakaian yang lapang, bersih, beratap transparan & sirkulasi udara baik')
-ON CONFLICT (id) DO UPDATE SET
-  name = EXCLUDED.name,
+ON CONFLICT (name) DO UPDATE SET
   icon = EXCLUDED.icon,
   category = EXCLUDED.category,
   description = EXCLUDED.description;

@@ -597,6 +597,26 @@ export default function Admin({}: AdminProps) {
   const [emailSenderName, setEmailSenderName] = useState('Samara Stay Premium');
   const [emailSending, setEmailSending] = useState(false);
   const [emailResult, setEmailResult] = useState<{ success: boolean; message: string; details?: any } | null>(null);
+  const [emailDiagnosticsData, setEmailDiagnosticsData] = useState<any>(null);
+  const [runningDiagnostics, setRunningDiagnostics] = useState(false);
+
+  const handleRunEmailDiagnostics = async () => {
+    setRunningDiagnostics(true);
+    try {
+      const res = await fetch('/api/email/diagnostics');
+      const data = await res.json();
+      setEmailDiagnosticsData(data.diagnostics || data);
+      if (data.success) {
+        database.logActivity("System", "EMAIL_DIAGNOSTICS_SUCCESS", "Sukses menjalankan tes diagnostik MailerSend API");
+      } else {
+        database.logActivity("System", "EMAIL_DIAGNOSTICS_FAILED", "Diagnostik MailerSend mendeteksi potensi isu koneksi / kredensial");
+      }
+    } catch (err: any) {
+      setEmailDiagnosticsData({ error: err.message || 'Gagal terhubung ke endpoint diagnostik' });
+    } finally {
+      setRunningDiagnostics(false);
+    }
+  };
 
   // Custom state-based confirmation dialog to bypass iframe window.confirm blocks
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -4916,25 +4936,113 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={handleSendTestEmail}
-                    disabled={emailSending}
-                    className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-[#0D9488]/10 text-[#0D9488] text-black disabled:text-slate-500 font-extrabold py-2 rounded-xl transition duration-155 flex items-center justify-center gap-2 text-xs cursor-pointer"
-                  >
-                    {emailSending ? (
-                      <>
-                        <RotateCw size={13} className="animate-spin" />
-                        Sedang Mengirim...
-                      </>
-                    ) : (
-                      <>
-                        <Mail size={13} />
-                        Kirim Email Sekarang
-                      </>
-                    )}
-                  </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleSendTestEmail}
+                      disabled={emailSending}
+                      className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-[#0D9488]/10 text-black disabled:text-slate-500 font-extrabold py-2 rounded-xl transition duration-155 flex items-center justify-center gap-2 text-xs cursor-pointer"
+                    >
+                      {emailSending ? (
+                        <>
+                          <RotateCw size={13} className="animate-spin" />
+                          Sedang Mengirim...
+                        </>
+                      ) : (
+                        <>
+                          <Mail size={13} />
+                          Kirim Email Sekarang
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleRunEmailDiagnostics}
+                      disabled={runningDiagnostics}
+                      className="w-full bg-slate-800 hover:bg-slate-700 text-teal-400 font-bold py-2 rounded-xl border border-teal-500/30 transition duration-155 flex items-center justify-center gap-2 text-xs cursor-pointer"
+                    >
+                      {runningDiagnostics ? (
+                        <>
+                          <RotateCw size={13} className="animate-spin" />
+                          Memeriksa Status...
+                        </>
+                      ) : (
+                        <>
+                          <Activity size={13} />
+                          Jalankan Diagnostik API
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
+
+                {emailDiagnosticsData && (
+                  <div className="bg-slate-950/80 border border-teal-500/30 rounded-2xl p-4 text-[11px] space-y-2.5 animate-fade-in">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                      <span className="font-mono font-bold uppercase text-teal-400 tracking-wider flex items-center gap-1.5 text-[10px]">
+                        <Activity size={12} /> Hasil Diagnostik MailerSend API
+                      </span>
+                      <span className="text-[9px] text-slate-500 font-mono">
+                        {emailDiagnosticsData.timestamp ? new Date(emailDiagnosticsData.timestamp).toLocaleTimeString('id-ID') : 'Real-time'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                      <div className="bg-slate-900/90 p-2 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 block uppercase text-[8px] font-bold">API Key Status</span>
+                        <span className={emailDiagnosticsData.credentials?.apiKeyConfigured ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+                          {emailDiagnosticsData.credentials?.apiKeyConfigured ? `Terpasang (${emailDiagnosticsData.credentials.apiKeyMasked})` : 'Belum Dikonfigurasi'}
+                        </span>
+                      </div>
+                      <div className="bg-slate-900/90 p-2 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 block uppercase text-[8px] font-bold">Koneksi Server</span>
+                        <span className={emailDiagnosticsData.connectivity?.status === 'success' ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
+                          {emailDiagnosticsData.connectivity?.status === 'success' ? '200 OK (Terhubung)' : emailDiagnosticsData.connectivity?.message || 'Error'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {emailDiagnosticsData.domains && emailDiagnosticsData.domains.length > 0 && (
+                      <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 text-[10px]">
+                        <span className="text-slate-400 block uppercase font-mono font-bold text-[9px] mb-1">Domain Terverifikasi ({emailDiagnosticsData.domains.length}):</span>
+                        <div className="space-y-1">
+                          {emailDiagnosticsData.domains.map((dom: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center text-slate-300 font-mono text-[10px]">
+                              <span>{dom.name}</span>
+                              <span className="text-emerald-400 font-bold text-[9px] bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                                Verified
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {emailDiagnosticsData.activityLogs && emailDiagnosticsData.activityLogs.length > 0 && (
+                      <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 text-[10px]">
+                        <span className="text-slate-400 block uppercase font-mono font-bold text-[9px] mb-1">Queue & History Email Terakhir ({emailDiagnosticsData.activityLogs.length}):</span>
+                        <div className="space-y-1 max-h-28 overflow-y-auto no-scrollbar font-mono text-[9px]">
+                          {emailDiagnosticsData.activityLogs.map((log: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center text-slate-300 border-b border-white/5 pb-1">
+                              <span className="truncate max-w-[180px]">{log.recipient}</span>
+                              <span className="text-slate-400">{log.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {emailDiagnosticsData.recommendations && emailDiagnosticsData.recommendations.length > 0 && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 p-2.5 rounded-xl text-[10px] space-y-1">
+                        <span className="font-bold uppercase font-mono text-[9px] block">Rekomendasi Diagnostik:</span>
+                        {emailDiagnosticsData.recommendations.map((rec: string, idx: number) => (
+                          <p key={idx} className="leading-normal font-sans">• {rec}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {emailResult && (
                   <div className={`p-4 rounded-2xl border text-[10px] space-y-1.5 ${

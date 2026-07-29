@@ -300,6 +300,141 @@ async function startServer() {
     return fallbackEmail;
   }
 
+  // Diagnostic Utility Function for MailerSend API verification & email queue debugging
+  async function runMailerSendDiagnostics() {
+    const timestamp = new Date().toISOString();
+    let apiKey = process.env.MAILERSEND_API_KEY || '';
+    apiKey = apiKey.trim();
+    if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
+    else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
+    apiKey = apiKey.trim();
+
+    const rawFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+    const rawFromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+
+    const credentialsCheck = {
+      apiKeyConfigured: Boolean(apiKey && apiKey !== 'YOUR_MAILERSEND_API_KEY_HERE'),
+      apiKeyMasked: apiKey && apiKey !== 'YOUR_MAILERSEND_API_KEY_HERE' 
+        ? `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}` 
+        : 'NOT_CONFIGURED',
+      fromEmail: rawFromEmail,
+      fromName: rawFromName,
+      isTrialDomain: rawFromEmail.includes('mlsender.net')
+    };
+
+    const diagnostics: any = {
+      timestamp,
+      environment: process.env.NODE_ENV || 'development',
+      credentials: credentialsCheck,
+      connectivity: {
+        status: 'pending',
+        httpCode: null,
+        message: ''
+      },
+      domains: [],
+      activityLogs: [],
+      resolvedSender: null,
+      recommendations: []
+    };
+
+    if (!credentialsCheck.apiKeyConfigured) {
+      diagnostics.connectivity.status = 'failed';
+      diagnostics.connectivity.message = 'MAILERSEND_API_KEY is missing or set to default placeholder value.';
+      diagnostics.recommendations.push('Daftarkan MAILERSEND_API_KEY yang valid di environment variables (.env / settings).');
+      console.warn('[MAILERSEND DIAGNOSTICS] API Key not configured.');
+      return diagnostics;
+    }
+
+    try {
+      console.log('[MAILERSEND DIAGNOSTICS] Verifying MailerSend API connectivity & verified domains...');
+      const domainsRes = await fetch('https://api.mailersend.com/v1/domains', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      diagnostics.connectivity.httpCode = domainsRes.status;
+
+      if (domainsRes.status === 200) {
+        diagnostics.connectivity.status = 'success';
+        diagnostics.connectivity.message = 'Koneksi ke MailerSend API Berhasil! (HTTP 200 OK)';
+        const domainsJson = await domainsRes.json();
+        
+        if (domainsJson && Array.isArray(domainsJson.data)) {
+          diagnostics.domains = domainsJson.data.map((d: any) => ({
+            id: d.id,
+            name: d.name,
+            is_verified: d.is_verified ?? true,
+            created_at: d.created_at
+          }));
+        }
+
+        const resolvedSender = await resolveVerifiedFromEmail(apiKey, rawFromEmail);
+        diagnostics.resolvedSender = resolvedSender;
+
+        if (credentialsCheck.isTrialDomain) {
+          diagnostics.recommendations.push(
+            'Perhatian: Anda sedang menggunakan domain trial MailerSend (*.mlsender.net). Pada mode trial, email booking HANYA terkirim ke alamat email pembuat akun MailerSend / Authorized Recipients.'
+          );
+        }
+
+        if (diagnostics.domains.length === 0) {
+          diagnostics.recommendations.push(
+            'Tidak ada domain terverifikasi di akun MailerSend Anda. Silakan tambahkan dan verifikasi domain kos Anda di MailerSend Dashboard.'
+          );
+        }
+      } else {
+        const errorText = await domainsRes.text();
+        diagnostics.connectivity.status = 'failed';
+        diagnostics.connectivity.message = `MailerSend API mengembalikan status HTTP ${domainsRes.status}`;
+        diagnostics.connectivity.errorDetails = errorText;
+
+        if (domainsRes.status === 401) {
+          diagnostics.recommendations.push('HTTP 401 Unauthorized: Periksa kembali apakah MAILERSEND_API_KEY aktif dan tepat.');
+        } else if (domainsRes.status === 422) {
+          diagnostics.recommendations.push('HTTP 422 Unprocessable Entity: Alamat pengirim (From Email) atau domain belum sesuai di MailerSend.');
+        }
+      }
+
+      // Query recent email message queue logs for debugging failed booking emails
+      try {
+        console.log('[MAILERSEND DIAGNOSTICS] Querying recent message queue logs...');
+        const activityRes = await fetch('https://api.mailersend.com/v1/messages?limit=10', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (activityRes.status === 200) {
+          const actJson = await activityRes.json();
+          if (actJson && Array.isArray(actJson.data)) {
+            diagnostics.activityLogs = actJson.data.slice(0, 10).map((msg: any) => ({
+              id: msg.id,
+              subject: msg.subject,
+              created_at: msg.created_at,
+              status: msg.status || 'processed',
+              recipient: msg.emails ? msg.emails.map((e: any) => e.email).join(', ') : (msg.to || 'N/A')
+            }));
+          }
+        }
+      } catch (actErr: any) {
+        console.warn('[MAILERSEND DIAGNOSTICS] Failed fetching activity queue:', actErr.message || actErr);
+      }
+
+    } catch (connErr: any) {
+      diagnostics.connectivity.status = 'error';
+      diagnostics.connectivity.message = `Gagal terhubung ke server MailerSend: ${connErr.message || connErr}`;
+      diagnostics.recommendations.push('Periksa koneksi jaringan internet atau status layanan MailerSend.');
+    }
+
+    console.log('[MAILERSEND DIAGNOSTICS RESULT]', JSON.stringify(diagnostics, null, 2));
+    return diagnostics;
+  }
+
   // Helper function to send email via MailerSend API
   async function sendServerEmail(to: string, subject: string, text: string, html: string) {
     try {
@@ -423,11 +558,11 @@ async function startServer() {
         details: notification
       });
 
-      // Synchronize changes to Supabase if configured
+      // Synchronize changes to Supabase using Service Role Key (bypasses RLS on backend)
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
-      const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey && supabaseUrl !== 'undefined' && supabaseAnonKey !== 'undefined');
-      const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      const isSupabaseConfigured = Boolean(supabaseUrl && supabaseKey && supabaseUrl !== 'undefined' && supabaseKey !== 'undefined');
+      const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseKey) : null;
 
       if (supabase && orderId) {
         if (paymentStatus === 'paid') {
@@ -509,6 +644,42 @@ async function startServer() {
               };
               const { error: payErr } = await supabase.from('payments').insert(paymentPayload);
               if (payErr) console.error('[SUPABASE WEBHOOK ERROR] Create payment invoice error:', payErr);
+
+              // 6. Post double-entry financial accounting transaction
+              try {
+                const trxDate = new Date().toISOString().split('T')[0];
+                const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+                const { error: rpcErr } = await supabase.rpc('post_financial_transaction', {
+                  p_transaction_no: trxNo,
+                  p_transaction_date: trxDate,
+                  p_category: 'Penerimaan Sewa',
+                  p_description: `[WEBHOOK] Pelunasan Sewa ${booking.tenant_name} Unit ${booking.room_number}`,
+                  p_amount: booking.total_price,
+                  p_type: 'income',
+                  p_reference_type: 'payment',
+                  p_reference_id: invoiceId,
+                  p_created_by: 'Midtrans Webhook',
+                  p_debit_account_id: 1010,
+                  p_credit_account_id: 4000
+                });
+
+                if (rpcErr) {
+                  // Fallback direct insert into financial_transactions
+                  await supabase.from('financial_transactions').insert({
+                    transaction_no: trxNo,
+                    transaction_date: trxDate,
+                    category: 'Penerimaan Sewa',
+                    description: `[WEBHOOK] Pelunasan Sewa ${booking.tenant_name} Unit ${booking.room_number}`,
+                    amount: booking.total_price,
+                    type: 'income',
+                    reference_type: 'payment',
+                    reference_id: invoiceId,
+                    created_by: 'Midtrans Webhook'
+                  });
+                }
+              } catch (finErr) {
+                console.error('[SUPABASE WEBHOOK WARNING] Financial transaction recording warning:', finErr);
+              }
 
               // Fetch property info for high fidelity invoice details
               let property = null;
@@ -724,6 +895,41 @@ async function startServer() {
               const { error: payErr } = await supabase.from('payments').insert(srvInvPayload);
               if (payErr) console.error('[SUPABASE WEBHOOK ERROR] Create survey invoice error:', payErr);
 
+              // 5. Post double-entry financial accounting transaction for survey DP
+              try {
+                const trxDate = new Date().toISOString().split('T')[0];
+                const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+                const { error: rpcErr } = await supabase.rpc('post_financial_transaction', {
+                  p_transaction_no: trxNo,
+                  p_transaction_date: trxDate,
+                  p_category: 'DP Survey / Reservasi',
+                  p_description: `[WEBHOOK] Pelunasan DP Survey ${survey.tenant_name} Unit ${survey.room_number}`,
+                  p_amount: survey.dp_amount || 500000,
+                  p_type: 'dp_booking',
+                  p_reference_type: 'payment',
+                  p_reference_id: srvInvPayload.id,
+                  p_created_by: 'Midtrans Webhook',
+                  p_debit_account_id: 1010, // Kas & Bank Mandiri
+                  p_credit_account_id: 1300 // Uang Muka Penyewa / DP
+                });
+
+                if (rpcErr) {
+                  await supabase.from('financial_transactions').insert({
+                    transaction_no: trxNo,
+                    transaction_date: trxDate,
+                    category: 'DP Survey / Reservasi',
+                    description: `[WEBHOOK] Pelunasan DP Survey ${survey.tenant_name} Unit ${survey.room_number}`,
+                    amount: survey.dp_amount || 500000,
+                    type: 'dp_booking',
+                    reference_type: 'payment',
+                    reference_id: srvInvPayload.id,
+                    created_by: 'Midtrans Webhook'
+                  });
+                }
+              } catch (finErr) {
+                console.error('[SUPABASE WEBHOOK WARNING] Survey financial transaction recording warning:', finErr);
+              }
+
               // Send premium email notification via MailerSend
               if (survey.email) {
                 const subject = `[Samara Stay] Jadwal Survey Kamar Dikonfirmasi - Unit ${survey.room_number}`;
@@ -879,6 +1085,22 @@ async function startServer() {
         success: false,
         message: 'Terjadi kesalahan sistem internal saat mengirim email.',
         error: err.message || err
+      });
+    }
+  });
+
+  // GET /api/email/diagnostics - Diagnostic endpoint for MailerSend verification, credential status, and email log history
+  app.get(['/api/email/diagnostics', '/api/mailersend/diagnostics'], async (req, res) => {
+    try {
+      const report = await runMailerSendDiagnostics();
+      return res.json({
+        success: report.connectivity.status === 'success',
+        diagnostics: report
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message || 'Gagal menjalankan diagnostik MailerSend API'
       });
     }
   });
