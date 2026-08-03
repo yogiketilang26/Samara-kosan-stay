@@ -50,7 +50,7 @@ class ObservabilitySystem {
   private logs: LogEntry[] = [];
   
   // Custom user email context
-  private currentUserEmail: string = 'yogiketilang33@gmail.com';
+  private currentUserEmail: string = 'unknown';
 
   constructor() {
     this.setupGlobalErrorHandler();

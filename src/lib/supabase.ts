@@ -457,7 +457,7 @@ export const database = {
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('properties')
         .select(`
           *,
@@ -474,15 +474,25 @@ export const database = {
         `)
         .order('id', { ascending: true })
         .range(offset, offset + limit - 1);
+
       if (error) {
-        logSupabaseError('fetchProperties', error);
-        return [];
+        console.warn('[fetchProperties] Relational select failed, attempting fallback select:', error.message);
+        const fallback = await supabase
+          .from('properties')
+          .select('*')
+          .order('id', { ascending: true })
+          .range(offset, offset + limit - 1);
+        if (fallback.error) {
+          logSupabaseError('fetchProperties', fallback.error);
+          return [];
+        }
+        data = fallback.data;
       }
       
       const mapped = (data || []).map((p: any) => {
         const resolvedFacilities = (p.property_facilities || [])
-          .map((pf: any) => pf.facilities)
-          .filter((f: any) => f !== null)
+          .map((pf: any) => pf?.facilities)
+          .filter((f: any) => f !== null && f !== undefined)
           .map((f: any) => ({
             id: f.id,
             name: f.name,
@@ -503,7 +513,7 @@ export const database = {
 
         const cleanProperty = { 
           ...p, 
-          facilities: resolvedFacilities,
+          facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(p.facilities) ? p.facilities : []),
           deposit_amount: depositVal ?? 500000
         };
         delete cleanProperty.property_facilities;
@@ -572,34 +582,18 @@ export const database = {
             const toDelete = currentFacilityIds.filter(fid => !targetFacilityIds.includes(fid));
             const toInsert = targetFacilityIds.filter(fid => !currentFacilityIds.includes(fid));
 
-            if (toDelete.length > 0) {
-              await supabase
-                .from('property_facilities')
-                .delete()
-                .eq('property_id', propertyId)
-                .in('facility_id', toDelete);
+            for (const fid of toDelete) {
+              await this.removeFacilityFromProperty(propertyId, fid);
             }
 
-            if (toInsert.length > 0) {
-              const insertRows = toInsert.map(fid => ({
-                property_id: propertyId,
-                facility_id: fid
-              }));
-              await supabase
-                .from('property_facilities')
-                .insert(insertRows);
+            for (const fid of toInsert) {
+              await this.assignFacilityToProperty(propertyId, fid);
             }
           }
         } else {
           // CREATE MODE: Insert associations directly
-          if (targetFacilityIds.length > 0) {
-            const insertRows = targetFacilityIds.map(fid => ({
-              property_id: propertyId,
-              facility_id: fid
-            }));
-            await supabase
-              .from('property_facilities')
-              .insert(insertRows);
+          for (const fid of targetFacilityIds) {
+            await this.assignFacilityToProperty(propertyId, fid);
           }
         }
       }
@@ -638,7 +632,7 @@ export const database = {
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
     try {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('rooms')
         .select(`
           *,
@@ -655,15 +649,25 @@ export const database = {
         `)
         .order('room_number', { ascending: true })
         .range(offset, offset + limit - 1);
+
       if (error) {
-        logSupabaseError('fetchRooms', error);
-        return [];
+        console.warn('[fetchRooms] Relational select failed, attempting fallback select:', error.message);
+        const fallback = await supabase
+          .from('rooms')
+          .select('*')
+          .order('room_number', { ascending: true })
+          .range(offset, offset + limit - 1);
+        if (fallback.error) {
+          logSupabaseError('fetchRooms', fallback.error);
+          return [];
+        }
+        data = fallback.data;
       }
       
       const mapped = (data || []).map((r: any) => {
         const resolvedFacilities = (r.room_facilities || [])
-          .map((rf: any) => rf.facilities)
-          .filter((f: any) => f !== null)
+          .map((rf: any) => rf?.facilities)
+          .filter((f: any) => f !== null && f !== undefined)
           .map((f: any) => ({
             id: f.id,
             name: f.name,
@@ -671,7 +675,10 @@ export const database = {
             category: f.category,
             description: f.description
           }));
-        const cleanRoom = { ...r, facilities: resolvedFacilities };
+        const cleanRoom = { 
+          ...r, 
+          facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(r.facilities) ? r.facilities : [])
+        };
         delete cleanRoom.room_facilities;
         return cleanRoom;
       });
@@ -728,34 +735,18 @@ export const database = {
             const toDelete = currentFacilityIds.filter(fid => !targetFacilityIds.includes(fid));
             const toInsert = targetFacilityIds.filter(fid => !currentFacilityIds.includes(fid));
 
-            if (toDelete.length > 0) {
-              await supabase
-                .from('room_facilities')
-                .delete()
-                .eq('room_id', roomId)
-                .in('facility_id', toDelete);
+            for (const fid of toDelete) {
+              await this.removeFacilityFromRoom(roomId, fid);
             }
 
-            if (toInsert.length > 0) {
-              const insertRows = toInsert.map(fid => ({
-                room_id: roomId,
-                facility_id: fid
-              }));
-              await supabase
-                .from('room_facilities')
-                .insert(insertRows);
+            for (const fid of toInsert) {
+              await this.assignFacilityToRoom(roomId, fid);
             }
           }
         } else {
           // CREATE MODE: Insert directly
-          if (targetFacilityIds.length > 0) {
-            const insertRows = targetFacilityIds.map(fid => ({
-              room_id: roomId,
-              facility_id: fid
-            }));
-            await supabase
-              .from('room_facilities')
-              .insert(insertRows);
+          for (const fid of targetFacilityIds) {
+            await this.assignFacilityToRoom(roomId, fid);
           }
         }
       }
@@ -1395,7 +1386,8 @@ export const database = {
     return settings;
   },
 
-  async fetchMasterFacilities(): Promise<Facility[]> {
+  // --- FACILITIES & ASSIGNMENTS (ID-BASED CRUD) ---
+  async fetchFacilities(): Promise<Facility[]> {
     if (!isSupabaseConfigured) return [];
     try {
       const { data, error } = await supabase
@@ -1403,90 +1395,229 @@ export const database = {
         .select('*')
         .order('id', { ascending: true });
       if (error) {
-        logSupabaseError('fetchMasterFacilities', error);
+        logSupabaseError('fetchFacilities', error);
         return [];
       }
-
-      let facilitiesList = (data || []) as Facility[];
-
-      // Ensure new master facilities exist in Supabase database
-      const hasFridgeMicrowave = facilitiesList.some(f => f.name.toLowerCase().includes('kulkas') || f.name.toLowerCase().includes('microwave'));
-      const hasDryingArea = facilitiesList.some(f => f.name.toLowerCase().includes('jemuran'));
-
-      const toInsert: any[] = [];
-      if (!hasFridgeMicrowave) {
-        toInsert.push({
-          name: 'Kulkas dan Microwave Bersama',
-          icon: 'Refrigerator',
-          category: 'property',
-          description: 'Fasilitas kulkas pendingin & microwave pemanas makanan di area dapur bersama'
-        });
-      }
-      if (!hasDryingArea) {
-        toInsert.push({
-          name: 'Area Jemuran',
-          icon: 'Sun',
-          category: 'property',
-          description: 'Area khusus penjemuran pakaian yang lapang, bersih, beratap transparan & sirkulasi udara baik'
-        });
-      }
-
-      if (toInsert.length > 0) {
-        try {
-          const { data: insertedData, error: insertErr } = await supabase
-            .from('facilities')
-            .insert(toInsert)
-            .select('*');
-          if (!insertErr && insertedData) {
-            facilitiesList = [...facilitiesList, ...insertedData];
-          }
-        } catch (e) {
-          console.warn('Auto-seed facilities error:', e);
-        }
-      }
-
-      return facilitiesList;
+      return (data || []) as Facility[];
     } catch (err) {
-      logSupabaseError('fetchMasterFacilities', err, true);
+      logSupabaseError('fetchFacilities', err, true);
       return [];
     }
   },
 
-  async saveMasterFacility(fac: Partial<Facility>): Promise<Facility> {
+  async createFacility(name: string, icon: string, category: string, description?: string): Promise<Facility> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
-      const id = fac.id;
-      const payload = { ...fac };
-      delete (payload as any).id;
-
-      const { data, error } = await safeSupabaseUpsert('facilities', payload, id);
+      const payload = {
+        name: name.trim(),
+        icon: icon || 'Sparkles',
+        category: category || 'general',
+        description: description ? description.trim() : ''
+      };
+      const { data, error } = await supabase
+        .from('facilities')
+        .insert(payload)
+        .select('*');
       if (error) {
-        logSupabaseError('saveMasterFacility', error);
-        throw new Error(`Gagal menyimpan fasilitas master: ${error.message}`);
+        logSupabaseError('createFacility', error);
+        throw new Error(`Gagal membuat fasilitas: ${error.message}`);
       }
-      const updated = (data && data.length > 0 ? data[0] : fac) as Facility;
-      await this.logActivity("System", fac.id ? "UPDATE_MASTER_FACILITY" : "CREATE_MASTER_FACILITY", `Fasilitas master ${updated.name} berhasil disimpan.`);
-      return updated;
+      const created = data && data.length > 0 ? data[0] : null;
+      await this.logActivity("System", "CREATE_FACILITY", `Membuat fasilitas ID ${created?.id}: ${name}`);
+      return created as Facility;
     } catch (err: any) {
-      console.error('saveMasterFacility failed:', err);
+      console.error('createFacility failed:', err);
       throw err;
     }
   },
 
-  async deleteMasterFacility(id: number): Promise<boolean> {
+  async updateFacility(id: number, data: Partial<Omit<Facility, 'id'>>): Promise<Facility> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const payload: any = {};
+      if (data.name !== undefined) payload.name = data.name.trim();
+      if (data.icon !== undefined) payload.icon = data.icon;
+      if (data.category !== undefined) payload.category = data.category;
+      if (data.description !== undefined) payload.description = data.description.trim();
+
+      const { data: updatedData, error } = await supabase
+        .from('facilities')
+        .update(payload)
+        .eq('id', id)
+        .select('*');
+      if (error) {
+        logSupabaseError('updateFacility', error);
+        throw new Error(`Gagal memperbarui fasilitas: ${error.message}`);
+      }
+      const updated = updatedData && updatedData.length > 0 ? updatedData[0] : null;
+      await this.logActivity("System", "UPDATE_FACILITY", `Memperbarui fasilitas ID ${id}: ${updated?.name || ''}`);
+      return updated as Facility;
+    } catch (err: any) {
+      console.error('updateFacility failed:', err);
+      throw err;
+    }
+  },
+
+  async deleteFacility(id: number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const { error } = await supabase.from('facilities').delete().eq('id', id);
       if (error) {
-        logSupabaseError('deleteMasterFacility', error);
-        throw new Error(`Gagal menghapus fasilitas master: ${error.message}`);
+        logSupabaseError('deleteFacility', error);
+        throw new Error(`Gagal menghapus fasilitas: ${error.message}`);
       }
-      await this.logActivity("System", "DELETE_MASTER_FACILITY", `Menghapus fasilitas master ID: ${id}`);
+      await this.logActivity("System", "DELETE_FACILITY", `Menghapus fasilitas ID: ${id}`);
       return true;
     } catch (err: any) {
-      console.error('deleteMasterFacility failed:', err);
+      console.error('deleteFacility failed:', err);
       throw err;
     }
+  },
+
+  async assignFacilityToProperty(propertyId: number, facilityId: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase
+        .from('property_facilities')
+        .upsert({ property_id: propertyId, facility_id: facilityId }, { onConflict: 'property_id,facility_id' });
+      if (error) {
+        logSupabaseError('assignFacilityToProperty', error);
+        throw new Error(`Gagal menetapkan fasilitas ke properti: ${error.message}`);
+      }
+      return true;
+    } catch (err: any) {
+      console.error('assignFacilityToProperty failed:', err);
+      throw err;
+    }
+  },
+
+  async removeFacilityFromProperty(propertyId: number, facilityId: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase
+        .from('property_facilities')
+        .delete()
+        .eq('property_id', propertyId)
+        .eq('facility_id', facilityId);
+      if (error) {
+        logSupabaseError('removeFacilityFromProperty', error);
+        throw new Error(`Gagal menghapus fasilitas dari properti: ${error.message}`);
+      }
+      return true;
+    } catch (err: any) {
+      console.error('removeFacilityFromProperty failed:', err);
+      throw err;
+    }
+  },
+
+  async assignFacilityToRoom(roomId: number, facilityId: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase
+        .from('room_facilities')
+        .upsert({ room_id: roomId, facility_id: facilityId }, { onConflict: 'room_id,facility_id' });
+      if (error) {
+        logSupabaseError('assignFacilityToRoom', error);
+        throw new Error(`Gagal menetapkan fasilitas ke kamar: ${error.message}`);
+      }
+      return true;
+    } catch (err: any) {
+      console.error('assignFacilityToRoom failed:', err);
+      throw err;
+    }
+  },
+
+  async removeFacilityFromRoom(roomId: number, facilityId: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase
+        .from('room_facilities')
+        .delete()
+        .eq('room_id', roomId)
+        .eq('facility_id', facilityId);
+      if (error) {
+        logSupabaseError('removeFacilityFromRoom', error);
+        throw new Error(`Gagal menghapus fasilitas dari kamar: ${error.message}`);
+      }
+      return true;
+    } catch (err: any) {
+      console.error('removeFacilityFromRoom failed:', err);
+      throw err;
+    }
+  },
+
+  async fetchFacilitiesForProperty(propertyId: number): Promise<Facility[]> {
+    if (!isSupabaseConfigured) return [];
+    try {
+      const { data, error } = await supabase
+        .from('property_facilities')
+        .select(`
+          facility_id,
+          facilities (
+            id,
+            name,
+            icon,
+            category,
+            description
+          )
+        `)
+        .eq('property_id', propertyId);
+      if (error) {
+        logSupabaseError('fetchFacilitiesForProperty', error);
+        return [];
+      }
+      return (data || [])
+        .map((pf: any) => pf.facilities)
+        .filter((f: any) => f !== null) as Facility[];
+    } catch (err) {
+      logSupabaseError('fetchFacilitiesForProperty', err, true);
+      return [];
+    }
+  },
+
+  async fetchFacilitiesForRoom(roomId: number): Promise<Facility[]> {
+    if (!isSupabaseConfigured) return [];
+    try {
+      const { data, error } = await supabase
+        .from('room_facilities')
+        .select(`
+          facility_id,
+          facilities (
+            id,
+            name,
+            icon,
+            category,
+            description
+          )
+        `)
+        .eq('room_id', roomId);
+      if (error) {
+        logSupabaseError('fetchFacilitiesForRoom', error);
+        return [];
+      }
+      return (data || [])
+        .map((rf: any) => rf.facilities)
+        .filter((f: any) => f !== null) as Facility[];
+    } catch (err) {
+      logSupabaseError('fetchFacilitiesForRoom', err, true);
+      return [];
+    }
+  },
+
+  async fetchMasterFacilities(): Promise<Facility[]> {
+    return this.fetchFacilities();
+  },
+
+  async saveMasterFacility(fac: Partial<Facility>): Promise<Facility> {
+    if (fac.id) {
+      return this.updateFacility(fac.id, fac);
+    } else {
+      return this.createFacility(fac.name || '', fac.icon || 'Sparkles', fac.category || 'general', fac.description);
+    }
+  },
+
+  async deleteMasterFacility(id: number): Promise<boolean> {
+    return this.deleteFacility(id);
   },
 
   // --- SYSTEM LOGGERS ---

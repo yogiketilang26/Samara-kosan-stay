@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
+import { uploadToSupabaseStorage } from '../../utils/storageUploader';
 import { Button } from '../common/Button';
-import { UploadCloud, Trash2, Image, RotateCw } from 'lucide-react';
+import { UploadCloud, Trash2, Image, RotateCw, Loader2 } from 'lucide-react';
 import { PRESETS } from '../../utils/imagePresets';
 import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
@@ -75,7 +76,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         terms: property.terms || '',
         regulations: property.regulations || ''
       });
-      setSelectedFacilityIds((property.facilities || []).map((f: any) => f.id));
+      setSelectedFacilityIds((property.facilities || []).map((f: any) => typeof f === 'number' ? f : (f?.id || f?.facility_id)).filter(Boolean));
     } else {
       setSelectedFacilityIds([]);
     }
@@ -84,21 +85,38 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
 
+  const [isUploadingMain, setIsUploadingMain] = useState(false);
+  const [isUploadingGallery, setIsUploadingGallery] = useState(false);
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        alert("Ukuran gambar maksimal adalah 10MB!");
+      if (file.size > 20 * 1024 * 1024) {
+        alert("Ukuran gambar maksimal adalah 20MB!");
         return;
       }
       try {
-        const compressedBase64 = await compressImage(file, 640, 480, 0.5);
+        setIsUploadingMain(true);
+        const result = await uploadToSupabaseStorage(
+          file,
+          'property-images',
+          `prop_${formData.name || 'main'}`,
+          { maxLongestSide: 1920, quality: 0.92 }
+        );
+        setFormData(prev => ({
+          ...prev,
+          image_url: result.publicUrl
+        }));
+      } catch (err: any) {
+        console.error('[PropertyForm] Upload main image error:', err);
+        // Fallback to compressed base64 if storage network is unavailable
+        const compressedBase64 = await compressImage(file, 1280, 960, 0.7);
         setFormData(prev => ({
           ...prev,
           image_url: compressedBase64
         }));
-      } catch (err) {
-        console.error(err);
+      } finally {
+        setIsUploadingMain(false);
       }
     }
   };
@@ -120,24 +138,33 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
   const handleGalleryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
+      setIsUploadingGallery(true);
       const newImages = [...formData.images];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        if (file.size > 10 * 1024 * 1024) {
-          alert("Ukuran gambar maksimal adalah 10MB!");
+        if (file.size > 20 * 1024 * 1024) {
+          alert("Ukuran gambar maksimal adalah 20MB!");
           continue;
         }
         try {
-          const compressedBase64 = await compressImage(file, 640, 480, 0.5);
+          const result = await uploadToSupabaseStorage(
+            file,
+            'property-images',
+            `prop_gal_${formData.name || 'gallery'}`,
+            { maxLongestSide: 1920, quality: 0.92 }
+          );
+          newImages.push(result.publicUrl);
+        } catch (err: any) {
+          console.error('[PropertyForm] Upload gallery image error:', err);
+          const compressedBase64 = await compressImage(file, 1280, 960, 0.7);
           newImages.push(compressedBase64);
-        } catch (err) {
-          console.error(err);
         }
       }
       setFormData(prev => ({
         ...prev,
         images: newImages.slice(0, 4) // max 4 images
       }));
+      setIsUploadingGallery(false);
       if (galleryInputRef.current) {
         galleryInputRef.current.value = '';
       }

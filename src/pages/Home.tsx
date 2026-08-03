@@ -10,6 +10,7 @@ import Loader from '../components/common/Loader';
 import Modal from '../components/common/Modal';
 import MidtransSimulator from '../components/MidtransSimulator';
 import { compressImage } from '../utils/imageCompressor';
+import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { 
   Sparkles, HelpCircle, Phone, BookOpen, Clock, HardDrive, Shield,
   MapPin, Wifi, Zap, ChevronLeft, ChevronDown, Building2, Search, Calendar, Map, 
@@ -269,21 +270,27 @@ export default function Home({}: HomeProps) {
     const file = e.target.files?.[0];
     if (!file || !activeProperty) return;
     
-    if (file.size > 10 * 1024 * 1024) {
-      alert("Ukuran gambar maksimal adalah 10MB!");
+    if (file.size > 20 * 1024 * 1024) {
+      alert("Ukuran gambar maksimal adalah 20MB!");
       return;
     }
     
     try {
       setUploadingImage(true);
-      const compressedBase64 = await compressImage(file, 800, 600, 0.7);
+      const result = await uploadToSupabaseStorage(
+        file,
+        'property-images',
+        `prop_${activeProperty.name || 'detail'}`,
+        { maxLongestSide: 1920, quality: 0.92 }
+      );
+      const imageUrl = result.publicUrl;
       
       let updatedProperty: Property;
       if (imageIndex === -1) {
         // Main photo
         updatedProperty = {
           ...activeProperty,
-          image_url: compressedBase64
+          image_url: imageUrl
         };
       } else {
         // Gallery photo
@@ -292,7 +299,7 @@ export default function Home({}: HomeProps) {
         while (updatedImages.length <= imageIndex) {
           updatedImages.push("");
         }
-        updatedImages[imageIndex] = compressedBase64;
+        updatedImages[imageIndex] = imageUrl;
         updatedProperty = {
           ...activeProperty,
           images: updatedImages
@@ -305,10 +312,10 @@ export default function Home({}: HomeProps) {
       // Update properties list so changes propagate back to list views instantly
       setProperties(prev => prev.map(p => p.id === saved.id ? saved : p));
       
-      alert("Gambar berhasil di-upload dan disimpan ke database Supabase!");
-    } catch (err) {
+      alert("Gambar HD berhasil di-upload dan disimpan ke Storage!");
+    } catch (err: any) {
       console.error("Error uploading image:", err);
-      alert("Gagal meng-upload gambar. Silakan coba lagi.");
+      alert("Gagal meng-upload gambar ke Storage. " + (err?.message || ''));
     } finally {
       setUploadingImage(false);
     }

@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Property } from '../../types';
-import { PenTool, Upload, RefreshCw, CheckCircle2, ShieldCheck, FileText, Image as ImageIcon } from 'lucide-react';
+import { PenTool, Upload, RefreshCw, CheckCircle2, ShieldCheck, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { uploadSignatureCanvas, uploadToSupabaseStorage } from '../../utils/storageUploader';
 
 interface SignaturePadProps {
   property: Property;
@@ -88,14 +89,24 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     ctx.stroke();
   };
 
-  const stopDrawing = () => {
+  const [isUploading, setIsUploading] = useState(false);
+
+  const stopDrawing = async () => {
     if (!isDrawing) return;
     setIsDrawing(false);
     
-    // Save to data URL
     if (canvasRef.current && hasDrawn) {
-      const dataUrl = canvasRef.current.toDataURL('image/png');
-      setSignatureUrl(dataUrl);
+      try {
+        setIsUploading(true);
+        const storageUrl = await uploadSignatureCanvas(canvasRef.current, tenantName || 'tenant');
+        setSignatureUrl(storageUrl);
+      } catch (err) {
+        console.warn('[SignaturePad] Storage upload fallback to data URL:', err);
+        const dataUrl = canvasRef.current.toDataURL('image/png');
+        setSignatureUrl(dataUrl);
+      } finally {
+        setIsUploading(false);
+      }
     }
   };
 
@@ -111,20 +122,35 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     setSignatureUrl('');
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        alert('Ukuran file gambar TTD terlalu besar (maksimal 5MB).');
+      if (file.size > 20 * 1024 * 1024) {
+        alert('Ukuran file gambar TTD terlalu besar (maksimal 20MB).');
         return;
       }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setSignatureUrl(event.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+      try {
+        setIsUploading(true);
+        const result = await uploadToSupabaseStorage(
+          file,
+          'signatures',
+          `tenant_${tenantName || 'user'}`,
+          { forcePNG: true, maxLongestSide: 800 }
+        );
+        setSignatureUrl(result.publicUrl);
+      } catch (err: any) {
+        console.error('[SignaturePad] File upload error:', err);
+        // Fallback to local Data URL if network/storage is unavailable
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          if (event.target?.result) {
+            setSignatureUrl(event.target.result as string);
+          }
+        };
+        reader.readAsDataURL(file);
+      } finally {
+        setIsUploading(false);
+      }
     }
   };
 
@@ -233,9 +259,15 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
                 style={{ touchAction: 'none' }}
                 className="w-full h-28 cursor-crosshair block"
               />
-              {!hasDrawn && !signatureUrl && (
+              {!hasDrawn && !signatureUrl && !isUploading && (
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center text-slate-300 text-[10px] font-mono">
                   Goreskan tanda tangan Anda di sini...
+                </div>
+              )}
+              {isUploading && (
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-xs flex items-center justify-center gap-2 text-emerald-700 font-bold text-[10px] z-20">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Mengunggah TTD ke Storage...</span>
                 </div>
               )}
             </div>

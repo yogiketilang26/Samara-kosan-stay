@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Room, Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
-import { UploadCloud, Trash2, Image } from 'lucide-react';
+import { uploadToSupabaseStorage } from '../../utils/storageUploader';
+import { UploadCloud, Trash2, Image, Loader2 } from 'lucide-react';
 import { PRESETS } from '../../utils/imagePresets';
 import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
@@ -74,7 +75,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         image_url: room.image_url || '',
         images: room.images || []
       });
-      setSelectedFacilityIds((room.facilities || []).map((f: any) => f.id));
+      setSelectedFacilityIds((room.facilities || []).map((f: any) => typeof f === 'number' ? f : (f?.id || f?.facility_id)).filter(Boolean));
     } else {
       setFormData({
         property_id: properties[0]?.id || 1,
@@ -96,20 +97,29 @@ export const RoomForm: React.FC<RoomFormProps> = ({
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        alert("Ukuran gambar maksimal adalah 10MB!");
+      if (file.size > 20 * 1024 * 1024) {
+        alert("Ukuran gambar maksimal adalah 20MB!");
         return;
       }
       setIsUploadingMain(true);
       try {
-        const compressedBase64 = await compressImage(file, 640, 480, 0.5);
+        const result = await uploadToSupabaseStorage(
+          file,
+          'room-images',
+          `room_${formData.room_number || 'main'}`,
+          { maxLongestSide: 1920, quality: 0.92 }
+        );
+        setFormData(prev => ({
+          ...prev,
+          image_url: result.publicUrl
+        }));
+      } catch (err: any) {
+        console.error('[RoomForm] Upload main image error:', err);
+        const compressedBase64 = await compressImage(file, 1280, 960, 0.7);
         setFormData(prev => ({
           ...prev,
           image_url: compressedBase64
         }));
-      } catch (err) {
-        console.error(err);
-        alert("Gagal memproses gambar!");
       } finally {
         setIsUploadingMain(false);
       }
@@ -138,12 +148,17 @@ export const RoomForm: React.FC<RoomFormProps> = ({
       try {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
-          if (file.size > 10 * 1024 * 1024) {
-            alert("Ukuran gambar maksimal adalah 10MB!");
+          if (file.size > 20 * 1024 * 1024) {
+            alert("Ukuran gambar maksimal adalah 20MB!");
             continue;
           }
-          const compressedBase64 = await compressImage(file, 640, 480, 0.5);
-          newImages.push(compressedBase64);
+          const result = await uploadToSupabaseStorage(
+            file,
+            'room-images',
+            `room_gal_${formData.room_number || 'gallery'}`,
+            { maxLongestSide: 1920, quality: 0.92 }
+          );
+          newImages.push(result.publicUrl);
         }
         setFormData(prev => ({
           ...prev,
@@ -151,7 +166,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         }));
       } catch (err) {
         console.error(err);
-        alert("Gagal memproses gambar galeri!");
+        alert("Gagal meng-upload gambar galeri kamar!");
       } finally {
         setIsUploadingGallery(false);
         if (galleryInputRef.current) {

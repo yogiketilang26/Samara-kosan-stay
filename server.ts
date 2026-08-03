@@ -435,46 +435,155 @@ async function startServer() {
     return diagnostics;
   }
 
-  // Helper function to send email via MailerSend API
-  async function sendServerEmail(to: string, subject: string, text: string, html: string) {
+  // Helper function to log failed emails to activity_logs and sent_emails table in Supabase
+  async function logFailedEmailToDatabase(recipient: string, subject: string, errorReason: string) {
     try {
-      let apiKey = process.env.MAILERSEND_API_KEY || '';
-      apiKey = apiKey.trim();
-      if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
-      else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
-      apiKey = apiKey.trim();
-
-      if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
-        console.warn('[SERVER EMAIL TRIGGER WARNING] MAILERSEND_API_KEY is not configured. Email skipped.');
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !supabaseKey || supabaseUrl === 'undefined' || supabaseKey === 'undefined') {
         return;
       }
+      const supabase = createClient(supabaseUrl, supabaseKey);
 
-      const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
-      const fromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
-      const fromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
-
-      const payload = {
-        from: { email: fromEmail, name: fromName },
-        to: [{ email: to, name: to.split('@')[0] }],
-        subject,
-        text,
-        html
-      };
-
-      console.log('[SERVER EMAIL TRIGGER] Sending:', subject, 'to:', to, 'from:', fromEmail);
-      const res = await fetch('https://api.mailersend.com/v1/email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify(payload)
+      // 1. Log to activity_logs table for admin UI visibility
+      await supabase.from('activity_logs').insert({
+        admin_name: 'MailerSend System',
+        action: 'EMAIL_FAILED',
+        detail: `Gagal mengirim email ke ${recipient} (Subjek: "${subject}") setelah retries. Error: ${errorReason.slice(0, 250)}`,
+        ip_address: '127.0.0.1'
       });
-      const dataText = await res.text();
-      console.log('[SERVER EMAIL TRIGGER] Result:', res.status, dataText);
-    } catch (err) {
-      console.error('[SERVER EMAIL TRIGGER ERROR]', err);
+
+      // 2. Log to sent_emails table (if table exists)
+      await supabase.from('sent_emails').insert({
+        recipient,
+        subject,
+        status: 'failed',
+        error_message: errorReason.slice(0, 500),
+        sent_at: new Date().toISOString()
+      }).then(({ error }) => {
+        if (error) {
+          console.warn('[EMAIL DB LOG] sent_emails table insert skipped/error:', error.message);
+        }
+      });
+    } catch (dbErr) {
+      console.error('[EMAIL DB LOG ERROR]', dbErr);
     }
+  }
+
+  interface MailerSendPayload {
+    from: { email: string; name: string };
+    to: Array<{ email: string; name: string }>;
+    subject: string;
+    text: string;
+    html: string;
+  }
+
+  // Core MailerSend API fetcher with max 3 retries and exponential backoff (1s, 2s, 4s)
+  async function sendEmailWithRetry(
+    apiKey: string,
+    payload: MailerSendPayload,
+    recipientEmail: string,
+    subject: string
+  ): Promise<{ success: boolean; status?: number; dataText?: string; error?: string }> {
+    const delays = [1000, 2000, 4000]; // Exponential backoff delays (1s, 2s, 4s)
+    const maxAttempts = 3;
+    let lastError: string = '';
+    let lastStatus: number | undefined = undefined;
+    let lastResponseText = '';
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        console.log(`[MAILERSEND API] Attempt ${attempt}/${maxAttempts} sending email to: ${recipientEmail} ("${subject}")`);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
+
+        const res = await fetch('https://api.mailersend.com/v1/email', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        lastStatus = res.status;
+        lastResponseText = await res.text();
+
+        if (res.status >= 200 && res.status < 300) {
+          console.log(`[MAILERSEND API SUCCESS] Email delivered on attempt ${attempt}. Status: ${res.status}`);
+          return { success: true, status: res.status, dataText: lastResponseText };
+        }
+
+        // Check if error is non-transient 4xx (except 429)
+        const isTransient = res.status === 429 || res.status >= 500;
+        if (!isTransient) {
+          console.warn(`[MAILERSEND API NON-RETRYABLE] Status ${res.status}: ${lastResponseText}. Skipping further retries.`);
+          lastError = `HTTP ${res.status}: ${lastResponseText}`;
+          await logFailedEmailToDatabase(recipientEmail, subject, lastError);
+          return { success: false, status: res.status, dataText: lastResponseText, error: lastError };
+        }
+
+        console.warn(`[MAILERSEND API TRANSIENT ERROR] Attempt ${attempt}/${maxAttempts} failed with status ${res.status}: ${lastResponseText}`);
+        lastError = `HTTP ${res.status}: ${lastResponseText}`;
+
+      } catch (err: any) {
+        console.warn(`[MAILERSEND API TIMEOUT/NETWORK ERROR] Attempt ${attempt}/${maxAttempts} failed: ${err.message || err}`);
+        lastError = err.message || String(err);
+      }
+
+      // If transient error and attempt < maxAttempts, wait before retry
+      if (attempt < maxAttempts) {
+        const delayMs = delays[attempt - 1] || 1000;
+        console.log(`[MAILERSEND API RETRY BACKOFF] Waiting ${delayMs}ms before attempt ${attempt + 1}...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    // Failed after all 3 attempts
+    console.error(`[MAILERSEND API EXHAUSTED] Failed to send email to ${recipientEmail} after ${maxAttempts} attempts.`);
+    await logFailedEmailToDatabase(recipientEmail, subject, lastError);
+
+    return { success: false, status: lastStatus, dataText: lastResponseText, error: lastError };
+  }
+
+  // Helper function to send email via MailerSend API with non-blocking retry
+  async function sendServerEmail(to: string, subject: string, text: string, html: string) {
+    // Non-blocking background execution using setImmediate
+    setImmediate(async () => {
+      try {
+        let apiKey = process.env.MAILERSEND_API_KEY || '';
+        apiKey = apiKey.trim();
+        if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
+        else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
+        apiKey = apiKey.trim();
+
+        if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
+          console.warn('[SERVER EMAIL TRIGGER WARNING] MAILERSEND_API_KEY is not configured. Email skipped.');
+          return;
+        }
+
+        const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+        const fromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
+        const fromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+
+        const payload: MailerSendPayload = {
+          from: { email: fromEmail, name: fromName },
+          to: [{ email: to, name: to.split('@')[0] }],
+          subject,
+          text,
+          html
+        };
+
+        console.log('[SERVER EMAIL TRIGGER] Initiating non-blocking send with retry:', subject, 'to:', to);
+        await sendEmailWithRetry(apiKey, payload, to, subject);
+      } catch (err) {
+        console.error('[SERVER EMAIL TRIGGER ERROR]', err);
+      }
+    });
   }
 
   // 2. Midtrans Webhook Receiver (With Signature Key Verification)
@@ -563,6 +672,47 @@ async function startServer() {
       const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
       const isSupabaseConfigured = Boolean(supabaseUrl && supabaseKey && supabaseUrl !== 'undefined' && supabaseKey !== 'undefined');
       const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseKey) : null;
+
+      // ---------------------------------------------------------
+      // Webhook Idempotency Layer via webhook_events table
+      // ---------------------------------------------------------
+      if (supabase) {
+        // Use transaction_id from Midtrans if present, or construct deterministic fallback event_id
+        const eventId = notification.transaction_id || `${orderId}_${transactionStatus}_${statusCode || ''}_${grossAmount || ''}`;
+        const transactionId = notification.transaction_id || null;
+
+        const { error: webhookEventErr } = await supabase
+          .from('webhook_events')
+          .insert({
+            provider: 'midtrans',
+            event_id: eventId,
+            order_id: orderId || null,
+            transaction_id: transactionId,
+            status: transactionStatus || paymentStatus,
+            payload: notification,
+            processed_at: new Date().toISOString()
+          });
+
+        if (webhookEventErr) {
+          // Check for Postgres unique constraint violation (code 23505) or duplicate key error
+          if (
+            webhookEventErr.code === '23505' ||
+            webhookEventErr.message?.includes('duplicate key') ||
+            webhookEventErr.message?.includes('already exists') ||
+            webhookEventErr.details?.includes('already exists')
+          ) {
+            console.log(`[MIDTRANS WEBHOOK IDEMPOTENCY] Event ID "${eventId}" for Order "${orderId}" was ALREADY processed. Returning 200 OK without re-processing.`);
+            return res.status(200).json({
+              status: 'OK',
+              message: `Webhook event ${eventId} already processed (idempotency enforced).`
+            });
+          } else {
+            console.warn('[MIDTRANS WEBHOOK IDEMPOTENCY WARNING] Failed recording webhook_event (non-fatal):', webhookEventErr.message);
+          }
+        } else {
+          console.log(`[MIDTRANS WEBHOOK IDEMPOTENCY] Successfully recorded webhook_event: "${eventId}" for Order "${orderId}".`);
+        }
+      }
 
       if (supabase && orderId) {
         if (paymentStatus === 'paid') {
@@ -1043,7 +1193,7 @@ async function startServer() {
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
       const resolvedFromName = fromName || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
-      const payload = {
+      const payload: MailerSendPayload = {
         from: { email: resolvedFromEmail, name: resolvedFromName },
         to: [{ email: to, name: to.split('@')[0] }],
         subject: subject || 'Notifikasi Samara Stay',
@@ -1051,33 +1201,23 @@ async function startServer() {
         html: html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`
       };
 
-      console.log('[API MAILERSEND] Forwarding to MailerSend:', JSON.stringify(payload, null, 2));
+      console.log('[API MAILERSEND] Dispatching email with retry policy to:', to, 'Subject:', payload.subject);
 
-      const response = await fetch('https://api.mailersend.com/v1/email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify(payload)
-      });
+      const result = await sendEmailWithRetry(apiKey, payload, to, payload.subject);
 
-      const responseText = await response.text();
-      console.log('[API MAILERSEND] Response:', response.status, responseText);
-
-      if (response.status >= 400) {
-        return res.status(response.status).json({
+      if (!result.success) {
+        return res.status(result.status || 500).json({
           success: false,
-          status: response.status,
-          message: 'Gagal mengirim email via MailerSend API.',
-          details: responseText
+          status: result.status || 500,
+          message: 'Gagal mengirim email via MailerSend API setelah percobaan retry.',
+          details: result.dataText || result.error || 'Terjadi kesalahan pengiriman'
         });
       }
 
       return res.json({
         success: true,
         message: 'Email berhasil terkirim via MailerSend!',
-        details: responseText ? JSON.parse(responseText) : { status: 'accepted' }
+        details: result.dataText ? JSON.parse(result.dataText) : { status: 'accepted' }
       });
     } catch (err: any) {
       console.error('[API MAILERSEND ERROR]', err);
@@ -1439,7 +1579,7 @@ async function startServer() {
                 email: user.email || '',
                 name: userData?.full_name || user.email?.split('@')[0] || 'User',
                 role: appRole,
-                raw_role: userData?.role || 'admin'
+                raw_role: userData?.role || 'user'
               },
               access_token: session.access_token,
               refresh_token: session.refresh_token,
@@ -1472,7 +1612,7 @@ async function startServer() {
                 email: refreshedUser.email || '',
                 name: userData?.full_name || refreshedUser.email?.split('@')[0] || 'User',
                 role: appRole,
-                raw_role: userData?.role || 'admin'
+                raw_role: userData?.role || 'user'
               },
               access_token: session.access_token,
               refresh_token: session.refresh_token,
@@ -1500,7 +1640,7 @@ async function startServer() {
           email: user.email || '',
           name: userData?.full_name || user.email?.split('@')[0] || 'User',
           role: appRole,
-          raw_role: userData?.role || 'admin'
+          raw_role: userData?.role || 'user'
         },
         access_token: accessToken,
         refresh_token: refreshToken
@@ -1540,7 +1680,7 @@ async function startServer() {
           email: user.email || '',
           name: userData?.full_name || user.email?.split('@')[0] || 'User',
           role: appRole,
-          raw_role: userData?.role || 'admin'
+          raw_role: userData?.role || 'user'
         },
         access_token: session.access_token,
         refresh_token: session.refresh_token,

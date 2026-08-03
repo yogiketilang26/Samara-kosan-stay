@@ -68,6 +68,32 @@ export default function RoomGallery({ rooms, properties }: RoomGalleryProps) {
           });
         }
 
+        // Check bucket 'property-images'
+        const { data: propBucketData, error: propBucketError } = await supabase.storage
+          .from('property-images')
+          .list('', { limit: 50 });
+
+        if (!propBucketError && propBucketData) {
+          propBucketData.forEach(file => {
+            const isImg = /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name);
+            if (isImg) {
+              const { data: publicUrlData } = supabase.storage
+                .from('property-images')
+                .getPublicUrl(file.name);
+              
+              if (publicUrlData?.publicUrl) {
+                storageItems.push({
+                  id: `storage-property-images-${file.id || file.name}`,
+                  url: publicUrlData.publicUrl,
+                  source: 'supabase_storage',
+                  title: file.name.split('.')[0].replace(/[-_]/g, ' '),
+                  subtitle: 'Uploaded: property-images'
+                });
+              }
+            }
+          });
+        }
+
         // Check bucket 'rooms'
         const { data: roomsBucketData, error: roomsBucketError } = await supabase.storage
           .from('rooms')
