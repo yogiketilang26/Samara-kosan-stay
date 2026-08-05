@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
-import { database } from '../lib/supabase';
+import { database, DEFAULT_OWNER_SIGNATURE } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import * as LucideIcons from 'lucide-react';
 import { Property, Room, Booking, Survey, Coupon, SystemSettings, StandardFacility, FAQItem, Tenant } from '../types';
@@ -9,7 +9,7 @@ import InvoiceCard from '../components/transaction/InvoiceCard';
 import Loader from '../components/common/Loader';
 import Modal from '../components/common/Modal';
 import MidtransSimulator from '../components/MidtransSimulator';
-import { compressImage } from '../utils/imageCompressor';
+import { compressImage, ensurePngDataUrl } from '../utils/imageCompressor';
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { 
   Sparkles, HelpCircle, Phone, BookOpen, Clock, HardDrive, Shield,
@@ -248,6 +248,7 @@ export default function Home({}: HomeProps) {
   // Midtrans simulator states
   const [snapOpen, setSnapOpen] = useState(false);
   const [snapPaymentContext, setSnapPaymentContext] = useState<any | null>(null);
+  const snapPaymentContextRef = useRef<any | null>(null);
 
   // Zoomed/Expanded image viewer
   const [selectedRoomImage, setSelectedRoomImage] = useState<string | null>(null);
@@ -590,7 +591,9 @@ export default function Home({}: HomeProps) {
           amountPaid: 0,
           method: 'Tanpa DP (Kunjungan)',
           date: surveyForm.date,
-          details: 'Janji Kunjungan Survey Gratis Terkonfirmasi.'
+          details: 'Janji Kunjungan Survey Gratis Terkonfirmasi.',
+          signatureUrl: signatureUrl,
+          ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
         });
         setLoading(false);
         setShowReceipt(true);
@@ -627,11 +630,13 @@ export default function Home({}: HomeProps) {
       setLoading(false);
 
       if ((chargeResult.mode === 'production' || chargeResult.mode === 'sandbox') && (window as any).snap) {
-        setSnapPaymentContext({
+        const currentCtx = {
           orderId,
           grossAmount: calculatedTotal,
           description
-        });
+        };
+        setSnapPaymentContext(currentCtx);
+        snapPaymentContextRef.current = currentCtx;
 
         // Pre-save pending survey or booking record to Supabase
         try {
@@ -713,7 +718,7 @@ export default function Home({}: HomeProps) {
               transactionId: result.transaction_id || `mid-${Math.floor(Math.random() * 100000000)}`,
               paymentMethod: result.payment_type || 'Midtrans SNAP',
               settlementTime: result.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
-            });
+            }, currentCtx);
           },
           onPending: (result: any) => {
             fetch('/api/midtrans/logs', {
@@ -733,7 +738,7 @@ export default function Home({}: HomeProps) {
               transactionId: result.transaction_id || `mid-${Math.floor(Math.random() * 100000000)}`,
               paymentMethod: result.payment_type || 'Midtrans SNAP',
               settlementTime: result.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
-            });
+            }, currentCtx);
             alert('Pembayaran Anda pending/menunggu penyelesaian di portal Midtrans.');
           },
           onError: (result: any) => {
@@ -769,11 +774,13 @@ export default function Home({}: HomeProps) {
           }
         });
       } else {
-        setSnapPaymentContext({
+        const currentCtx = {
           orderId,
           grossAmount: calculatedTotal,
           description
-        });
+        };
+        setSnapPaymentContext(currentCtx);
+        snapPaymentContextRef.current = currentCtx;
         setSnapOpen(true);
       }
     } catch (err: any) {
@@ -783,8 +790,12 @@ export default function Home({}: HomeProps) {
     }
   };
 
-  const handleSandboxPaymentPending = async (details: any) => {
-    if (!activeRoom || !activeProperty || !snapPaymentContext) return;
+  const handleSandboxPaymentPending = async (details: any, overrideCtx?: any) => {
+    const ctx = overrideCtx || snapPaymentContextRef.current || snapPaymentContext;
+    if (!activeRoom || !activeProperty) return;
+
+    const currentGrossAmount = ctx?.grossAmount ?? activeRoom.price;
+    const currentOrderId = ctx?.orderId ?? `BOOK-${Date.now()}`;
 
     if (checkoutFlow === 'survey') {
       const surveyRecord: Partial<Survey> = {
@@ -816,7 +827,7 @@ export default function Home({}: HomeProps) {
         method: details.paymentMethod || 'Midtrans SNAP',
         status: 'pending' as const,
         payment_date: new Date().toISOString().split('T')[0],
-        midtrans_order_id: snapPaymentContext.orderId,
+        midtrans_order_id: currentOrderId,
         transaction_id: details.transactionId || `mid-${Math.floor(Math.random() * 100000000)}`
       };
       await database.savePayment(pendingInvoice);
@@ -830,7 +841,9 @@ export default function Home({}: HomeProps) {
         amountPaid: 500000,
         method: details.paymentMethod,
         date: surveyForm.date,
-        details: 'Pembayaran DP Survey tertunda / pending.'
+        details: 'Pembayaran DP Survey tertunda / pending.',
+        signatureUrl: signatureUrl,
+        ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
       });
     } else {
       const isDaily = checkoutFlow === 'daily';
@@ -849,10 +862,10 @@ export default function Home({}: HomeProps) {
         duration_months: isDaily ? 0 : bookingPeriodMonths,
         booking_type: isDaily ? 'daily' : 'monthly',
         duration_days: isDaily ? bookingPeriodDays : undefined,
-        total_price: snapPaymentContext.grossAmount,
+        total_price: currentGrossAmount,
         status: 'pending',
         payment_method: details.paymentMethod,
-        midtrans_order_id: snapPaymentContext.orderId,
+        midtrans_order_id: currentOrderId,
         is_dp: false,
         coupon_code: appliedCoupon ? appliedCoupon.code : null,
         discount_amount: discount,
@@ -878,11 +891,11 @@ export default function Home({}: HomeProps) {
         id: `INV-${Math.floor(1000 + Math.random() * 9000)}`,
         tenant_name: bookingForm.fullName,
         property_id: activeProperty.id,
-        amount: snapPaymentContext.grossAmount,
+        amount: currentGrossAmount,
         method: details.paymentMethod || 'Midtrans SNAP',
         status: 'pending' as const,
         payment_date: new Date().toISOString().split('T')[0],
-        midtrans_order_id: snapPaymentContext.orderId,
+        midtrans_order_id: currentOrderId,
         transaction_id: details.transactionId || `mid-${Math.floor(Math.random() * 100000000)}`
       };
       await database.savePayment(pendingInvoice);
@@ -893,22 +906,42 @@ export default function Home({}: HomeProps) {
         name: bookingForm.fullName,
         roomNo: activeRoom.room_number,
         propertyName: activeProperty.name,
-        amountPaid: snapPaymentContext.grossAmount,
+        amountPaid: currentGrossAmount,
         method: details.paymentMethod,
         date: new Date().toISOString().split('T')[0],
-        details: 'Sewa Unit Tertunda (Pending).'
+        details: 'Sewa Unit Tertunda (Pending).',
+        signatureUrl: signatureUrl,
+        ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
       });
     }
 
     setSnapOpen(false);
     setShowReceipt(true);
-    
   };
 
-  const handleSandboxPaymentSuccess = async (details: any) => {
-    if (!activeRoom || !activeProperty || !snapPaymentContext) return;
+  const handleSandboxPaymentSuccess = async (details: any, overrideCtx?: any) => {
+    const ctx = overrideCtx || snapPaymentContextRef.current || snapPaymentContext;
+    if (!activeRoom || !activeProperty) return;
+
+    const currentGrossAmount = ctx?.grossAmount ?? activeRoom.price;
+    const currentOrderId = ctx?.orderId ?? `BOOK-${Date.now()}`;
 
     if (checkoutFlow === 'survey') {
+      let finalSurveySigUrl = signatureUrl;
+      if (signatureUrl && signatureUrl.startsWith('data:')) {
+        try {
+          const uploaded = await uploadToSupabaseStorage(
+            signatureUrl,
+            'signatures',
+            `srv_${surveyForm.fullName || 'user'}`,
+            { forcePNG: true, maxLongestSide: 800 }
+          );
+          if (uploaded.publicUrl) finalSurveySigUrl = uploaded.publicUrl;
+        } catch (e) {
+          console.warn('[Home] Survey signature storage upload error:', e);
+        }
+      }
+
       const surveyRecord: Partial<Survey> = {
         tenant_name: surveyForm.fullName,
         nik: surveyForm.nik,
@@ -925,13 +958,16 @@ export default function Home({}: HomeProps) {
         dp_amount: 500000,
         payment_method: details.paymentMethod,
         invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
-        signature_url: signatureUrl
+        signature_url: finalSurveySigUrl
       };
 
       const saved = await database.saveSurvey(surveyRecord);
 
       // Send survey payment receipt email to end user
       if (surveyForm.email) {
+        const ownerSigPng = await ensurePngDataUrl(settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE);
+        const userSigPng = signatureUrl ? await ensurePngDataUrl(signatureUrl) : '';
+
         fetch('/api/email/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -993,6 +1029,37 @@ export default function Home({}: HomeProps) {
                   </table>
                 </div>
 
+                <!-- 2. SURAT PERSETUJUAN KONTRAK SEWA -->
+                <div style="margin-top: 20px; padding: 14px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
+                  <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK &amp; KETENTUAN SURVEY</h4>
+                  <p style="margin: 0; font-size: 11px; color: #475569; line-height: 1.5;">
+                    Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (Pemesan: ${surveyForm.fullName})</strong> atas reservasi survey unit kamar ${activeRoom.room_number}. Seluruh jaminan komitmen dan jadwal survey berlaku mengikat demi hukum.
+                  </p>
+                </div>
+
+                <!-- 3. TANDA TANGAN DUA PIHAK BERSEBELAHAN (OWNER & PEMESAN) -->
+                <div style="margin-top: 15px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+                  <p style="font-size: 10px; color: #64748b; font-weight: bold; margin: 0 0 10px 0; text-transform: uppercase; text-align: center;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
+                  <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                    <tr>
+                      <td width="50%" align="center" style="padding: 8px; border-right: 1px solid #e2e8f0; vertical-align: top;">
+                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                        <img src="${ownerSigPng}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 130px; display: inline-block;" />
+                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">Samara Management</p>
+                      </td>
+                      <td width="50%" align="center" style="padding: 8px; vertical-align: top;">
+                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                        ${userSigPng ? `
+                          <img src="${userSigPng}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 130px; display: inline-block;" />
+                        ` : `
+                          <p style="font-size: 10px; color: #94a3b8; font-style: italic; margin-top: 15px;">Terdokumentasi Digital</p>
+                        `}
+                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">${surveyForm.fullName}</p>
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+
                 <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #f59e0b; background-color: #fbf8f3; border-radius: 0 12px 12px 0;">
                   <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Informasi Kebijakan Jaminan:</strong>
                   Uang jaminan DP Survey ini sepenuhnya aman. Jika Anda memutuskan untuk melanjutkan sewa setelah survey, jaminan Rp 500.000 ini akan langsung dikompensasikan (mengurangi) pembayaran sisa sewa kamar Anda. Namun jika Anda tidak hadir sesuai jadwal (No-Show), maka DP dinyatakan hangus.
@@ -1006,7 +1073,7 @@ export default function Home({}: HomeProps) {
               </div>
             `
           })
-        }).catch(e => console.error('Error sending survey payment email:', e));
+        }).then(res => res.json()).then(resData => console.log('[EMAIL RESPONSE SURVEY]', resData)).catch(e => console.error('Error sending survey payment email:', e));
       }
 
       setReceiptData({
@@ -1018,12 +1085,29 @@ export default function Home({}: HomeProps) {
         amountPaid: 500000,
         method: details.paymentMethod,
         date: surveyForm.date,
-        details: 'Pembayaran DP Survey Sah.'
+        details: 'Pembayaran DP Survey Sah.',
+        signatureUrl: signatureUrl,
+        ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
       });
     } else {
       const isDaily = checkoutFlow === 'daily';
       const discount = appliedCoupon ? ((appliedCoupon.discount_type === 'nominal' || appliedCoupon.discount_type === 'fixed') ? appliedCoupon.discount_value : Math.round((activeRoom.price * appliedCoupon.discount_value) / 100)) : 0;
       
+      let finalBookingSigUrl = signatureUrl;
+      if (signatureUrl && signatureUrl.startsWith('data:')) {
+        try {
+          const uploaded = await uploadToSupabaseStorage(
+            signatureUrl,
+            'signatures',
+            `book_${bookingForm.fullName || 'user'}`,
+            { forcePNG: true, maxLongestSide: 800 }
+          );
+          if (uploaded.publicUrl) finalBookingSigUrl = uploaded.publicUrl;
+        } catch (e) {
+          console.warn('[Home] Booking signature storage upload error:', e);
+        }
+      }
+
       const bookingRecord: Partial<Booking> = {
         property_id: activeProperty.id,
         room_id: activeRoom.id,
@@ -1037,10 +1121,10 @@ export default function Home({}: HomeProps) {
         duration_months: isDaily ? 0 : bookingPeriodMonths,
         booking_type: isDaily ? 'daily' : 'monthly',
         duration_days: isDaily ? bookingPeriodDays : undefined,
-        total_price: snapPaymentContext.grossAmount,
+        total_price: currentGrossAmount,
         status: 'approved',
         payment_method: details.paymentMethod,
-        midtrans_order_id: snapPaymentContext.orderId,
+        midtrans_order_id: currentOrderId,
         is_dp: false,
         coupon_code: appliedCoupon ? appliedCoupon.code : null,
         discount_amount: discount,
@@ -1050,7 +1134,7 @@ export default function Home({}: HomeProps) {
         occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
         occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
         occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
-        signature_url: signatureUrl
+        signature_url: finalBookingSigUrl
       };
 
       // Set room status to occupied if direct booking
@@ -1064,9 +1148,12 @@ export default function Home({}: HomeProps) {
       const saved = await database.saveBooking(bookingRecord);
 
       // Send booking confirmation email
+      const ownerSigPng = await ensurePngDataUrl(settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE);
+      const userSigPng = signatureUrl ? await ensurePngDataUrl(signatureUrl) : '';
+
       const targetEmails = Array.from(new Set([bookingForm.email, bookingForm.isForOther ? bookingForm.occupantEmail : ''].filter(Boolean)));
       for (const targetEmail of targetEmails) {
-        const formattedPrice = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(snapPaymentContext.grossAmount);
+        const formattedPrice = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(currentGrossAmount);
         fetch('/api/email/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1083,7 +1170,7 @@ export default function Home({}: HomeProps) {
                 <div style="text-align: center; margin-bottom: 30px;">
                   <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">LUNAS / PAID</span>
                   <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">INVOICE PEMBAYARAN</h2>
-                  <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">Order ID: ${snapPaymentContext.orderId}</p>
+                  <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">Order ID: ${currentOrderId}</p>
                 </div>
 
                 <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
@@ -1124,6 +1211,37 @@ export default function Home({}: HomeProps) {
                   </table>
                 </div>
 
+                <!-- 2. SURAT PERSETUJUAN KONTRAK SEWA -->
+                <div style="margin-top: 20px; padding: 14px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
+                  <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK SEWA RESMI</h4>
+                  <p style="margin: 0; font-size: 11px; color: #475569; line-height: 1.5;">
+                    Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (Pemesan: ${bookingForm.fullName})</strong> atas sewa unit kamar ${activeRoom.room_number}. Seluruh tata tertib, hak &amp; kewajiban sewa unit, serta deposit tertera berlaku mengikat demi hukum.
+                  </p>
+                </div>
+
+                <!-- 3. TANDA TANGAN DUA PIHAK BERSEBELAHAN (OWNER & PEMESAN) -->
+                <div style="margin-top: 15px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+                  <p style="font-size: 10px; color: #64748b; font-weight: bold; margin: 0 0 10px 0; text-transform: uppercase; text-align: center;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
+                  <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                    <tr>
+                      <td width="50%" align="center" style="padding: 8px; border-right: 1px solid #e2e8f0; vertical-align: top;">
+                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                        <img src="${ownerSigPng}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 130px; display: inline-block;" />
+                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">Samara Management</p>
+                      </td>
+                      <td width="50%" align="center" style="padding: 8px; vertical-align: top;">
+                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                        ${userSigPng ? `
+                          <img src="${userSigPng}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 130px; display: inline-block;" />
+                        ` : `
+                          <p style="font-size: 10px; color: #94a3b8; font-style: italic; margin-top: 15px;">Terdokumentasi Digital</p>
+                        `}
+                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">${bookingForm.fullName}</p>
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+
                 <div style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 25px;">
                   <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Petunjuk Check-In:</h4>
                   <ol style="font-size: 13px; color: #475569; padding-left: 20px; line-height: 1.7; margin: 0;">
@@ -1140,7 +1258,7 @@ export default function Home({}: HomeProps) {
               </div>
             `
           })
-        }).catch(err => console.error('Error sending booking confirmation email:', err));
+        }).then(res => res.json()).then(resData => console.log('[EMAIL RESPONSE BOOKING]', resData)).catch(err => console.error('Error sending booking confirmation email:', err));
       }
 
       setReceiptData({
@@ -1149,16 +1267,17 @@ export default function Home({}: HomeProps) {
         name: bookingForm.fullName,
         roomNo: activeRoom.room_number,
         propertyName: activeProperty.name,
-        amountPaid: snapPaymentContext.grossAmount,
+        amountPaid: currentGrossAmount,
         method: details.paymentMethod,
         date: new Date().toISOString().split('T')[0],
-        details: 'Bukti lunas kontrak sewa sepihak.'
+        details: 'Bukti lunas kontrak sewa sepihak.',
+        signatureUrl: signatureUrl,
+        ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
       });
     }
 
     setSnapOpen(false);
     setShowReceipt(true);
-    
   };
 
   const handleSearchTrigger = (e: React.FormEvent) => {

@@ -17,6 +17,8 @@ let activeSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
 
 export let isSupabaseConfigured = Boolean(activeSupabaseUrl && activeSupabaseAnonKey && activeSupabaseUrl !== 'undefined' && activeSupabaseAnonKey !== 'undefined');
 
+export const DEFAULT_OWNER_SIGNATURE = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='90' viewBox='0 0 240 90'><path d='M 15 45 C 30 18, 40 8, 55 32 C 65 48, 75 12, 90 28 C 100 38, 105 18, 125 42 C 140 22, 155 52, 175 28 C 190 32, 205 22, 218 38' fill='none' stroke='%231e293b' stroke-width='2.8' stroke-linecap='round'/><path d='M 25 58 Q 110 46 210 52' fill='none' stroke='%232E6F40' stroke-width='2' stroke-dasharray='3 2'/><text x='110' y='72' font-family='sans-serif' font-size='9' font-weight='bold' fill='%232E6F40' text-anchor='middle' letter-spacing='1'>SAMARA STAY OWNER</text><text x='110' y='83' font-family='monospace' font-size='7' fill='%2364748b' text-anchor='middle'>OFFICIAL DIGITAL STAMP</text></svg>`;
+
 // Standardize Auth Client: Always initialize one client instance using safe placeholders to prevent GoTrue/client creation crashes
 export let supabase = createClient(
   activeSupabaseUrl || 'https://placeholder-project.supabase.co',
@@ -1332,7 +1334,8 @@ export const database = {
       survey_rules: "1. Pembayaran DP Survey senilai Rp 500.000 sebagai jaminan.",
       standard_facilities: "[]",
       why_choose_us: "[]",
-      faqs: "[]"
+      faqs: "[]",
+      owner_signature_url: DEFAULT_OWNER_SIGNATURE
     };
 
     if (!isSupabaseConfigured) return defaultSettings;
@@ -1342,6 +1345,9 @@ export const database = {
         logSupabaseError('fetchSettings', error);
       }
       let settingsObj = data ? { ...defaultSettings, ...(data as SystemSettings) } : defaultSettings;
+      if (!settingsObj.owner_signature_url) {
+        settingsObj.owner_signature_url = DEFAULT_OWNER_SIGNATURE;
+      }
 
       // Dynamically load from facilities table to maintain a single source of truth
       const { data: facData, error: facError } = await supabase
@@ -1374,7 +1380,8 @@ export const database = {
       booking_rules: settings.booking_rules,
       survey_rules: settings.survey_rules,
       why_choose_us: settings.why_choose_us,
-      faqs: settings.faqs
+      faqs: settings.faqs,
+      owner_signature_url: settings.owner_signature_url || DEFAULT_OWNER_SIGNATURE
     }, 1);
 
     if (upsertErr) {

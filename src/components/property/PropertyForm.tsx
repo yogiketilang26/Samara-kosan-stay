@@ -4,7 +4,6 @@ import { compressImage } from '../../utils/imageCompressor';
 import { uploadToSupabaseStorage } from '../../utils/storageUploader';
 import { Button } from '../common/Button';
 import { UploadCloud, Trash2, Image, RotateCw, Loader2 } from 'lucide-react';
-import { PRESETS } from '../../utils/imagePresets';
 import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
 
@@ -93,30 +92,43 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     if (file) {
       if (file.size > 20 * 1024 * 1024) {
         alert("Ukuran gambar maksimal adalah 20MB!");
+        if (fileInputRef.current) fileInputRef.current.value = '';
         return;
       }
+      setIsUploadingMain(true);
       try {
-        setIsUploadingMain(true);
-        const result = await uploadToSupabaseStorage(
-          file,
-          'property-images',
-          `prop_${formData.name || 'main'}`,
-          { maxLongestSide: 1920, quality: 0.92 }
-        );
-        setFormData(prev => ({
-          ...prev,
-          image_url: result.publicUrl
-        }));
-      } catch (err: any) {
-        console.error('[PropertyForm] Upload main image error:', err);
-        // Fallback to compressed base64 if storage network is unavailable
-        const compressedBase64 = await compressImage(file, 1280, 960, 0.7);
+        // Fast local compression for instant UI display
+        const compressedBase64 = await compressImage(file, 1280, 960, 0.85);
         setFormData(prev => ({
           ...prev,
           image_url: compressedBase64
         }));
+
+        // Attempt storage upload in background for permanent storage URL
+        try {
+          const result = await uploadToSupabaseStorage(
+            file,
+            'property-images',
+            `prop_${formData.name || 'main'}`,
+            { maxLongestSide: 1920, quality: 0.92 }
+          );
+          if (result.publicUrl) {
+            setFormData(prev => ({
+              ...prev,
+              image_url: result.publicUrl
+            }));
+          }
+        } catch (storageErr) {
+          console.info('[PropertyForm] Storage upload notice, using compressed image Base64 data URL.');
+        }
+      } catch (err: any) {
+        console.error('[PropertyForm] Upload main image error:', err);
+        alert("Gagal memproses gambar properti.");
       } finally {
         setIsUploadingMain(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       }
     }
   };
@@ -147,17 +159,25 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           continue;
         }
         try {
-          const result = await uploadToSupabaseStorage(
+          const compressedBase64 = await compressImage(file, 1280, 960, 0.85);
+          newImages.push(compressedBase64);
+
+          // Attempt storage upload in background
+          uploadToSupabaseStorage(
             file,
             'property-images',
             `prop_gal_${formData.name || 'gallery'}`,
             { maxLongestSide: 1920, quality: 0.92 }
-          );
-          newImages.push(result.publicUrl);
-        } catch (err: any) {
-          console.error('[PropertyForm] Upload gallery image error:', err);
-          const compressedBase64 = await compressImage(file, 1280, 960, 0.7);
-          newImages.push(compressedBase64);
+          ).then(result => {
+            if (result.publicUrl) {
+              setFormData(prev => ({
+                ...prev,
+                images: prev.images.map(img => img === compressedBase64 ? result.publicUrl : img)
+              }));
+            }
+          }).catch(() => {});
+        } catch (compressErr) {
+          console.error('[PropertyForm] Gallery image compression failed:', compressErr);
         }
       }
       setFormData(prev => ({
@@ -180,8 +200,23 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    let finalImageUrl = formData.image_url;
+    if (finalImageUrl && finalImageUrl.startsWith('data:')) {
+      try {
+        const result = await uploadToSupabaseStorage(
+          finalImageUrl,
+          'property-images',
+          `prop_${formData.name || 'main'}`,
+          { maxLongestSide: 1920, quality: 0.92 }
+        );
+        if (result.publicUrl) finalImageUrl = result.publicUrl;
+      } catch (e) {
+        console.warn('[PropertyForm] Image storage upload before save warning:', e);
+      }
+    }
 
     onSave({
       id: property?.id,
@@ -191,7 +226,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       deposit_amount: Number(formData.deposit_amount),
       type: formData.type,
       facilities: selectedFacilityIds as any,
-      image_url: formData.image_url,
+      image_url: finalImageUrl,
       images: formData.images,
       lat: Number(formData.lat),
       lng: Number(formData.lng),
@@ -312,12 +347,9 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         {formData.image_url ? (
           <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
             <img 
-              src={formData.image_url || PRESETS[0].dataUrl} 
+              src={formData.image_url} 
               alt="Pratinjau Sampul" 
               className="w-full h-40 object-cover rounded-xl"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = PRESETS[0].dataUrl;
-              }}
             />
             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
               <button
@@ -356,31 +388,6 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           accept="image/*"
           className="hidden"
         />
-
-        {/* Preset Selector */}
-        <div className="mt-3 bg-slate-900 border border-slate-805 p-3 rounded-2xl space-y-2">
-          <span className="text-[9px] font-bold text-slate-400 font-mono block uppercase">Gunakan Preset Hunian Premium (Offline & Cepat)</span>
-          <div className="grid grid-cols-3 gap-2">
-            {PRESETS.filter(p => p.category === 'property').map(p => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setFormData({ ...formData, image_url: p.dataUrl })}
-                className={`group relative rounded-xl overflow-hidden border transition-all text-left bg-slate-950 p-1 cursor-pointer outline-none ${
-                  formData.image_url === p.dataUrl ? 'border-amber-500 ring-1 ring-amber-500/30' : 'border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="relative h-14 rounded-lg overflow-hidden bg-slate-900">
-                  <img src={p.dataUrl} alt={p.name} className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <span className="text-[8px] font-bold font-mono text-white bg-slate-950/80 px-1.5 py-0.5 rounded border border-slate-800">PILIH</span>
-                  </div>
-                </div>
-                <span className="text-[8px] font-medium font-sans text-slate-350 block mt-1 truncate px-0.5 leading-none">{p.name.replace('Preset Samara ', '')}</span>
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
 
       <div className="space-y-1.5 font-sans">
@@ -391,12 +398,9 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           {formData.images.map((img, idx) => (
             <div key={idx} className="relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950 aspect-video group">
               <img 
-                src={img || PRESETS[0].dataUrl} 
+                src={img} 
                 alt={`Galeri ${idx + 1}`} 
                 className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = PRESETS[0].dataUrl;
-                }}
               />
               <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <button
@@ -421,31 +425,6 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
             </div>
           )}
         </div>
-        
-        {formData.images.length < 4 && (
-          <div className="mt-2 bg-slate-900 border border-slate-805 p-2 rounded-xl space-y-1.5">
-            <span className="text-[8px] font-bold text-slate-400 font-mono block uppercase">Gunakan Preset untuk Galeri:</span>
-            <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
-              {PRESETS.map(p => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => {
-                    if (formData.images.length < 4) {
-                      setFormData({ ...formData, images: [...formData.images, p.dataUrl] });
-                    }
-                  }}
-                  className="shrink-0 relative w-16 h-10 rounded-lg overflow-hidden border border-slate-800 hover:border-slate-650 bg-slate-950 cursor-pointer p-0.5 group outline-none"
-                >
-                  <img src={p.dataUrl} alt={p.name} className="w-full h-full object-cover rounded" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <span className="text-[7px] font-bold text-white bg-slate-950/80 px-1 py-0.5 rounded">+ ADD</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
         
         <input 
           type="file"

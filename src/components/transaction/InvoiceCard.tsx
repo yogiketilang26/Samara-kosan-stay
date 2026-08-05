@@ -2,6 +2,7 @@ import React from 'react';
 import { formatRupiah } from '../../utils/formatCurrency';
 import { BadgeCheck, FileText, Printer, CheckCircle, Download } from 'lucide-react';
 import { generateInvoicePDF, InvoiceReceipt } from '../../utils/pdfGenerator';
+import { DEFAULT_OWNER_SIGNATURE } from '../../lib/supabase';
 
 interface InvoiceCardProps {
   receipt: InvoiceReceipt;
@@ -60,6 +61,61 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ receipt, onClose }) =>
           <CheckCircle size={10} className="text-emerald-600 shrink-0" />
           MIDTRANS_CAPTURE_STATUS: SUCCESS
         </p>
+      </div>
+
+      {/* 2. SURAT PERSETUJUAN KONTRAK SEWA */}
+      <div className="bg-white p-3 rounded-2xl border border-slate-200 space-y-1.5 text-left">
+        <div className="flex items-center gap-1.5 font-bold text-slate-800 text-[9.5px] uppercase font-mono border-b border-slate-100 pb-1">
+          <FileText size={12} className="text-[#2E6F40] shrink-0" />
+          SURAT PERSETUJUAN KONTRAK SEWA
+        </div>
+        <p className="text-slate-600 text-[9px] leading-relaxed">
+          Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen)</strong> dan <strong>Pihak Kedua (Pemesan: {receipt.name})</strong> atas sewa unit kamar Samara Stay. Seluruh ketentuan, tata tertib, serta deposit berlaku mengikat sejak tanggal settlement ini.
+        </p>
+      </div>
+
+      {/* 3. TANDA TANGAN DIGITAL BERSEBELAHAN (OWNER & END USER) */}
+      <div className="bg-white p-3 rounded-2xl border border-slate-200 text-center space-y-2">
+        <span className="text-[9px] uppercase font-bold text-[#64748B] font-mono block">
+          PENGESAHAN TANDA TANGAN KONTRAK
+        </span>
+        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+          {/* Kiri: Owner / Manajemen */}
+          <div className="flex flex-col items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-100">
+            <span className="text-[8px] font-bold text-slate-700 uppercase tracking-tight mb-1">
+              PIHAK PERTAMA (OWNER)
+            </span>
+            <div className="h-10 flex items-center justify-center my-1">
+              <img
+                src={receipt.ownerSignatureUrl || DEFAULT_OWNER_SIGNATURE}
+                alt="Tanda Tangan Owner"
+                className="h-10 max-w-[110px] object-contain"
+              />
+            </div>
+            <span className="text-[7.5px] text-slate-500 font-mono">Samara Management</span>
+          </div>
+
+          {/* Kanan: End User / Pemesan */}
+          <div className="flex flex-col items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-100">
+            <span className="text-[8px] font-bold text-slate-700 uppercase tracking-tight mb-1">
+              PIHAK KEDUA (PEMESAN)
+            </span>
+            <div className="h-10 flex items-center justify-center my-1">
+              {receipt.signatureUrl ? (
+                <img
+                  src={receipt.signatureUrl}
+                  alt="Tanda Tangan Pemesan"
+                  className="h-10 max-w-[110px] object-contain"
+                />
+              ) : (
+                <span className="text-[7.5px] text-slate-400 italic my-auto">Ttd Digital Sah</span>
+              )}
+            </div>
+            <span className="text-[7.5px] text-slate-500 font-mono capitalize truncate max-w-[110px]">
+              {receipt.name}
+            </span>
+          </div>
+        </div>
       </div>
 
       <div className="text-[9px] text-[#64748B] leading-normal text-center select-none pt-1">

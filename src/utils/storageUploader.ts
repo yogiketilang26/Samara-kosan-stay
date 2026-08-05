@@ -35,6 +35,58 @@ export function dataURLtoBlob(dataurl: string): Blob {
 }
 
 /**
+ * Convert Blob to Base64 Data URL (Never blob: URL)
+ */
+export function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string' && reader.result.length > 0) {
+        resolve(reader.result);
+      } else {
+        resolve('');
+      }
+    };
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Convert Blob to Base64 Data URL or direct HTTP fallback
+ * Ensures reliable rendering across external HTML Emails and UI previews
+ */
+export async function uploadToServerOrBase64(blob: Blob, identifier: string = 'sig'): Promise<string> {
+  const base64Data = await blobToBase64(blob);
+  if (!base64Data) return '';
+
+  try {
+    const response = await fetch('/api/signatures/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: base64Data,
+        identifier
+      })
+    });
+    const result = await response.json();
+    if (result.success && result.publicUrl) {
+      // If server returned a localhost URL, prefer clean inline Base64 data URL to avoid broken external links
+      if (result.publicUrl.includes('localhost:') || result.publicUrl.includes('127.0.0.1')) {
+        console.log('[StorageUploader] Server returned localhost URL, using Base64 data URL for reliability:', identifier);
+        return base64Data;
+      }
+      console.log('[StorageUploader] Uploaded to server API:', result.publicUrl);
+      return result.publicUrl;
+    }
+  } catch (err) {
+    console.warn('[StorageUploader] Server endpoint upload failed, using Base64 data URL fallback:', err);
+  }
+
+  return base64Data;
+}
+
+/**
  * Enterprise Image Compressor & HD Optimizer
  * Maintains Full HD resolution (up to 1920px longest side) with 92% JPEG / 90% WEBP quality.
  */
@@ -55,7 +107,9 @@ export async function compressAndOptimizeImage(
     }
 
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    if (typeof input === 'string' && (input.startsWith('http://') || input.startsWith('https://'))) {
+      img.crossOrigin = 'anonymous';
+    }
 
     img.onload = () => {
       let width = img.width;
@@ -206,10 +260,10 @@ export async function uploadToSupabaseStorage(
   const fileName = `${cleanPrefix}${timestamp}_${randomHash}.${ext}`;
 
   if (!isSupabaseConfigured) {
-    console.warn('[StorageUploader] Supabase storage is not configured. Returning local object URL.');
-    const objectUrl = URL.createObjectURL(processedBlob);
+    console.warn('[StorageUploader] Supabase storage is not configured. Uploading to server API or Base64.');
+    const serverUrl = await uploadToServerOrBase64(processedBlob, pathPrefix || 'sig');
     return {
-      publicUrl: objectUrl,
+      publicUrl: serverUrl,
       storagePath: fileName,
       bucket: bucketName,
       width,
@@ -237,7 +291,28 @@ export async function uploadToSupabaseStorage(
 
       if (error) {
         lastError = error;
-        console.warn(`[StorageUploader] Upload attempt ${attempts} failed:`, error.message);
+        const isBucketNotFound = error.message?.toLowerCase().includes('bucket not found') || (error as any).statusCode === '404' || (error as any).status === 404;
+        
+        if (isBucketNotFound) {
+          // Attempt to dynamically create bucket if missing
+          let bucketCreated = false;
+          try {
+            const { error: createErr } = await supabase.storage.createBucket(bucketName, { public: true });
+            if (!createErr) {
+              bucketCreated = true;
+            }
+          } catch (createErr) {
+            bucketCreated = false;
+          }
+
+          if (!bucketCreated) {
+            console.info(`[StorageUploader] Supabase storage bucket '${bucketName}' not available. Using Server storage API fallback.`);
+            break; // Skip further retries and immediately proceed to server fallback
+          }
+        } else {
+          console.warn(`[StorageUploader] Upload attempt ${attempts} failed:`, error.message);
+        }
+
         if (attempts < maxAttempts) {
           await new Promise((res) => setTimeout(res, 800 * attempts));
           continue;
@@ -265,9 +340,18 @@ export async function uploadToSupabaseStorage(
     }
   }
 
-  // Fallback if Supabase Storage upload throws permanent error (e.g., bucket not created in Supabase yet)
-  console.error(`[StorageUploader] Storage upload failed after ${maxAttempts} attempts:`, lastError);
-  throw new Error(`Gagal meng-upload gambar ke Supabase Storage (${bucketName}): ${lastError?.message || 'Network error'}`);
+  // Resilient Fallback: If Supabase Storage bucket does not exist or upload permanently fails,
+  // upload to server API or convert to Base64 so signature/room photo never breaks.
+  const fallbackUrl = await uploadToServerOrBase64(processedBlob, pathPrefix || 'img');
+  return {
+    publicUrl: fallbackUrl,
+    storagePath: fileName,
+    bucket: bucketName,
+    width,
+    height,
+    mimeType,
+    size: processedBlob.size
+  };
 }
 
 /**

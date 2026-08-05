@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Room, Property, Coupon } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
-import { Calendar, Tag, ShieldAlert } from 'lucide-react';
+import { Calendar, ShieldAlert } from 'lucide-react';
 import { SignaturePad } from './SignaturePad';
 
 interface BookingFormProps {
@@ -422,36 +422,6 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                   className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono font-bold outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                 />
               </div>
-            )}
-          </div>
-
-          {/* Promotional Coupon Validation code */}
-          <div className="space-y-1 bg-slate-50 p-3 rounded-2xl border border-[#E2E8F0]">
-            <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1.5">
-              <Tag size={12} className="text-[#2E6F40] animate-pulse" />
-              Gunakan Kode Promo Diskon
-            </label>
-            <div className="flex gap-2 mt-1">
-              <input 
-                type="text"
-                placeholder="CONTOH: COVENAN20"
-                value={couponInput}
-                onChange={(e) => setCouponInput(e.target.value)}
-                className="flex-1 bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] outline-none uppercase font-mono font-bold text-[10px] focus:border-[#2E6F40]"
-              />
-              <button
-                type="button"
-                onClick={onApplyCoupon}
-                className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl border border-slate-200 text-[#3A444D] font-bold transition-all text-[10px] cursor-pointer"
-              >
-                Gunakan
-              </button>
-            </div>
-            {couponError && <p className="text-[9px] text-red-500 font-mono mt-1">{couponError}</p>}
-            {appliedCoupon && (
-              <p className="text-[9px] text-emerald-600 font-mono mt-1 font-bold">
-                PROMO AKTIF: Potongan {appliedCoupon.discount_type === 'percentage' ? `${appliedCoupon.discount_value}%` : formatRupiah(appliedCoupon.discount_value)} Berhasil Terpasang!
-              </p>
             )}
           </div>
         </div>

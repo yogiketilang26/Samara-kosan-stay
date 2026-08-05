@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import * as LucideIcons from 'lucide-react';
-import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert } from '../lib/supabase';
+import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAULT_OWNER_SIGNATURE } from '../lib/supabase';
+import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { observability, useRenderCounter } from '../lib/observability';
 import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem } from '../types';
@@ -21,10 +22,346 @@ import {
   FileText, Printer, ShieldPlus, Trash, UserCog, Terminal, HelpCircle,
   ExternalLink, RefreshCw, Server, Copy, Mail, Play, RotateCw,
   Sparkles, Landmark, Coins, ShoppingBag, Wrench, Wallet, Percent, Shield,
-  TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle
+  TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle,
+  FileSignature, PenTool, Upload, CheckCircle2
 } from 'lucide-react';
 
 interface AdminProps {}
+
+const OwnerSettingsManager: React.FC<{
+  settings: SystemSettings | null;
+  onSave: (updated: SystemSettings) => Promise<void>;
+}> = ({ settings, onSave }) => {
+  const [ownerSigUrl, setOwnerSigUrl] = useState<string>(
+    settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
+  );
+  const [bookingRules, setBookingRules] = useState<string>(
+    settings?.booking_rules || ''
+  );
+  const [surveyRules, setSurveyRules] = useState<string>(
+    settings?.survey_rules || ''
+  );
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Canvas Drawing state
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [hasDrawn, setHasDrawn] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      if (settings.owner_signature_url) setOwnerSigUrl(settings.owner_signature_url);
+      if (settings.booking_rules) setBookingRules(settings.booking_rules);
+      if (settings.survey_rules) setSurveyRules(settings.survey_rules);
+    }
+  }, [settings]);
+
+  // Canvas handlers
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    setIsDrawing(true);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+
+    ctx.beginPath();
+    ctx.moveTo(clientX - rect.left, clientY - rect.top);
+  };
+
+  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#1e293b';
+
+    ctx.lineTo(clientX - rect.left, clientY - rect.top);
+    ctx.stroke();
+    setHasDrawn(true);
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasDrawn(false);
+  };
+
+  const applyCanvasSignature = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !hasDrawn) return;
+    const dataUrl = canvas.toDataURL('image/png');
+    setOwnerSigUrl(dataUrl);
+    clearCanvas();
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const uploaded = await uploadToSupabaseStorage(
+        file,
+        'signatures',
+        'owner_stempel',
+        { forcePNG: true, maxLongestSide: 800 }
+      );
+      if (uploaded.publicUrl) {
+        setOwnerSigUrl(uploaded.publicUrl);
+        return;
+      }
+    } catch (err) {
+      console.warn('[Admin] Owner signature upload fallback to data URL:', err);
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setOwnerSigUrl(event.target.result as string);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveAll = async () => {
+    setIsSaving(true);
+    try {
+      let finalSigUrl = ownerSigUrl;
+      if (ownerSigUrl && ownerSigUrl.startsWith('data:')) {
+        try {
+          const uploaded = await uploadToSupabaseStorage(
+            ownerSigUrl,
+            'signatures',
+            'owner_stempel',
+            { forcePNG: true, maxLongestSide: 800 }
+          );
+          if (uploaded.publicUrl) {
+            finalSigUrl = uploaded.publicUrl;
+            setOwnerSigUrl(finalSigUrl);
+          }
+        } catch (upErr) {
+          console.warn('[Admin] Owner signature upload warning, using data URL fallback:', upErr);
+        }
+      }
+
+      const updated: SystemSettings = {
+        ...(settings || { id: '1' }),
+        owner_signature_url: finalSigUrl,
+        booking_rules: bookingRules,
+        survey_rules: surveyRules,
+        updated_at: new Date().toISOString()
+      };
+      await onSave(updated);
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err) {
+      console.error('Error saving settings:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
+            <FileSignature size={18} className="text-[#2E6F40] font-bold" />
+            Pengaturan Sistem &amp; Tanda Tangan Digital Owner
+          </h2>
+          <p className="text-xs text-[#64748B] mt-0.5">
+            Kelola stempel / tanda tangan resmi Owner &amp; Pengelola Samara Stay yang akan otomatis tersemat di Invoice, Kuitansi, dan Surat Persetujuan Kontrak Sewa.
+          </p>
+        </div>
+        <button
+          onClick={handleSaveAll}
+          disabled={isSaving}
+          className="px-4 py-2.5 bg-[#2E6F40] hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md transition-all flex items-center gap-2 shrink-0 disabled:opacity-50 cursor-pointer"
+        >
+          {isSaving ? (
+            <RefreshCw size={14} className="animate-spin" />
+          ) : savedSuccess ? (
+            <CheckCircle2 size={14} className="text-emerald-300" />
+          ) : (
+            <Check size={14} />
+          )}
+          {savedSuccess ? 'Tersimpan!' : 'Simpan Pengaturan'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* KIRI: Pengelolaan Tanda Tangan Owner */}
+        <div className="bg-slate-900 border border-slate-800 p-5 rounded-3xl space-y-4">
+          <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-2">
+            <PenTool size={14} className="text-[#2E6F40]" />
+            Tanda Tangan &amp; Stempel Resmi Owner Saat Ini
+          </h3>
+
+          {/* Pratinjau Ttd Aktif */}
+          <div className="p-4 bg-white rounded-2xl border border-slate-200 text-center space-y-2">
+            <span className="text-[9px] uppercase font-bold text-slate-500 font-mono block">
+              TAMPILAN TANDA TANGAN AKTIF DI INVOICE &amp; KONTRAK SEWA
+            </span>
+            <div className="h-16 flex items-center justify-center p-2 bg-slate-50 rounded-xl border border-slate-100">
+              {ownerSigUrl ? (
+                <img
+                  src={ownerSigUrl}
+                  alt="Tanda Tangan Owner Aktif"
+                  className="max-h-14 max-w-[220px] object-contain"
+                />
+              ) : (
+                <div className="text-[#94A3B8] text-xs italic flex items-center gap-1.5 font-mono">
+                  <XCircle size={14} className="text-rose-400" />
+                  [Belum ada tanda tangan / Dihapus]
+                </div>
+              )}
+            </div>
+            <p className="text-[8px] text-slate-400 font-mono">
+              Tanda tangan ini sah dan digunakan sebagai stempel resmi Pihak Pertama (Owner &amp; Management Samara Stay).
+            </p>
+          </div>
+
+          {/* Opsi 1: Upload & Hapus File Tanda Tangan / Stempel */}
+          <div className="space-y-2 pt-2 border-t border-slate-800">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+              Kelola File Gambar Tanda Tangan / Stempel (PNG / JPG)
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer flex items-center gap-2 px-3 py-2 bg-[#2E6F40] hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors">
+                <Upload size={14} />
+                Unggah Tanda Tangan Baru
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={() => setOwnerSigUrl('')}
+                disabled={!ownerSigUrl}
+                className="flex items-center gap-1.5 px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 disabled:opacity-30 text-rose-300 text-xs font-bold rounded-xl border border-rose-800/60 transition-colors cursor-pointer"
+              >
+                <Trash2 size={14} />
+                Hapus Tanda Tangan
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setOwnerSigUrl(DEFAULT_OWNER_SIGNATURE)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl border border-slate-700 transition-colors cursor-pointer"
+              >
+                <RotateCw size={14} />
+                Reset Stempel Default
+              </button>
+            </div>
+          </div>
+
+          {/* Opsi 2: Canvas Coretan Tanda Tangan Digital */}
+          <div className="space-y-2 pt-2 border-t border-slate-800">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+              Opsi 2: Buat Tanda Tangan Baru Langsung (Goreskan di Canvas)
+            </label>
+            <div className="bg-white rounded-2xl border border-slate-200 p-2 text-center">
+              <canvas
+                ref={canvasRef}
+                width={360}
+                height={120}
+                onMouseDown={startDrawing}
+                onMouseMove={draw}
+                onMouseUp={stopDrawing}
+                onMouseLeave={stopDrawing}
+                onTouchStart={startDrawing}
+                onTouchMove={draw}
+                onTouchEnd={stopDrawing}
+                className="w-full h-28 bg-slate-50 border border-slate-200 rounded-xl cursor-crosshair touch-none"
+              />
+              <div className="flex items-center justify-between mt-2 px-1">
+                <button
+                  type="button"
+                  onClick={clearCanvas}
+                  className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold rounded-lg cursor-pointer"
+                >
+                  Bersihkan Canvas
+                </button>
+                <button
+                  type="button"
+                  onClick={applyCanvasSignature}
+                  disabled={!hasDrawn}
+                  className="px-3 py-1 bg-[#2E6F40] hover:bg-emerald-700 disabled:opacity-40 text-white text-[10px] font-bold rounded-lg transition-colors cursor-pointer"
+                >
+                  Gunakan Hasil Goresan
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* KANAN: Ketentuan & Rules Surat Persetujuan Kontrak Sewa */}
+        <div className="bg-slate-900 border border-slate-800 p-5 rounded-3xl space-y-4">
+          <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-2">
+            <FileText size={14} className="text-[#2E6F40]" />
+            Aturan &amp; Ketentuan Kontrak Sewa / Survey
+          </h3>
+
+          <div className="space-y-3.5 text-xs">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                Ketentuan Kontrak Sewa Kamar (Muncul di Form Persetujuan Kontrak)
+              </label>
+              <textarea
+                rows={5}
+                value={bookingRules}
+                onChange={(e) => setBookingRules(e.target.value)}
+                placeholder="Tuliskan poin-poin tata tertib & ketentuan sewa..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-slate-200 font-sans text-xs leading-relaxed focus:outline-none focus:border-[#2E6F40]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                Ketentuan Jaminan DP Survey Kamar
+              </label>
+              <textarea
+                rows={4}
+                value={surveyRules}
+                onChange={(e) => setSurveyRules(e.target.value)}
+                placeholder="Tuliskan kebijakan jaminan survey..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-slate-200 font-sans text-xs leading-relaxed focus:outline-none focus:border-[#2E6F40]"
+              />
+            </div>
+
+            <div className="p-3 bg-emerald-950/30 border border-emerald-800/40 rounded-xl text-[10px] text-emerald-300 space-y-1">
+              <span className="font-bold uppercase tracking-wider block font-mono">INFO INTEGRASI OTOMATIS:</span>
+              <p>
+                Seluruh klausul dan tanda tangan digital Owner yang Anda simpan di sini akan secara otomatis diterapkan pada Invoice Digital, PDF Kuitansi yang dapat diunduh pengguna, serta Kuitansi Konfirmasi Email via MailerSend.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default function Admin({}: AdminProps) {
   useRenderCounter('AdminDashboard');
@@ -4818,6 +5155,17 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               )}
             </div>
           </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <OwnerSettingsManager
+            settings={settings}
+            onSave={async (updated) => {
+              await database.saveSettings(updated);
+              refetchSettings();
+              setSettingsState(updated);
+            }}
+          />
         )}
 
         {activeTab === 'email_integration' && (

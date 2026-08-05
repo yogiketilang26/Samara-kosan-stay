@@ -267,6 +267,7 @@ export interface SystemSettings {
   standard_facilities?: string;
   why_choose_us?: string;
   faqs?: string;
+  owner_signature_url?: string;
   updated_at?: string;
 }
 

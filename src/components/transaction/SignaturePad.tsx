@@ -26,6 +26,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasDrawn, setHasDrawn] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   // Initialize canvas context
   useEffect(() => {
@@ -51,6 +52,9 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     setHasDrawn(true);
     
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
+
     let clientX = 0;
     let clientY = 0;
 
@@ -63,7 +67,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     }
 
     ctx.beginPath();
-    ctx.moveTo(clientX - rect.left, clientY - rect.top);
+    ctx.moveTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -74,6 +78,9 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     if (!ctx) return;
 
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
+
     let clientX = 0;
     let clientY = 0;
 
@@ -85,7 +92,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
       clientY = (e as React.MouseEvent).clientY;
     }
 
-    ctx.lineTo(clientX - rect.left, clientY - rect.top);
+    ctx.lineTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
     ctx.stroke();
   };
 
@@ -96,16 +103,18 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     setIsDrawing(false);
     
     if (canvasRef.current && hasDrawn) {
+      // Set instant base64 data URL first for seamless continuous drawing
+      const dataUrl = canvasRef.current.toDataURL('image/png');
+      setSignatureUrl(dataUrl);
+
+      // Silently sync to Supabase storage in background without blocking canvas UI
       try {
-        setIsUploading(true);
         const storageUrl = await uploadSignatureCanvas(canvasRef.current, tenantName || 'tenant');
-        setSignatureUrl(storageUrl);
+        if (storageUrl) {
+          setSignatureUrl(storageUrl);
+        }
       } catch (err) {
         console.warn('[SignaturePad] Storage upload fallback to data URL:', err);
-        const dataUrl = canvasRef.current.toDataURL('image/png');
-        setSignatureUrl(dataUrl);
-      } finally {
-        setIsUploading(false);
       }
     }
   };
@@ -119,6 +128,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
       }
     }
     setHasDrawn(false);
+    setIsSubmitted(false);
     setSignatureUrl('');
   };
 
@@ -272,7 +282,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
               )}
             </div>
 
-            <div className="flex items-center justify-between text-[9px]">
+            <div className="flex items-center justify-between text-[9px] pt-1">
               <button
                 type="button"
                 onClick={handleClearCanvas}
@@ -286,6 +296,35 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
                 </span>
               )}
             </div>
+
+            {(hasDrawn || signatureUrl) && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (canvasRef.current && hasDrawn) {
+                      const dataUrl = canvasRef.current.toDataURL('image/png');
+                      setSignatureUrl(dataUrl);
+                      try {
+                        const storageUrl = await uploadSignatureCanvas(canvasRef.current, tenantName || 'tenant');
+                        if (storageUrl) setSignatureUrl(storageUrl);
+                      } catch (err) {
+                        console.warn('[SignaturePad] Storage upload fallback to dataUrl:', err);
+                      }
+                    }
+                    setIsSubmitted(true);
+                  }}
+                  className={`w-full py-2 px-3 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-xs ${
+                    isSubmitted
+                      ? 'bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                      : 'bg-[#2E6F40] hover:bg-[#235832] text-white shadow-emerald-900/10'
+                  }`}
+                >
+                  <CheckCircle2 size={14} className={isSubmitted ? 'text-emerald-600' : 'text-emerald-200'} />
+                  <span>{isSubmitted ? '✓ Tanda Tangan Berhasil Dikonfirmasi (Klik untuk Perbarui)' : 'Submit / Simpan Tanda Tangan'}</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 

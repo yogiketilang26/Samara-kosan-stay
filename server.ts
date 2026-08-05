@@ -1171,6 +1171,11 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // DIGITAL SIGNATURE STORAGE & HOSTING API (FOR EMAILS & RECEIVING)
+  // =========================================================================
+  const signatureStore = new Map<string, string>(); // sigId -> base64Data
+
   // MailerSend Send Email API endpoint (rate-limited for security)
   app.post('/api/email/send', apiRateLimiter(60000, 15), async (req, res) => {
     try {
@@ -1193,12 +1198,29 @@ async function startServer() {
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
       const resolvedFromName = fromName || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
+      let finalHtml = html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`;
+
+      if (finalHtml && typeof finalHtml === 'string') {
+        // A. Replace any localhost / signature API URLs with direct Base64 Data URLs so external email clients (Gmail) render signatures inline
+        finalHtml = finalHtml.replace(/https?:\/\/[^\/]+\/api\/signatures\/([a-zA-Z0-9_-]+)\.png/g, (match, sigId) => {
+          const b64 = signatureStore.get(sigId);
+          return b64 ? `data:image/png;base64,${b64}` : match;
+        });
+        finalHtml = finalHtml.replace(/\/api\/signatures\/([a-zA-Z0-9_-]+)\.png/g, (match, sigId) => {
+          const b64 = signatureStore.get(sigId);
+          return b64 ? `data:image/png;base64,${b64}` : match;
+        });
+
+        // B. Fix double quotes inside owner SVG data URLs that break img src attributes
+        finalHtml = finalHtml.replace(/src="data:image\/svg\+xml;utf8,<svg xmlns="[^"]*"/gi, `src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='90' viewBox='0 0 240 90'>"`);
+      }
+
       const payload: MailerSendPayload = {
         from: { email: resolvedFromEmail, name: resolvedFromName },
         to: [{ email: to, name: to.split('@')[0] }],
         subject: subject || 'Notifikasi Samara Stay',
         text: text || 'Ini adalah notifikasi penting dari Samara Stay.',
-        html: html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`
+        html: finalHtml
       };
 
       console.log('[API MAILERSEND] Dispatching email with retry policy to:', to, 'Subject:', payload.subject);
@@ -1229,19 +1251,55 @@ async function startServer() {
     }
   });
 
-  // GET /api/email/diagnostics - Diagnostic endpoint for MailerSend verification, credential status, and email log history
-  app.get(['/api/email/diagnostics', '/api/mailersend/diagnostics'], async (req, res) => {
+  // =========================================================================
+  // DIGITAL SIGNATURE STORAGE & HOSTING API (FOR EMAILS & RECEIVING)
+  // =========================================================================
+
+  app.post('/api/signatures/upload', express.json({ limit: '25mb' }), (req, res) => {
     try {
-      const report = await runMailerSendDiagnostics();
+      const { image, identifier } = req.body;
+      if (!image || typeof image !== 'string') {
+        return res.status(400).json({ success: false, error: 'Data gambar tanda tangan tidak valid' });
+      }
+
+      const cleanBase64 = image.includes(',') ? image.split(',')[1] : image;
+      const cleanId = (identifier || 'sig').replace(/[^a-zA-Z0-9_-]/g, '');
+      const sigId = `sig_${cleanId}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      signatureStore.set(sigId, cleanBase64);
+
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      const host = req.get('host');
+      const publicUrl = `${protocol}://${host}/api/signatures/${sigId}.png`;
+
+      console.log(`[API SIGNATURE] Successfully stored signature ${sigId}, publicUrl: ${publicUrl}`);
       return res.json({
-        success: report.connectivity.status === 'success',
-        diagnostics: report
+        success: true,
+        publicUrl,
+        sigId
       });
     } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message || 'Gagal menjalankan diagnostik MailerSend API'
+      console.error('[API SIGNATURE ERROR]', err);
+      return res.status(500).json({ success: false, error: err.message || 'Gagal menyimpan tanda tangan' });
+    }
+  });
+
+  app.get('/api/signatures/:id.png', (req, res) => {
+    const sigId = req.params.id;
+    const base64Data = signatureStore.get(sigId);
+    if (!base64Data) {
+      return res.status(404).send('Signature image not found');
+    }
+
+    try {
+      const imgBuffer = Buffer.from(base64Data, 'base64');
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Content-Length': imgBuffer.length,
+        'Cache-Control': 'public, max-age=31536000, immutable'
       });
+      return res.end(imgBuffer);
+    } catch (err) {
+      return res.status(500).send('Error rendering signature');
     }
   });
 

@@ -3,7 +3,6 @@ import { Room, Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
 import { uploadToSupabaseStorage } from '../../utils/storageUploader';
 import { UploadCloud, Trash2, Image, Loader2 } from 'lucide-react';
-import { PRESETS } from '../../utils/imagePresets';
 import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
 
@@ -99,29 +98,43 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     if (file) {
       if (file.size > 20 * 1024 * 1024) {
         alert("Ukuran gambar maksimal adalah 20MB!");
+        if (fileInputRef.current) fileInputRef.current.value = '';
         return;
       }
       setIsUploadingMain(true);
       try {
-        const result = await uploadToSupabaseStorage(
-          file,
-          'room-images',
-          `room_${formData.room_number || 'main'}`,
-          { maxLongestSide: 1920, quality: 0.92 }
-        );
-        setFormData(prev => ({
-          ...prev,
-          image_url: result.publicUrl
-        }));
-      } catch (err: any) {
-        console.error('[RoomForm] Upload main image error:', err);
-        const compressedBase64 = await compressImage(file, 1280, 960, 0.7);
+        // Fast local compression for instant UI display
+        const compressedBase64 = await compressImage(file, 1280, 960, 0.85);
         setFormData(prev => ({
           ...prev,
           image_url: compressedBase64
         }));
+
+        // Attempt storage upload in background for permanent storage URL
+        try {
+          const result = await uploadToSupabaseStorage(
+            file,
+            'room-images',
+            `room_${formData.room_number || 'main'}`,
+            { maxLongestSide: 1920, quality: 0.92 }
+          );
+          if (result.publicUrl) {
+            setFormData(prev => ({
+              ...prev,
+              image_url: result.publicUrl
+            }));
+          }
+        } catch (storageErr) {
+          console.info('[RoomForm] Storage upload notice, using compressed image Base64 data URL.');
+        }
+      } catch (err: any) {
+        console.error('[RoomForm] Upload main image error:', err);
+        alert("Gagal memproses gambar kamar.");
       } finally {
         setIsUploadingMain(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       }
     }
   };
@@ -145,33 +158,41 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     if (files && files.length > 0) {
       setIsUploadingGallery(true);
       const newImages = [...formData.images];
-      try {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          if (file.size > 20 * 1024 * 1024) {
-            alert("Ukuran gambar maksimal adalah 20MB!");
-            continue;
-          }
-          const result = await uploadToSupabaseStorage(
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.size > 20 * 1024 * 1024) {
+          alert("Ukuran gambar maksimal adalah 20MB!");
+          continue;
+        }
+        try {
+          const compressedBase64 = await compressImage(file, 1280, 960, 0.85);
+          newImages.push(compressedBase64);
+          
+          // Attempt storage upload
+          uploadToSupabaseStorage(
             file,
             'room-images',
             `room_gal_${formData.room_number || 'gallery'}`,
             { maxLongestSide: 1920, quality: 0.92 }
-          );
-          newImages.push(result.publicUrl);
+          ).then(result => {
+            if (result.publicUrl) {
+              setFormData(prev => ({
+                ...prev,
+                images: prev.images.map(img => img === compressedBase64 ? result.publicUrl : img)
+              }));
+            }
+          }).catch(() => {});
+        } catch (compressErr) {
+          console.error('[RoomForm] Gallery image compression failed:', compressErr);
         }
-        setFormData(prev => ({
-          ...prev,
-          images: newImages.slice(0, 4) // max 4 images
-        }));
-      } catch (err) {
-        console.error(err);
-        alert("Gagal meng-upload gambar galeri kamar!");
-      } finally {
-        setIsUploadingGallery(false);
-        if (galleryInputRef.current) {
-          galleryInputRef.current.value = '';
-        }
+      }
+      setFormData(prev => ({
+        ...prev,
+        images: newImages.slice(0, 4) // max 4 images
+      }));
+      setIsUploadingGallery(false);
+      if (galleryInputRef.current) {
+        galleryInputRef.current.value = '';
       }
     }
   };
@@ -190,6 +211,21 @@ export const RoomForm: React.FC<RoomFormProps> = ({
     if (isSaving) return;
     setIsSaving(true);
     try {
+      let finalImageUrl = formData.image_url;
+      if (finalImageUrl && finalImageUrl.startsWith('data:')) {
+        try {
+          const result = await uploadToSupabaseStorage(
+            finalImageUrl,
+            'room-images',
+            `room_${formData.room_number || 'main'}`,
+            { maxLongestSide: 1920, quality: 0.92 }
+          );
+          if (result.publicUrl) finalImageUrl = result.publicUrl;
+        } catch (e) {
+          console.warn('[RoomForm] Image storage upload before save warning:', e);
+        }
+      }
+
       await onSave({
         id: room?.id,
         property_id: Number(formData.property_id),
@@ -202,7 +238,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         facilities: selectedFacilityIds as any,
         is_daily_enabled: formData.is_daily_enabled,
         daily_price: formData.is_daily_enabled ? Number(formData.daily_price) : 0,
-        image_url: formData.image_url,
+        image_url: finalImageUrl,
         images: formData.images
       });
     } catch (err) {
@@ -353,12 +389,9 @@ export const RoomForm: React.FC<RoomFormProps> = ({
           {formData.image_url ? (
             <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
               <img 
-                src={formData.image_url || PRESETS[3]?.dataUrl || PRESETS[0].dataUrl} 
+                src={formData.image_url} 
                 alt="Pratinjau Kamar" 
                 className="w-full h-36 object-cover rounded-xl animate-fade-in"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = PRESETS[3]?.dataUrl || PRESETS[0].dataUrl;
-                }}
               />
               <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                 <button
@@ -410,31 +443,6 @@ export const RoomForm: React.FC<RoomFormProps> = ({
           className="hidden"
         />
 
-        {/* Room Preset Selector */}
-        <div className="mt-2.5 bg-slate-900 border border-slate-805 p-3 rounded-2xl space-y-2">
-          <span className="text-[9px] font-bold text-slate-400 font-mono block uppercase">Gunakan Preset Kamar Premium (Offline & Cepat)</span>
-          <div className="grid grid-cols-3 gap-2">
-            {PRESETS.filter(p => p.category === 'room').map(p => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setFormData({ ...formData, image_url: p.dataUrl })}
-                className={`group relative rounded-xl overflow-hidden border transition-all text-left bg-slate-950 p-1 cursor-pointer outline-none ${
-                  formData.image_url === p.dataUrl ? 'border-amber-500 ring-1 ring-amber-500/30' : 'border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="relative h-12 rounded-lg overflow-hidden bg-slate-900">
-                  <img src={p.dataUrl} alt={p.name} className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <span className="text-[8px] font-bold font-mono text-white bg-slate-950/80 px-1 py-0.5 rounded border border-slate-800">PILIH</span>
-                  </div>
-                </div>
-                <span className="text-[8px] font-medium font-sans text-slate-350 block mt-1 truncate px-0.5 leading-none">{p.name.replace('Preset Kamar ', '')}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Additional Room Gallery (Multiple Images) */}
         <div className="mt-4 bg-slate-900 border border-slate-805 p-3 rounded-2xl space-y-2">
           <span className="text-[9px] font-bold text-slate-400 font-mono block uppercase">Foto Tambahan / Galeri Unit (Maksimal 4)</span>
@@ -442,12 +450,9 @@ export const RoomForm: React.FC<RoomFormProps> = ({
             {formData.images.map((img, idx) => (
               <div key={idx} className="relative group h-16 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
                 <img 
-                  src={img || PRESETS[3]?.dataUrl || PRESETS[0].dataUrl} 
+                  src={img} 
                   alt={`Galeri ${idx + 1}`} 
                   className="w-full h-full object-cover" 
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = PRESETS[3]?.dataUrl || PRESETS[0].dataUrl;
-                  }}
                 />
                 <button
                   type="button"
