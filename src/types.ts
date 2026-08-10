@@ -145,8 +145,8 @@ export interface UserSystem {
   id: string;
   full_name: string;
   email: string;
-  role: 'super' | 'admin' | 'staff' | 'finance';
-  role_id: number; // 1=super/super_admin, 2=admin, 3=finance, 4=user/staff/tenant
+  role: 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user';
+  role_id: number; // 1=super/super_admin/owner, 2=admin, 3=finance, 4=user/staff/tenant
   access: string;
   last_login?: string;
   active: boolean;

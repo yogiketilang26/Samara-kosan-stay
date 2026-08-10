@@ -218,6 +218,27 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       }
     }
 
+    let finalImages = formData.images;
+    if (finalImages && finalImages.some(img => img.startsWith('data:'))) {
+      finalImages = await Promise.all(
+        finalImages.map(async (img, idx) => {
+          if (!img.startsWith('data:')) return img;
+          try {
+            const result = await uploadToSupabaseStorage(
+              img,
+              'property-images',
+              `prop_gal_${formData.name || 'gallery'}_${idx}`,
+              { maxLongestSide: 1920, quality: 0.92 }
+            );
+            return result.publicUrl || img;
+          } catch (e) {
+            console.warn('[PropertyForm] Gallery image upload before save warning:', e);
+            return img;
+          }
+        })
+      );
+    }
+
     onSave({
       id: property?.id,
       name: formData.name,
@@ -227,7 +248,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       type: formData.type,
       facilities: selectedFacilityIds as any,
       image_url: finalImageUrl,
-      images: formData.images,
+      images: finalImages,
       lat: Number(formData.lat),
       lng: Number(formData.lng),
       description: formData.description,

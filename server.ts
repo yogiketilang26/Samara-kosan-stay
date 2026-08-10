@@ -15,6 +15,17 @@ dotenv.config();
 
 // Simple in-memory rate limiting store for endpoints
 const rateLimits: Record<string, { count: number; resetTime: number }> = {};
+
+// Clean up expired rate limits every 10 minutes to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const ip in rateLimits) {
+    if (rateLimits[ip].resetTime < now) {
+      delete rateLimits[ip];
+    }
+  }
+}, 10 * 60 * 1000);
+
 function apiRateLimiter(windowMs: number, maxRequests: number) {
   return (req: any, res: any, next: any) => {
     const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
@@ -46,6 +57,55 @@ async function startServer() {
 
   const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
+  // Middleware for Admin authentication check
+  async function requireAdminAuth(req: any, res: any, next: any) {
+    try {
+      let accessToken = getCookie(req, 'sb-access-token');
+      if (!accessToken && req.headers.authorization) {
+        const parts = req.headers.authorization.split(' ');
+        if (parts[0] === 'Bearer') {
+          accessToken = parts[1];
+        }
+      }
+
+      if (!accessToken) {
+        const refreshToken = getCookie(req, 'sb-refresh-token');
+        if (refreshToken) {
+          const freshClient = getSupabaseServerClient();
+          const { data, error } = await freshClient.auth.refreshSession({ refresh_token: refreshToken });
+          if (!error && data.session) {
+            accessToken = data.session.access_token;
+            setAuthCookies(res, data.session.access_token, data.session.refresh_token, data.session.expires_in);
+          }
+        }
+      }
+
+      if (!accessToken) {
+        return res.status(401).json({ success: false, error: 'Akses ditolak. Token autentikasi tidak ditemukan.' });
+      }
+
+      const client = getSupabaseServerClient(accessToken);
+      const { data: { user }, error } = await client.auth.getUser(accessToken);
+
+      if (error || !user) {
+        return res.status(401).json({ success: false, error: 'Sesi tidak valid atau telah kadaluarsa.' });
+      }
+
+      const userData = await getOrMigrateUserProfile(client, user);
+      const isAuthorized = userData && (userData.role === 'admin' || userData.role === 'super' || userData.role === 'finance');
+
+      if (!isAuthorized) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak. Peran Anda tidak memiliki izin admin.' });
+      }
+
+      req.authUser = user;
+      req.authProfile = userData;
+      next();
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: 'Terjadi kesalahan pada verifikasi autentikasi.' });
+    }
+  }
+
   // =========================================================================
   // 1. MIDTRANS API INTEGRATION (REAL & SIMULATED CO-EXISTENCE)
   // =========================================================================
@@ -74,7 +134,7 @@ async function startServer() {
   }
 
   // Midtrans Logs Retrieval API
-  app.get('/api/midtrans/logs', (req, res) => {
+  app.get('/api/midtrans/logs', requireAdminAuth, (req, res) => {
     return res.json({ logs: midtransLogs });
   });
 
@@ -88,7 +148,7 @@ async function startServer() {
   });
 
   // Client-Side Logs Submission API
-  app.post('/api/midtrans/logs', express.json(), (req, res) => {
+  app.post('/api/midtrans/logs', requireAdminAuth, express.json(), (req, res) => {
     const { orderId, customerName, customerEmail, amount, type, status, message, details } = req.body;
     addMidtransLog({
       orderId: orderId || 'unknown',
@@ -104,7 +164,7 @@ async function startServer() {
   });
 
   // Clear Midtrans Logs
-  app.post('/api/midtrans/logs/clear', (req, res) => {
+  app.post('/api/midtrans/logs/clear', requireAdminAuth, (req, res) => {
     midtransLogs.length = 0;
     return res.json({ status: 'OK' });
   });
@@ -735,65 +795,71 @@ async function startServer() {
                 console.log(`[SUPABASE WEBHOOK SYNC] Webhook received but booking ${orderId} is ALREADY approved. Skipping duplicate processing for idempotency.`);
                 return res.status(200).json({ status: 'OK', message: 'Booking already approved' });
               }
-              console.log(`[SUPABASE WEBHOOK SYNC] Booking found: ID ${booking.id}, status: ${booking.status}. Updating status to approved...`);
+              console.log(`[SUPABASE WEBHOOK SYNC] Booking found: ID ${booking.id}, status: ${booking.status}. Executing settlement...`);
               
-              // 2. Update booking status
-              const { error: updateErr } = await supabase
-                .from('bookings')
-                .update({ status: 'approved', payment_method: paymentType || 'Midtrans SNAP' })
-                .eq('id', booking.id);
-                
-              if (updateErr) {
-                console.error('[SUPABASE WEBHOOK ERROR] Update booking error:', updateErr);
+              // 2. Attempt atomic settlement via RPC (Migration 017)
+              let invoiceId = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
+              const { data: rpcRes, error: settleRpcErr } = await supabase.rpc('settle_booking_payment', {
+                p_booking_id: booking.id,
+                p_order_id: orderId,
+                p_payment_type: paymentType || 'Midtrans SNAP',
+                p_transaction_id: notification.transaction_id || `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`
+              });
+
+              if (!settleRpcErr && rpcRes && rpcRes.success) {
+                if (rpcRes.already_approved) {
+                  console.log(`[SUPABASE WEBHOOK SYNC] Booking ${orderId} already approved via RPC.`);
+                  return res.status(200).json({ status: 'OK', message: 'Booking already approved' });
+                }
+                if (rpcRes.invoice_id) {
+                  invoiceId = rpcRes.invoice_id;
+                }
+                if (booking.room_id) {
+                  await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
+                }
+                console.log(`[SUPABASE WEBHOOK SYNC] Atomic settlement RPC succeeded for ${orderId}, invoice: ${invoiceId}`);
+              } else {
+                console.warn('[SUPABASE WEBHOOK WARNING] Atomic settlement RPC fallback to manual steps:', settleRpcErr?.message || rpcRes?.error);
+                // Fallback manual execution if RPC is not available
+                await supabase
+                  .from('bookings')
+                  .update({ status: 'approved', payment_method: paymentType || 'Midtrans SNAP' })
+                  .eq('id', booking.id);
+
+                if (booking.room_id) {
+                  await supabase
+                    .from('rooms')
+                    .update({ status: 'occupied', current_tenant_name: booking.tenant_name })
+                    .eq('id', booking.room_id);
+                  await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
+                }
+
+                const initials = booking.tenant_name ? booking.tenant_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'TM';
+                await supabase.from('tenants').insert({
+                  full_name: booking.tenant_name,
+                  phone: booking.phone,
+                  email: booking.email || '',
+                  avatar_initials: initials,
+                  avatar_color: "bg-indigo-600",
+                  property_id: booking.property_id,
+                  room_number: booking.room_number,
+                  start_date: booking.check_in_date || new Date().toISOString().split('T')[0],
+                  duration_months: booking.duration_months || 1,
+                  payment_status: 'paid'
+                });
+
+                await supabase.from('payments').insert({
+                  id: invoiceId,
+                  tenant_name: booking.tenant_name,
+                  property_id: booking.property_id,
+                  amount: booking.total_price,
+                  method: paymentType || 'Midtrans',
+                  status: 'paid',
+                  payment_date: new Date().toISOString().split('T')[0],
+                  midtrans_order_id: orderId,
+                  transaction_id: notification.transaction_id || `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`
+                });
               }
-
-              // 3. Update room status to 'occupied'
-              if (booking.room_id) {
-                console.log(`[SUPABASE WEBHOOK SYNC] Updating room ${booking.room_id} to occupied...`);
-                const { error: roomErr } = await supabase
-                  .from('rooms')
-                  .update({ status: 'occupied', current_tenant_name: booking.tenant_name })
-                  .eq('id', booking.room_id);
-                if (roomErr) console.error('[SUPABASE WEBHOOK ERROR] Update room error:', roomErr);
-
-                // Recalculate and update available_rooms count for property in Supabase
-                await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
-              }
-
-              // 4. Create tenant record
-              console.log(`[SUPABASE WEBHOOK SYNC] Creating tenant record for ${booking.tenant_name}...`);
-              const initials = booking.tenant_name ? booking.tenant_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'TM';
-              const tenantPayload = {
-                full_name: booking.tenant_name,
-                phone: booking.phone,
-                email: booking.email || '',
-                avatar_initials: initials,
-                avatar_color: "bg-indigo-600",
-                property_id: booking.property_id,
-                room_number: booking.room_number,
-                start_date: booking.check_in_date || new Date().toISOString().split('T')[0],
-                duration_months: booking.duration_months || 1,
-                payment_status: 'paid'
-              };
-              const { error: tenantErr } = await supabase.from('tenants').insert(tenantPayload);
-              if (tenantErr) console.error('[SUPABASE WEBHOOK ERROR] Create tenant error:', tenantErr);
-
-              // 5. Create payment invoice
-              console.log(`[SUPABASE WEBHOOK SYNC] Creating payment invoice...`);
-              const invoiceId = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
-              const paymentPayload = {
-                id: invoiceId,
-                tenant_name: booking.tenant_name,
-                property_id: booking.property_id,
-                amount: booking.total_price,
-                method: paymentType || 'Midtrans',
-                status: 'paid',
-                payment_date: new Date().toISOString().split('T')[0],
-                midtrans_order_id: orderId,
-                transaction_id: notification.transaction_id || `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`
-              };
-              const { error: payErr } = await supabase.from('payments').insert(paymentPayload);
-              if (payErr) console.error('[SUPABASE WEBHOOK ERROR] Create payment invoice error:', payErr);
 
               // 6. Post double-entry financial accounting transaction
               try {
@@ -1393,7 +1459,7 @@ async function startServer() {
   }
 
   // POST /api/auth/login
-  app.post('/api/auth/login', async (req, res) => {
+  app.post('/api/auth/login', apiRateLimiter(60000, 10), async (req, res) => {
     try {
       const { email, password } = req.body;
       if (!email || !password) {
@@ -1481,7 +1547,7 @@ async function startServer() {
   });
 
   // POST /api/auth/register
-  app.post('/api/auth/register', async (req, res) => {
+  app.post('/api/auth/register', apiRateLimiter(60000, 5), async (req, res) => {
     try {
       const { email, password, fullName } = req.body;
       if (!email || !password || !fullName) {

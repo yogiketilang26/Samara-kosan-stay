@@ -663,7 +663,7 @@ export default function Home({}: HomeProps) {
             await database.saveSurvey(surveyRecord);
           } else {
             const isDaily = checkoutFlow === 'daily';
-            const discount = appliedCoupon ? ((appliedCoupon.discount_type === 'nominal' || appliedCoupon.discount_type === 'fixed') ? appliedCoupon.discount_value : Math.round((activeRoom!.price * appliedCoupon.discount_value) / 100)) : 0;
+            const discount = appliedCoupon ? (appliedCoupon.discount_type === 'fixed' ? appliedCoupon.discount_value : Math.round((activeRoom!.price * appliedCoupon.discount_value) / 100)) : 0;
             
             const bookingRecord: Partial<Booking> = {
               property_id: activeProperty!.id,
@@ -847,7 +847,7 @@ export default function Home({}: HomeProps) {
       });
     } else {
       const isDaily = checkoutFlow === 'daily';
-      const discount = appliedCoupon ? ((appliedCoupon.discount_type === 'nominal' || appliedCoupon.discount_type === 'fixed') ? appliedCoupon.discount_value : Math.round((activeRoom.price * appliedCoupon.discount_value) / 100)) : 0;
+      const discount = appliedCoupon ? (appliedCoupon.discount_type === 'fixed' ? appliedCoupon.discount_value : Math.round((activeRoom.price * appliedCoupon.discount_value) / 100)) : 0;
       
       const bookingRecord: Partial<Booking> = {
         property_id: activeProperty.id,
@@ -965,8 +965,8 @@ export default function Home({}: HomeProps) {
 
       // Send survey payment receipt email to end user
       if (surveyForm.email) {
-        const ownerSigPng = await ensurePngDataUrl(settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE);
-        const userSigPng = signatureUrl ? await ensurePngDataUrl(signatureUrl) : '';
+        const ownerSigUrl = settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
+        const userSigUrl = finalSurveySigUrl || signatureUrl || '';
 
         fetch('/api/email/send', {
           method: 'POST',
@@ -1030,31 +1030,37 @@ export default function Home({}: HomeProps) {
                 </div>
 
                 <!-- 2. SURAT PERSETUJUAN KONTRAK SEWA -->
-                <div style="margin-top: 20px; padding: 14px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
-                  <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK &amp; KETENTUAN SURVEY</h4>
+                <div style="margin-top: 20px; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
+                  <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 800; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK &amp; KETENTUAN SURVEY RESMI</h4>
                   <p style="margin: 0; font-size: 11px; color: #475569; line-height: 1.5;">
                     Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (Pemesan: ${surveyForm.fullName})</strong> atas reservasi survey unit kamar ${activeRoom.room_number}. Seluruh jaminan komitmen dan jadwal survey berlaku mengikat demi hukum.
                   </p>
                 </div>
 
                 <!-- 3. TANDA TANGAN DUA PIHAK BERSEBELAHAN (OWNER & PEMESAN) -->
-                <div style="margin-top: 15px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-                  <p style="font-size: 10px; color: #64748b; font-weight: bold; margin: 0 0 10px 0; text-transform: uppercase; text-align: center;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
-                  <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <div style="margin-top: 15px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 12px; background-color: #ffffff;">
+                  <p style="font-size: 10px; color: #475569; font-weight: 800; margin: 0 0 10px 0; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
+                  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
                     <tr>
-                      <td width="50%" align="center" style="padding: 8px; border-right: 1px solid #e2e8f0; vertical-align: top;">
-                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
-                        <img src="${ownerSigPng}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 130px; display: inline-block;" />
-                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">Samara Management</p>
+                      <td width="50%" align="center" style="padding: 10px; border-right: 1px solid #e2e8f0; vertical-align: bottom;">
+                        <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                        <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                          <img src="${ownerSigUrl}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                        </div>
+                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">SAMARA STAY MANAGEMENT</p>
+                        <p style="font-size: 8px; color: #059669; font-weight: bold; margin: 2px 0 0 0; font-family: monospace;">[ STAMP RESMI ]</p>
                       </td>
-                      <td width="50%" align="center" style="padding: 8px; vertical-align: top;">
-                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
-                        ${userSigPng ? `
-                          <img src="${userSigPng}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 130px; display: inline-block;" />
-                        ` : `
-                          <p style="font-size: 10px; color: #94a3b8; font-style: italic; margin-top: 15px;">Terdokumentasi Digital</p>
-                        `}
-                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">${surveyForm.fullName}</p>
+                      <td width="50%" align="center" style="padding: 10px; vertical-align: bottom;">
+                        <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                        <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                          ${userSigUrl ? `
+                            <img src="${userSigUrl}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                          ` : `
+                            <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">✓ DISETUJUI DIGITAL</p>
+                          `}
+                        </div>
+                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${surveyForm.fullName}</p>
+                        <p style="font-size: 8px; color: #64748b; margin: 2px 0 0 0; font-family: monospace;">${surveyForm.email}</p>
                       </td>
                     </tr>
                   </table>
@@ -1091,7 +1097,7 @@ export default function Home({}: HomeProps) {
       });
     } else {
       const isDaily = checkoutFlow === 'daily';
-      const discount = appliedCoupon ? ((appliedCoupon.discount_type === 'nominal' || appliedCoupon.discount_type === 'fixed') ? appliedCoupon.discount_value : Math.round((activeRoom.price * appliedCoupon.discount_value) / 100)) : 0;
+      const discount = appliedCoupon ? (appliedCoupon.discount_type === 'fixed' ? appliedCoupon.discount_value : Math.round((activeRoom.price * appliedCoupon.discount_value) / 100)) : 0;
       
       let finalBookingSigUrl = signatureUrl;
       if (signatureUrl && signatureUrl.startsWith('data:')) {
@@ -1148,8 +1154,8 @@ export default function Home({}: HomeProps) {
       const saved = await database.saveBooking(bookingRecord);
 
       // Send booking confirmation email
-      const ownerSigPng = await ensurePngDataUrl(settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE);
-      const userSigPng = signatureUrl ? await ensurePngDataUrl(signatureUrl) : '';
+      const ownerSigUrl = settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
+      const userSigUrl = finalBookingSigUrl || signatureUrl || '';
 
       const targetEmails = Array.from(new Set([bookingForm.email, bookingForm.isForOther ? bookingForm.occupantEmail : ''].filter(Boolean)));
       for (const targetEmail of targetEmails) {
@@ -1212,31 +1218,37 @@ export default function Home({}: HomeProps) {
                 </div>
 
                 <!-- 2. SURAT PERSETUJUAN KONTRAK SEWA -->
-                <div style="margin-top: 20px; padding: 14px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
-                  <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK SEWA RESMI</h4>
+                <div style="margin-top: 20px; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
+                  <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 800; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK SEWA RESMI</h4>
                   <p style="margin: 0; font-size: 11px; color: #475569; line-height: 1.5;">
                     Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (Pemesan: ${bookingForm.fullName})</strong> atas sewa unit kamar ${activeRoom.room_number}. Seluruh tata tertib, hak &amp; kewajiban sewa unit, serta deposit tertera berlaku mengikat demi hukum.
                   </p>
                 </div>
 
                 <!-- 3. TANDA TANGAN DUA PIHAK BERSEBELAHAN (OWNER & PEMESAN) -->
-                <div style="margin-top: 15px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-                  <p style="font-size: 10px; color: #64748b; font-weight: bold; margin: 0 0 10px 0; text-transform: uppercase; text-align: center;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
-                  <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <div style="margin-top: 15px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 12px; background-color: #ffffff;">
+                  <p style="font-size: 10px; color: #475569; font-weight: 800; margin: 0 0 10px 0; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
+                  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
                     <tr>
-                      <td width="50%" align="center" style="padding: 8px; border-right: 1px solid #e2e8f0; vertical-align: top;">
-                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
-                        <img src="${ownerSigPng}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 130px; display: inline-block;" />
-                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">Samara Management</p>
+                      <td width="50%" align="center" style="padding: 10px; border-right: 1px solid #e2e8f0; vertical-align: bottom;">
+                        <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                        <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                          <img src="${ownerSigUrl}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                        </div>
+                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">SAMARA STAY MANAGEMENT</p>
+                        <p style="font-size: 8px; color: #059669; font-weight: bold; margin: 2px 0 0 0; font-family: monospace;">[ STAMP RESMI ]</p>
                       </td>
-                      <td width="50%" align="center" style="padding: 8px; vertical-align: top;">
-                        <p style="font-size: 9px; color: #1e293b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
-                        ${userSigPng ? `
-                          <img src="${userSigPng}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 130px; display: inline-block;" />
-                        ` : `
-                          <p style="font-size: 10px; color: #94a3b8; font-style: italic; margin-top: 15px;">Terdokumentasi Digital</p>
-                        `}
-                        <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0; font-family: monospace;">${bookingForm.fullName}</p>
+                      <td width="50%" align="center" style="padding: 10px; vertical-align: bottom;">
+                        <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                        <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                          ${userSigUrl ? `
+                            <img src="${userSigUrl}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                          ` : `
+                            <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">✓ DISETUJUI DIGITAL</p>
+                          `}
+                        </div>
+                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${bookingForm.fullName}</p>
+                        <p style="font-size: 8px; color: #64748b; margin: 2px 0 0 0; font-family: monospace;">${bookingForm.email}</p>
                       </td>
                     </tr>
                   </table>
@@ -1343,7 +1355,7 @@ export default function Home({}: HomeProps) {
       parentProperty.address.toLowerCase().includes(searchLocation.toLowerCase()) || 
       parentProperty.name.toLowerCase().includes(searchLocation.toLowerCase()) ||
       r.room_number.toLowerCase().includes(searchLocation.toLowerCase()) ||
-      (r.type || '').toLowerCase().includes(searchLocation.toLowerCase());
+      (r.room_type || '').toLowerCase().includes(searchLocation.toLowerCase());
 
     const matchType = selectedType === 'all' || parentProperty.type === selectedType;
     const matchPrice = r.price <= priceRange;
@@ -3102,6 +3114,7 @@ export default function Home({}: HomeProps) {
                     onClick={() => {
                       if (isAvailable) {
                         setActiveRoom(r);
+                        setCheckoutFlow('monthly');
                       }
                     }}
                     className={`p-4 rounded-2xl border text-left flex flex-col justify-between gap-4 transition-all duration-300 cursor-pointer ${

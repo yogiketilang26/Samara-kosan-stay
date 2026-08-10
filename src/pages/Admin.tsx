@@ -9,6 +9,7 @@ import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
 import { Loader } from '../components/common/Loader';
 import { Modal } from '../components/common/Modal';
+import { BookingSkeletonList, LedgerSkeletonTable, CoaSkeletonList } from '../components/common/Skeleton';
 import PropertyForm from '../components/property/PropertyForm';
 import RoomForm from '../components/room/RoomForm';
 import CouponList from '../components/coupon/CouponList';
@@ -162,7 +163,7 @@ const OwnerSettingsManager: React.FC<{
       }
 
       const updated: SystemSettings = {
-        ...(settings || { id: '1' }),
+        ...(settings || { id: 1 }),
         owner_signature_url: finalSigUrl,
         booking_rules: bookingRules,
         survey_rules: surveyRules,
@@ -865,7 +866,7 @@ export default function Admin({}: AdminProps) {
   const [userForm, setUserForm] = useState({
     fullName: '',
     email: '',
-    role: 'staff' as 'super' | 'admin' | 'staff' | 'finance',
+    role: 'staff' as 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user',
     access: 'Staff akses terbatas',
     active: true
   });
@@ -881,7 +882,7 @@ export default function Admin({}: AdminProps) {
     room_number: '',
     start_date: '',
     duration_months: 1,
-    payment_status: 'paid' as 'paid' | 'unpaid'
+    payment_status: 'paid' as 'paid' | 'pending' | 'overdue'
   });
 
   // Property modal triggers
@@ -1397,6 +1398,9 @@ export default function Admin({}: AdminProps) {
 
           // Send confirmation email to end user
           if (s.email) {
+            const ownerSigUrl = settingsData?.[0]?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
+            const userSigUrl = s.signature_url || '';
+
             fetch('/api/email/send', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1453,6 +1457,43 @@ export default function Admin({}: AdminProps) {
                           <td style="color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px;">Jumlah DP Komitmen:</td>
                           <td style="color: #047857; font-weight: 900; font-size: 18px; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px; text-align: right;">
                             Rp 500.000
+                          </td>
+                        </tr>
+                      </table>
+                    </div>
+
+                    <!-- SURAT PERSETUJUAN KONTRAK SEWA RESMI -->
+                    <div style="margin-top: 20px; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
+                      <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 800; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK &amp; KETENTUAN SURVEY RESMI</h4>
+                      <p style="margin: 0; font-size: 11px; color: #475569; line-height: 1.5;">
+                        Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (Pemesan: ${s.tenant_name})</strong> atas reservasi survey unit kamar ${s.room_number}. Seluruh jaminan komitmen dan jadwal survey berlaku mengikat demi hukum.
+                      </p>
+                    </div>
+
+                    <!-- PENGESAHAN TANDA TANGAN DUA PIHAK -->
+                    <div style="margin-top: 15px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 12px; background-color: #ffffff;">
+                      <p style="font-size: 10px; color: #475569; font-weight: 800; margin: 0 0 10px 0; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
+                      <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
+                        <tr>
+                          <td width="50%" align="center" style="padding: 10px; border-right: 1px solid #e2e8f0; vertical-align: bottom;">
+                            <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                            <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                              <img src="${ownerSigUrl}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                            </div>
+                            <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">SAMARA STAY MANAGEMENT</p>
+                            <p style="font-size: 8px; color: #059669; font-weight: bold; margin: 2px 0 0 0; font-family: monospace;">[ STAMP RESMI ]</p>
+                          </td>
+                          <td width="50%" align="center" style="padding: 10px; vertical-align: bottom;">
+                            <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                            <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                              ${userSigUrl ? `
+                                <img src="${userSigUrl}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                              ` : `
+                                <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">✓ DISETUJUI DIGITAL</p>
+                              `}
+                            </div>
+                            <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${s.tenant_name}</p>
+                            <p style="font-size: 8px; color: #64748b; margin: 2px 0 0 0; font-family: monospace;">${s.email}</p>
                           </td>
                         </tr>
                       </table>
@@ -1603,6 +1644,9 @@ export default function Admin({}: AdminProps) {
       database.logActivity("System", "SURVEY_PELUNASAN", `Pelunasan sewa unit ${s.room_number} selesai untuk tenant ${s.tenant_name}`);
 
       if (s.email) {
+        const ownerSigUrl = settingsData?.[0]?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
+        const userSigUrl = s.signature_url || '';
+
         fetch('/api/email/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1659,6 +1703,43 @@ export default function Admin({}: AdminProps) {
                       <td style="color: #64748b; padding-top: 12px;"><strong>Total Pelunasan Dibayar:</strong></td>
                       <td style="color: #047857; font-weight: 900; font-size: 18px; padding-top: 12px; text-align: right;">
                         Rp ${(remainingBalance).toLocaleString('id-ID')}
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+
+                <!-- SURAT PERSETUJUAN KONTRAK SEWA RESMI -->
+                <div style="margin-top: 20px; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
+                  <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 800; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK SEWA RESMI</h4>
+                  <p style="margin: 0; font-size: 11px; color: #475569; line-height: 1.5;">
+                    Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (Pemesan: ${s.tenant_name})</strong> atas pelunasan kontrak sewa unit kamar ${s.room_number}. Seluruh tata tertib, hak &amp; kewajiban huni, serta deposit jaminan tertera berlaku mengikat demi hukum.
+                  </p>
+                </div>
+
+                <!-- PENGESAHAN TANDA TANGAN DUA PIHAK -->
+                <div style="margin-top: 15px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 12px; background-color: #ffffff;">
+                  <p style="font-size: 10px; color: #475569; font-weight: 800; margin: 0 0 10px 0; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">PENGESAHAN TANDA TANGAN DUA PIHAK:</p>
+                  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
+                    <tr>
+                      <td width="50%" align="center" style="padding: 10px; border-right: 1px solid #e2e8f0; vertical-align: bottom;">
+                        <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                        <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                          <img src="${ownerSigUrl}" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                        </div>
+                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">SAMARA STAY MANAGEMENT</p>
+                        <p style="font-size: 8px; color: #059669; font-weight: bold; margin: 2px 0 0 0; font-family: monospace;">[ STAMP RESMI ]</p>
+                      </td>
+                      <td width="50%" align="center" style="padding: 10px; vertical-align: bottom;">
+                        <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                        <div style="min-height: 55px; display: flex; align-items: center; justify-content: center;">
+                          ${userSigUrl ? `
+                            <img src="${userSigUrl}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                          ` : `
+                            <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">✓ DISETUJUI DIGITAL</p>
+                          `}
+                        </div>
+                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${s.tenant_name}</p>
+                        <p style="font-size: 8px; color: #64748b; margin: 2px 0 0 0; font-family: monospace;">${s.email}</p>
                       </td>
                     </tr>
                   </table>
@@ -1909,15 +1990,45 @@ export default function Admin({}: AdminProps) {
     }
   };
 
+  const handleQuickRoleChange = async (u: UserSystem, newRole: UserSystem['role']) => {
+    startItemProcessing(u.id);
+    try {
+      const roleId = (newRole === 'super' || newRole === 'super_admin' || newRole === 'owner') ? 1 : newRole === 'admin' ? 2 : newRole === 'finance' ? 3 : 4;
+      const accessDesc = (newRole === 'super' || newRole === 'super_admin') ? 'Akses penuh sistem, log audit & database' : newRole === 'owner' ? 'Akses pemilik properti & eksekutif' : newRole === 'admin' ? 'Akses kontrol panel asrama & inventaris' : newRole === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas';
+
+      await database.saveUser({
+        id: u.id,
+        full_name: u.full_name,
+        email: u.email,
+        role: newRole,
+        role_id: roleId,
+        access: accessDesc,
+        active: u.active ?? true
+      });
+      startModuleRefresh('users');
+      await refetchUsers();
+      showToast(`Role ${u.full_name} berhasil diubah ke ${newRole.toUpperCase()}`);
+    } catch (err: any) {
+      console.error('[Admin] Error updating role:', err);
+      showToast(err.message || 'Gagal memperbarui role pengguna.', 'error');
+    } finally {
+      endItemProcessing(u.id);
+      endModuleRefresh('users');
+    }
+  };
+
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    const roleId = (userForm.role === 'super' || userForm.role === 'super_admin' || userForm.role === 'owner') ? 1 : userForm.role === 'admin' ? 2 : userForm.role === 'finance' ? 3 : 4;
+    const accessDesc = (userForm.role === 'super' || userForm.role === 'super_admin') ? 'Akses penuh sistem, log audit & database' : userForm.role === 'owner' ? 'Akses pemilik properti & eksekutif' : userForm.role === 'admin' ? 'Akses kontrol panel asrama & inventaris' : userForm.role === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas';
+
     const payload: Partial<UserSystem> = {
       ...(activeUserEdit ? { id: activeUserEdit.id } : {}),
       full_name: userForm.fullName,
       email: userForm.email,
       role: userForm.role,
-      role_id: userForm.role === 'super' ? 1 : userForm.role === 'admin' ? 2 : userForm.role === 'finance' ? 3 : 4,
-      access: userForm.role === 'super' ? 'Akses penuh sistem, log audit & database' : userForm.role === 'admin' ? 'Akses kontrol panel asrama & inventaris' : userForm.role === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas',
+      role_id: roleId,
+      access: accessDesc,
       active: userForm.active
     };
     setIsSavingUser(true);
@@ -2521,13 +2632,13 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <p className="text-xs text-[#64748B] mt-0.5">Saring jadwal survey masuk dengan DP Rp 500rb komitmen.</p>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
               {surveys.map(s => (
                 <div key={s.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] space-y-4 text-xs shadow-xs text-left">
                   <div className="flex flex-col sm:flex-row justify-between items-start gap-3">
                     <div>
                       <span className="text-[10px] font-mono bg-[#E6F4F1] text-[#0D9488] px-2.5 py-1 rounded-lg border border-[#0D9488]/10 font-bold uppercase tracking-wider">{s.invoice_id}</span>
-                      <h4 className="font-extrabold text-[#3A444D] uppercase mt-2 text-sm">Calon Penghuni: {s.client_name} ({s.phone})</h4>
+                      <h4 className="font-extrabold text-[#3A444D] uppercase mt-2 text-sm">Calon Penghuni: {s.tenant_name || (s as any).client_name} ({s.phone})</h4>
                       <p className="text-[11px] text-[#64748B] font-mono mt-1">Pilihan: Kamar {s.room_number} | Jadwal: {s.survey_date} @ {s.survey_time_slot}</p>
                     </div>
                     <span className={`text-[9px] font-mono px-3 py-1 rounded-full border font-bold uppercase ${
@@ -3040,63 +3151,69 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                         {/* Interactive Table */}
                         <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse text-xs">
-                            <thead>
-                              <tr className="border-b border-gray-100 text-[10px] text-gray-400 font-bold font-mono uppercase bg-slate-50">
-                                <th className="py-3 px-3">NO JURNAL</th>
-                                <th className="py-3 px-3">TANGGAL</th>
-                                <th className="py-3 px-3">DESKRIPSI / KETERANGAN</th>
-                                <th className="py-3 px-3">REKENING AKUN (COA)</th>
-                                <th className="py-3 px-3 text-right">DEBIT</th>
-                                <th className="py-3 px-3 text-right">KREDIT</th>
-                                <th className="py-3 px-3 text-right">Running Balance</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100 font-medium text-slate-700">
-                              {getFilteredLedgerRows().map((row) => {
-                                const isDebit = row.debit > 0;
-                                return (
-                                  <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
-                                    <td className="py-3.5 px-3 font-mono text-[10px] text-indigo-600 font-bold">{row.journal_no}</td>
-                                    <td className="py-3.5 px-3 text-slate-500 text-[10px] whitespace-nowrap">
-                                      {row.parentTrx?.transaction_date || row.created_at?.split('T')[0] || '-'}
-                                    </td>
-                                    <td className="py-3.5 px-3">
-                                      <p className="font-bold text-slate-800 leading-tight">{row.parentTrx?.description || 'Manual Adjustment'}</p>
-                                      <span className="text-[8px] uppercase font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded mt-1 inline-block">
-                                        {row.parentTrx?.category || 'General'}
-                                      </span>
-                                    </td>
-                                    <td className="py-3.5 px-3">
-                                      <div className="flex flex-col">
-                                        <span className="font-mono text-[9px] text-gray-400">[{row.account_id}]</span>
-                                        <span className={isDebit ? 'text-xs font-bold text-slate-850' : 'text-xs italic text-slate-600'}>
-                                          {row.acc?.name || "Akun " + row.account_id}
+                          {journalEntriesLoading || transactionsLoading ? (
+                            <div className="py-2">
+                              <LedgerSkeletonTable rows={6} />
+                            </div>
+                          ) : (
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="border-b border-gray-100 text-[10px] text-gray-400 font-bold font-mono uppercase bg-slate-50">
+                                  <th className="py-3 px-3">NO JURNAL</th>
+                                  <th className="py-3 px-3">TANGGAL</th>
+                                  <th className="py-3 px-3">DESKRIPSI / KETERANGAN</th>
+                                  <th className="py-3 px-3">REKENING AKUN (COA)</th>
+                                  <th className="py-3 px-3 text-right">DEBIT</th>
+                                  <th className="py-3 px-3 text-right">KREDIT</th>
+                                  <th className="py-3 px-3 text-right">Running Balance</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100 font-medium text-slate-700">
+                                {getFilteredLedgerRows().map((row) => {
+                                  const isDebit = row.debit > 0;
+                                  return (
+                                    <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
+                                      <td className="py-3.5 px-3 font-mono text-[10px] text-indigo-600 font-bold">{row.journal_no}</td>
+                                      <td className="py-3.5 px-3 text-slate-500 text-[10px] whitespace-nowrap">
+                                        {row.parentTrx?.transaction_date || row.created_at?.split('T')[0] || '-'}
+                                      </td>
+                                      <td className="py-3.5 px-3">
+                                        <p className="font-bold text-slate-800 leading-tight">{row.parentTrx?.description || 'Manual Adjustment'}</p>
+                                        <span className="text-[8px] uppercase font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded mt-1 inline-block">
+                                          {row.parentTrx?.category || 'General'}
                                         </span>
-                                      </div>
-                                    </td>
-                                    <td className="py-3.5 px-3 text-right font-mono text-emerald-600 font-bold">
-                                      {row.debit > 0 ? formatRupiah(row.debit) : '-'}
-                                    </td>
-                                    <td className="py-3.5 px-3 text-right font-mono text-[#64748B]">
-                                      {row.credit > 0 ? "(" + formatRupiah(row.credit) + ")" : '-'}
-                                    </td>
-                                    <td className={"py-3.5 px-3 text-right font-mono font-semibold " + (row.runningBalance < 0 ? 'text-red-500' : 'text-slate-850')}>
-                                      {formatRupiah(row.runningBalance)}
+                                      </td>
+                                      <td className="py-3.5 px-3">
+                                        <div className="flex flex-col">
+                                          <span className="font-mono text-[9px] text-gray-400">[{row.account_id}]</span>
+                                          <span className={isDebit ? 'text-xs font-bold text-slate-850' : 'text-xs italic text-slate-600'}>
+                                            {row.acc?.name || "Akun " + row.account_id}
+                                          </span>
+                                        </div>
+                                      </td>
+                                      <td className="py-3.5 px-3 text-right font-mono text-emerald-600 font-bold">
+                                        {row.debit > 0 ? formatRupiah(row.debit) : '-'}
+                                      </td>
+                                      <td className="py-3.5 px-3 text-right font-mono text-[#64748B]">
+                                        {row.credit > 0 ? "(" + formatRupiah(row.credit) + ")" : '-'}
+                                      </td>
+                                      <td className={"py-3.5 px-3 text-right font-mono font-semibold " + (row.runningBalance < 0 ? 'text-red-500' : 'text-slate-850')}>
+                                        {formatRupiah(row.runningBalance)}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+
+                                {getFilteredLedgerRows().length === 0 && (
+                                  <tr>
+                                    <td colSpan={7} className="py-10 text-center text-[#64748B] font-semibold">
+                                      Tidak ada entri jurnal umum yang sesuai dengan pencarian Anda.
                                     </td>
                                   </tr>
-                                );
-                              })}
-
-                              {getFilteredLedgerRows().length === 0 && (
-                                <tr>
-                                  <td colSpan={7} className="py-10 text-center text-[#64748B] font-semibold">
-                                    Tidak ada entri jurnal umum yang sesuai dengan pencarian Anda.
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
+                                )}
+                              </tbody>
+                            </table>
+                          )}
                         </div>
                       </div>
 
@@ -3111,18 +3228,22 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           </div>
 
                           <div className="space-y-2 overflow-y-auto no-scrollbar pr-1 flex-1">
-                            {accounts.map((acc) => (
-                              <div key={acc.id} className="flex justify-between items-center text-xs py-2.5 px-3.5 bg-slate-50 hover:bg-slate-100/60 rounded-2xl transition-colors border border-slate-100 font-medium font-sans">
-                                <div>
-                                  <span className="font-mono text-gray-400 text-[10px] mr-2">[{acc.id}]</span>
-                                  <span className="text-slate-850 text-[11px] font-bold">{acc.name}</span>
-                                  <span className="text-[8px] text-[#64748B] font-normal uppercase ml-1 px-1 bg-slate-200/50 rounded">{acc.type}</span>
+                            {accountsLoading ? (
+                              <CoaSkeletonList count={6} />
+                            ) : (
+                              accounts.map((acc) => (
+                                <div key={acc.id} className="flex justify-between items-center text-xs py-2.5 px-3.5 bg-slate-50 hover:bg-slate-100/60 rounded-2xl transition-colors border border-slate-100 font-medium font-sans">
+                                  <div>
+                                    <span className="font-mono text-gray-400 text-[10px] mr-2">[{acc.id}]</span>
+                                    <span className="text-slate-850 text-[11px] font-bold">{acc.name}</span>
+                                    <span className="text-[8px] text-[#64748B] font-normal uppercase ml-1 px-1 bg-slate-200/50 rounded">{acc.type}</span>
+                                  </div>
+                                  <span className="font-bold text-slate-800 font-mono text-[11px]">
+                                    {formatRupiah(acc.balance)}
+                                  </span>
                                 </div>
-                                <span className="font-bold text-slate-800 font-mono text-[11px]">
-                                  {formatRupiah(acc.balance)}
-                                </span>
-                              </div>
-                            ))}
+                              ))
+                            )}
                           </div>
                         </div>
 
@@ -3498,7 +3619,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                          await database.savePurchaseOrder({ ...po, status: 'approved' });
 
                                          // Update status in local PO state
-                                         const updatedPos = purchaseOrders.map(p => p.id === po.id ? { ...p, status: 'approved' } : p);
+                                         const updatedPos = purchaseOrders.map(p => p.id === po.id ? { ...p, status: 'approved' as const } : p);
                                          setPurchaseOrders(updatedPos);
                                          
                                          database.logActivity("Director", "APPROVE_PO", `Menyetujui PO #${po.id} nominal Rp ${po.amount}`);
@@ -4402,13 +4523,17 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </div>
 
             <div className="space-y-3">
-              {(bookings || [])
-                .filter(b => 
-                  b.tenant_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                  b.room_number.toLowerCase().includes(searchQuery.toLowerCase())
-                )
-                .slice(0, 100)
-                .map(b => {
+              {bookingsLoading ? (
+                <BookingSkeletonList count={4} />
+              ) : (
+                <>
+                  {(bookings || [])
+                    .filter(b => 
+                      b.tenant_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                      b.room_number.toLowerCase().includes(searchQuery.toLowerCase())
+                    )
+                    .slice(0, 100)
+                    .map(b => {
                   const propertyName = properties.find(p => p.id === b.property_id)?.name || 'Properti Kos';
                   return (
                     <div key={b.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] space-y-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
@@ -4573,8 +4698,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   );
                 })}
 
-              {bookings.length === 0 && (
-                <p className="text-sm text-slate-500 text-center py-8">Belum ada riwayat transaksi sewa kos.</p>
+                  {bookings.length === 0 && (
+                    <p className="text-sm text-slate-500 text-center py-8">Belum ada riwayat transaksi sewa kos.</p>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -4718,15 +4845,26 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       </div>
 
                       <div className="flex gap-2 pt-3 border-t border-[#F1F5F9] mt-3 flex-wrap items-center justify-between">
-                        {t.status === 'checkout' ? (
-                          <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-rose-50 text-rose-700 border border-rose-100">
-                            Checked Out
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {t.status === 'checkout' ? (
+                            <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-rose-50 text-rose-700 border border-rose-100">
+                              Checked Out
+                            </span>
+                          ) : (
+                            <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-100">
+                              Verified Tenant
+                            </span>
+                          )}
+                          <span className={`text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono border ${
+                            t.payment_status === 'paid'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : t.payment_status === 'overdue'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : 'bg-amber-50 text-amber-700 border-amber-200'
+                          }`}>
+                            {t.payment_status === 'paid' ? 'LUNAS' : t.payment_status === 'overdue' ? 'TUNGGAKAN' : 'BELUM BAYAR'}
                           </span>
-                        ) : (
-                          <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-100">
-                            Verified Tenant
-                          </span>
-                        )}
+                        </div>
                         {t.status !== 'checkout' && (
                           <button
                             type="button"
@@ -4820,16 +4958,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               {users.map(u => (
                 <div key={u.id} className="bg-slate-900 border border-slate-805 p-4 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3.5 text-xs">
                   <div className="space-y-1.5 flex-1 select-all">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-extrabold text-white text-sm capitalize">{u.full_name}</span>
                       <span className={`text-[8px] font-mono font-bold uppercase px-2 py-0.5 rounded-full ${
-                        u.role === 'super' || u.role === 'admin' 
+                        u.role === 'super' || u.role === 'super_admin' || u.role === 'admin' 
                           ? 'bg-amber-500/10 text-[#0D9488] font-bold border border-amber-500/20' 
-                          : u.role === 'finance'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            : 'bg-[#0D9488]/10 text-[#0D9488] text-[#64748B]'
+                          : u.role === 'owner'
+                            ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                            : u.role === 'finance'
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                              : 'bg-[#0D9488]/10 text-[#0D9488]'
                       }`}>
-                        {u.role === 'super' ? 'SUPER COOP' : u.role === 'admin' ? 'SYSTEM ADMIN' : u.role === 'finance' ? 'CHIEF FINANCIAL' : 'FIELD OPERATOR'}
+                        {u.role === 'super' || u.role === 'super_admin' ? 'SUPER ADMIN' : u.role === 'owner' ? 'OWNER / PEMILIK' : u.role === 'admin' ? 'SYSTEM ADMIN' : u.role === 'finance' ? 'CHIEF FINANCIAL' : 'FIELD OPERATOR'}
                       </span>
                     </div>
                     <p className="text-[10px] text-[#64748B]">📧 Email: <span className="font-mono text-[#3A444D]">{u.email}</span></p>
@@ -4837,7 +4977,23 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     <span className="text-[9px] text-slate-600 block">Last login: {u.last_login || 'Masa aktif hari ini'}</span>
                   </div>
 
-                  <div className="flex gap-2 shrink-0 md:ml-auto w-full md:w-auto mt-2 md:mt-0">
+                  <div className="flex items-center gap-2 shrink-0 md:ml-auto w-full md:w-auto mt-2 md:mt-0 flex-wrap">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-slate-400 font-mono font-bold">Role:</span>
+                      <select
+                        value={u.role}
+                        onChange={(e) => handleQuickRoleChange(u, e.target.value as any)}
+                        disabled={processingItems[u.id]}
+                        className="bg-slate-950 text-slate-200 border border-slate-750 text-[10px] font-bold py-1 px-2 rounded-lg cursor-pointer outline-none focus:border-amber-500 disabled:opacity-50"
+                      >
+                        <option value="super">SUPER ADMIN</option>
+                        <option value="admin">SYSTEM ADMIN</option>
+                        <option value="owner">OWNER / PEMILIK</option>
+                        <option value="finance">BENDAHARA (FINANCE)</option>
+                        <option value="staff">SURVEYOR (STAFF)</option>
+                      </select>
+                    </div>
+
                     <button
                       type="button"
                       onClick={() => {
@@ -4852,7 +5008,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                         setShowUserModal(true);
                       }}
                       disabled={processingItems[u.id]}
-                      className="flex-1 md:flex-initial p-1.5 px-3 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-1.5 px-3 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Edit2 size={11} />
                       Ubah Izin
@@ -4861,7 +5017,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       type="button"
                       onClick={() => handleDeleteUser(u.id)}
                       disabled={processingItems[u.id]}
-                      className="flex-1 md:flex-initial p-1.5 px-3 bg-red-950/25 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-1.5 px-3 bg-red-950/25 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {processingItems[u.id] ? (
                         <RotateCw size={11} className="animate-spin text-red-400" />
@@ -6421,6 +6577,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               >
                 <option value="super">SUPER ADMIN</option>
                 <option value="admin">SISTEM ADMIN</option>
+                <option value="owner">OWNER / PEMILIK</option>
                 <option value="finance">BENDAHARA (FINANCE)</option>
                 <option value="staff">SURVEYOR (STAFF)</option>
               </select>
@@ -6776,7 +6933,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl cursor-pointer text-xs font-bold focus:border-[#0D9488]"
               >
                 <option value="paid">LUNAS (PAID)</option>
-                <option value="unpaid">BELUM BAYAR</option>
+                <option value="pending">BELUM BAYAR (PENDING)</option>
+                <option value="overdue">TUNGGAKAN (OVERDUE)</option>
               </select>
             </div>
           </div>
@@ -6881,7 +7039,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 required
                 min={1000}
                 value={newPettyCashForm.amount || ""}
-                onChange={(e) => setNewPettyCashForm(prev => ({ ...prev, amount: Number(e.target.value) }))}
+                onChange={(e) => setNewPettyCashForm(prev => ({ ...prev, amount: e.target.value }))}
                 placeholder="250000"
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-emerald-500 font-mono font-bold"
               />

@@ -226,6 +226,27 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         }
       }
 
+      let finalImages = formData.images;
+      if (finalImages && finalImages.some(img => img.startsWith('data:'))) {
+        finalImages = await Promise.all(
+          finalImages.map(async (img, idx) => {
+            if (!img.startsWith('data:')) return img;
+            try {
+              const result = await uploadToSupabaseStorage(
+                img,
+                'room-images',
+                `room_gal_${formData.room_number || 'gallery'}_${idx}`,
+                { maxLongestSide: 1920, quality: 0.92 }
+              );
+              return result.publicUrl || img;
+            } catch (e) {
+              console.warn('[RoomForm] Gallery image upload before save warning:', e);
+              return img;
+            }
+          })
+        );
+      }
+
       await onSave({
         id: room?.id,
         property_id: Number(formData.property_id),
@@ -239,7 +260,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         is_daily_enabled: formData.is_daily_enabled,
         daily_price: formData.is_daily_enabled ? Number(formData.daily_price) : 0,
         image_url: finalImageUrl,
-        images: formData.images
+        images: finalImages
       });
     } catch (err) {
       console.error(err);

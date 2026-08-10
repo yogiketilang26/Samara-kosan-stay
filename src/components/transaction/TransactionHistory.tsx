@@ -44,7 +44,7 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                   <span className="font-mono font-bold text-amber-500 mt-0.5 block">{formatRupiah(b.total_price)}</span>
                 </div>
                 
-                {(b.status === 'approved' || b.status === 'completed' || b.status === 'active') && (
+                {(b.status === 'approved') && (
                   <div className="flex gap-1.5 mt-1">
                     <button
                       onClick={() => onPrintReceipt({
@@ -105,7 +105,7 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                 </div>
                 <p className="text-[11px] text-slate-300 font-semibold">Kamar Pilihan: {s.room_number}</p>
                 <div className="text-[10px] text-slate-400 font-mono">
-                  Jadwal: {s.survey_date} | Jam Sesi: {s.survey_time}
+                  Jadwal: {s.survey_date} | Jam Sesi: {s.survey_time_slot || (s as any).survey_time || '-'}
                 </div>
               </div>
 
@@ -115,13 +115,13 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                   <span className="font-mono font-bold text-amber-500 mt-0.5 block">Rp 500.000</span>
                 </div>
                 
-                {(s.status === 'survey_confirmed' || s.status === 'approved') && (
+                {(s.status === 'survey_confirmed') && (
                   <div className="flex gap-1.5 mt-1">
                     <button
                       onClick={() => onPrintReceipt({
                         type: 'survey',
                         id: `SRV-${s.id}`,
-                        name: s.client_name,
+                        name: s.tenant_name || (s as any).client_name || '',
                         roomNo: s.room_number,
                         propertyName: `Samara Stay Unit`,
                         amountPaid: 500000,
@@ -138,7 +138,7 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({
                       onClick={() => generateInvoicePDF({
                         type: 'survey',
                         id: `SRV-${s.id}`,
-                        name: s.client_name,
+                        name: s.tenant_name || (s as any).client_name || '',
                         roomNo: s.room_number,
                         propertyName: `Samara Stay Unit`,
                         amountPaid: 500000,

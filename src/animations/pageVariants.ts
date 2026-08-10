@@ -8,7 +8,7 @@ export const pageVariants = {
     y: 0,
     transition: {
       duration: 0.35,
-      ease: [0.16, 1, 0.3, 1] // Custom ease-out expo curve
+      ease: [0.16, 1, 0.3, 1] as const // Custom ease-out expo curve
     }
   },
   exit: {
