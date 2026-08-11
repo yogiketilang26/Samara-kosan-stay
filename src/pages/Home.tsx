@@ -2955,26 +2955,43 @@ export default function Home({}: HomeProps) {
                       <p className="text-[11px] text-[#64748B] font-medium mt-0.5">Konfirmasi tipe sewa dan rincian harga sewa Anda langsung di bawah ini:</p>
                     </div>
 
-                    <div className="bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#E2E8F0] flex gap-3">
-                      {activeRoom.image_url ? (
-                        <img 
-                          src={activeRoom.image_url} 
-                          alt={`Kamar ${activeRoom.room_number}`} 
-                          className="w-14 h-14 object-cover rounded-xl border border-slate-800"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
-                          }}
-                        />
-                      ) : (
-                        <div className="w-14 h-14 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center">
-                          <Bed size={16} className="text-[#64748B]" />
+                    <div 
+                      onClick={() => setSelectedRoomForDetail(activeRoom)}
+                      className="bg-[#F8FAFC] hover:bg-emerald-50/50 p-3.5 rounded-2xl border border-[#E2E8F0] hover:border-[#2E6F40] transition-all flex items-center justify-between gap-3 cursor-pointer group/activebox"
+                      title="Klik untuk melihat foto & detail lengkap unit ini"
+                    >
+                      <div className="flex gap-3 items-center">
+                        {activeRoom.image_url ? (
+                          <div className="relative w-14 h-14 rounded-xl overflow-hidden border border-slate-300 shrink-0">
+                            <img 
+                              src={activeRoom.image_url} 
+                              alt={`Kamar ${activeRoom.room_number}`} 
+                              className="w-full h-full object-cover group-hover/activebox:scale-110 transition-transform duration-300"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-300 flex items-center justify-center shrink-0">
+                            <Bed size={16} className="text-[#64748B]" />
+                          </div>
+                        )}
+                        <div>
+                          <div className="font-extrabold text-[#3A444D] text-xs flex items-center gap-1.5">
+                            <span>Unit {activeRoom.room_number}</span>
+                            <span className="text-[9px] bg-[#2E6F40]/10 text-[#2E6F40] px-1.5 py-0.5 rounded font-mono font-bold">
+                              {activeRoom.room_type}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-[#64748B] mt-0.5">Lantai {activeRoom.floor} / {activeRoom.size_sqm}m²</div>
+                          <div className="text-[10px] text-[#2E6F40] font-bold flex items-center gap-1 mt-0.5">
+                            <Info size={11} />
+                            <span>Lihat Galeri Foto ({[activeRoom.image_url, ...(activeRoom.images || [])].filter(Boolean).length} Foto)</span>
+                          </div>
                         </div>
-                      )}
-                      <div>
-                        <div className="font-extrabold text-[#3A444D] text-xs">Unit {activeRoom.room_number}</div>
-                        <div className="text-[9px] font-mono text-[#64748B] mt-0.5">Tipe: {activeRoom.room_type}</div>
-                        <div className="text-[11px] text-[#64748B]">Lantai {activeRoom.floor} / {activeRoom.size_sqm}m²</div>
                       </div>
+                      <ChevronRight size={16} className="text-[#2E6F40] group-hover/activebox:translate-x-0.5 transition-transform shrink-0" />
                     </div>
 
                     {/* Quick Calculator */}
@@ -3500,14 +3517,23 @@ export default function Home({}: HomeProps) {
                       className="w-full h-52 rounded-2xl overflow-x-auto flex snap-x snap-mandatory scroll-smooth no-scrollbar bg-slate-100 border border-[#E2E8F0]"
                     >
                       {detailRoomImages.map((img, idx) => (
-                        <div key={idx} className="w-full h-full shrink-0 snap-start relative">
+                        <div 
+                          key={idx} 
+                          onClick={() => setSelectedRoomImage(img)}
+                          className="w-full h-full shrink-0 snap-start relative cursor-zoom-in group/zoom"
+                          title="Klik untuk memperbesar gambar dalam tampilan Layar Penuh"
+                        >
                           <img 
                             src={img} 
                             alt={`Kamar ${selectedRoomForDetail.room_number} Gambar ${idx + 1}`} 
-                            className="w-full h-full object-cover select-none"
+                            className="w-full h-full object-cover select-none group-hover/zoom:scale-102 transition-transform duration-300"
                             draggable="false"
                             referrerPolicy="no-referrer"
                           />
+                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/zoom:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none">
+                            <Search size={14} className="text-amber-300" />
+                            <span>Perbesar Gambar</span>
+                          </div>
                         </div>
                       ))}
                     </div>

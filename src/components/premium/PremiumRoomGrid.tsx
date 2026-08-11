@@ -6,6 +6,7 @@ import { LayoutGrid, HelpCircle, AlertCircle, Compass } from 'lucide-react';
 interface PremiumRoomGridProps {
   rooms: Room[];
   onSelectRoom: (room: Room) => void;
+  onViewRoomDetail?: (room: Room) => void;
   title?: string;
   subtitle?: string;
 }
@@ -13,6 +14,7 @@ interface PremiumRoomGridProps {
 export const PremiumRoomGrid: React.FC<PremiumRoomGridProps> = ({ 
   rooms, 
   onSelectRoom,
+  onViewRoomDetail,
   title = "Pilihan Kamar Eksklusif",
   subtitle = "Temukan kamar kos impian Anda dengan fasilitas terlengkap dan jaminan kenyamanan tingkat tinggi."
 }) => {
@@ -63,6 +65,7 @@ export const PremiumRoomGrid: React.FC<PremiumRoomGridProps> = ({
               key={room.id}
               room={room}
               onSelect={onSelectRoom}
+              onViewDetail={onViewRoomDetail}
             />
           ))}
         </div>

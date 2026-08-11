@@ -169,6 +169,114 @@ async function startServer() {
     return res.json({ status: 'OK' });
   });
 
+  // Admin API: Contract Extension Settlement (Secured via requireAdminAuth + service_role)
+  app.post('/api/admin/contract-extension/settle', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const {
+        tenantId,
+        extensionMonths,
+        totalAmount,
+        paymentMethod,
+        midtransOrderId,
+        transactionId,
+        notes
+      } = req.body;
+
+      if (!tenantId || !extensionMonths || !totalAmount) {
+        return res.status(400).json({ error: 'tenantId, extensionMonths, dan totalAmount wajib diisi.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase service role belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const orderId = midtransOrderId || `EXT-${tenantId}-${Date.now()}`;
+      const trxId = transactionId || `mid-tr-ext-${Math.floor(100000 + Math.random() * 900000)}`;
+
+      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('settle_contract_extension', {
+        p_tenant_id: tenantId,
+        p_extension_months: extensionMonths,
+        p_total_amount: totalAmount,
+        p_payment_method: paymentMethod || 'Tunai / Transfer Manual',
+        p_order_id: orderId,
+        p_transaction_id: trxId,
+        p_notes: notes || null
+      });
+
+      if (rpcErr) {
+        console.error('[Admin API] settle_contract_extension RPC error:', rpcErr);
+        return res.status(500).json({ error: rpcErr.message || 'Gagal memproses perpanjangan kontrak.' });
+      }
+
+      return res.status(200).json({
+        success: true,
+        invoiceId: rpcRes?.invoice_id,
+        newDurationMonths: rpcRes?.new_duration_months
+      });
+    } catch (err: any) {
+      console.error('[Admin API] contract-extension/settle failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // Admin API: Financial Transaction Post (Secured via requireAdminAuth + service_role)
+  app.post('/api/admin/financial-transaction/post', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const {
+        category,
+        description,
+        amount,
+        type,
+        reference_type,
+        reference_id,
+        created_by,
+        debit_account_id,
+        credit_account_id
+      } = req.body;
+
+      if (!category || !description || !amount || !type || !debit_account_id || !credit_account_id) {
+        return res.status(400).json({ error: 'Field wajib untuk posting transaksi belum lengkap.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase service role belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const trxDate = new Date().toISOString().split('T')[0];
+      const trxNo = `TRX-${trxDate.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
+
+      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('post_financial_transaction', {
+        p_transaction_no: trxNo,
+        p_transaction_date: trxDate,
+        p_category: category,
+        p_description: description,
+        p_amount: amount,
+        p_type: type,
+        p_reference_type: reference_type || null,
+        p_reference_id: reference_id || null,
+        p_created_by: created_by || 'Admin',
+        p_debit_account_id: debit_account_id,
+        p_credit_account_id: credit_account_id
+      });
+
+      if (rpcErr) {
+        console.error('[Admin API] post_financial_transaction RPC error:', rpcErr);
+        return res.status(500).json({ error: rpcErr.message || 'Gagal memposting transaksi keuangan.' });
+      }
+
+      return res.status(200).json({ success: true, data: rpcRes });
+    } catch (err: any) {
+      console.error('[Admin API] financial-transaction/post failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
   app.post('/api/midtrans/charge', apiRateLimiter(60000, 30), async (req, res) => {
     try {
       const { order_id, gross_amount, customer_details, item_details } = req.body;
@@ -1179,6 +1287,110 @@ async function startServer() {
               }
             } else {
               console.warn(`[SUPABASE WEBHOOK SYNC] Survey record not found for ${orderId}`);
+            }
+          } else if (orderId.startsWith('EXT-') || orderId.startsWith('EXTEND-')) {
+            console.log(`[SUPABASE WEBHOOK SYNC] Processing contract extension payment settlement for ${orderId}`);
+            
+            // 1. Fetch contract extension record by orderId or parse tenant ID
+            let { data: ext } = await supabase
+              .from('contract_extensions')
+              .select('*')
+              .eq('midtrans_order_id', orderId)
+              .maybeSingle();
+
+            let tenantId = ext?.tenant_id;
+            let extensionMonths = ext?.extension_months || 1;
+            let totalAmount = ext?.total_amount || Number(notification.gross_amount || 0);
+
+            if (!tenantId) {
+              // Parse tenant ID from order ID format: EXT-{tenant_id}-{timestamp}
+              const parts = orderId.split('-');
+              if (parts.length >= 2) {
+                tenantId = parseInt(parts[1], 10);
+              }
+            }
+
+            if (tenantId) {
+              // Execute atomic RPC settlement
+              const { data: rpcRes, error: rpcErr } = await supabase.rpc('settle_contract_extension', {
+                p_tenant_id: tenantId,
+                p_extension_months: extensionMonths,
+                p_total_amount: totalAmount,
+                p_payment_method: paymentType || 'Midtrans SNAP',
+                p_order_id: orderId,
+                p_transaction_id: notification.transaction_id || `mid-tr-ext-${Math.floor(100000 + Math.random() * 900000)}`
+              });
+
+              let invoiceId = rpcRes?.invoice_id || `INV-EXT-${Math.floor(1000 + Math.random() * 9000)}`;
+
+              if (rpcErr) {
+                console.warn('[SUPABASE WEBHOOK WARNING] Contract extension RPC error, fallback manual execution:', rpcErr.message);
+                // Fallback manual execution
+                const { data: tenantObj } = await supabase.from('tenants').select('*').eq('id', tenantId).maybeSingle();
+                if (tenantObj) {
+                  const newDuration = (tenantObj.duration_months || 1) + extensionMonths;
+                  await supabase.from('tenants').update({
+                    duration_months: newDuration,
+                    payment_status: 'paid',
+                    status: 'active'
+                  }).eq('id', tenantId);
+
+                  await supabase.from('payments').insert({
+                    id: invoiceId,
+                    tenant_name: tenantObj.full_name,
+                    property_id: tenantObj.property_id,
+                    amount: totalAmount,
+                    method: paymentType || 'Midtrans SNAP',
+                    status: 'paid',
+                    payment_date: new Date().toISOString().split('T')[0],
+                    midtrans_order_id: orderId,
+                    transaction_id: notification.transaction_id || `mid-tr-ext-${Math.floor(100000 + Math.random() * 900000)}`
+                  });
+                }
+              }
+
+              // Send email receipt
+              const { data: tenantObj } = await supabase.from('tenants').select('*').eq('id', tenantId).maybeSingle();
+              if (tenantObj && tenantObj.email) {
+                let propertyName = 'Samara Stay Residence';
+                if (tenantObj.property_id) {
+                  const { data: prop } = await supabase.from('properties').select('name').eq('id', tenantObj.property_id).maybeSingle();
+                  if (prop) propertyName = prop.name;
+                }
+
+                const subject = `[Samara Stay] Bukti Pembayaran Perpanjangan Kontrak - Unit ${tenantObj.room_number}`;
+                const text = `Halo ${tenantObj.full_name}, pembayaran perpanjangan kontrak sewa kamar Anda di ${propertyName} (Unit ${tenantObj.room_number}) selama ${extensionMonths} bulan telah berhasil dilunasi!`;
+                const html = `
+                  <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff; color: #1e293b;">
+                    <div style="text-align: center; border-bottom: 2px solid #0d9488; padding-bottom: 15px; margin-bottom: 20px;">
+                      <h1 style="color: #2D3A44; margin: 0; font-size: 24px;">SAMARA STAY</h1>
+                      <p style="color: #64748b; font-size: 12px; margin: 5px 0 0 0; text-transform: uppercase; font-family: monospace;">Bukti Pelunasan Perpanjangan Kontrak</p>
+                    </div>
+                    <div style="text-align: center; margin-bottom: 20px;">
+                      <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; padding: 6px 16px; border-radius: 9999px; display: inline-block;">LUNAS / PAID</span>
+                      <h2 style="color: #0d9488; margin: 10px 0 0 0; font-size: 18px;">INVOICE PERPANJANGAN KONTRAK</h2>
+                      <p style="color: #64748b; font-size: 12px; font-family: monospace; margin: 2px 0 0 0;">Invoice No: ${invoiceId}</p>
+                    </div>
+                    <p>Halo <strong>${tenantObj.full_name}</strong>,</p>
+                    <p>Terima kasih atas pembayaran Anda. Kontrak sewa Anda telah diperpanjang secara otomatis di sistem kami.</p>
+                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin: 20px 0;">
+                      <h3 style="color: #2D3A44; margin-top: 0; margin-bottom: 12px; font-size: 13px; text-transform: uppercase;">Rincian Perpanjangan</h3>
+                      <table style="width: 100%; font-size: 13px; line-height: 2;">
+                        <tr><td style="color: #64748b; width: 45%;">Nama Penyewa:</td><td><strong>${tenantObj.full_name}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Gedung Kos:</td><td><strong>${propertyName}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Nomer Kamar:</td><td><strong>Kamar ${tenantObj.room_number}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Jangka Perpanjangan:</td><td><strong style="color: #0d9488;">${extensionMonths} Bulan</strong></td></tr>
+                        <tr><td style="color: #64748b;">Total Pembayaran:</td><td><strong style="color: #047857; font-size: 15px;">Rp ${totalAmount.toLocaleString('id-ID')}</strong></td></tr>
+                        <tr><td style="color: #64748b;">Metode Pembayaran:</td><td><strong>${paymentType || 'Midtrans SNAP'}</strong></td></tr>
+                      </table>
+                    </div>
+                    <div style="text-align: center; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 11px; color: #94a3b8;">
+                      &copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi.
+                    </div>
+                  </div>
+                `;
+                sendServerEmail(tenantObj.email, subject, text, html);
+              }
             }
           }
         } else if (paymentStatus === 'overdue') {

@@ -73,6 +73,27 @@ export interface Tenant {
   status?: 'active' | 'checkout';
 }
 
+export interface ContractExtension {
+  id: number;
+  tenant_id: number;
+  tenant_name: string;
+  property_id: number | null;
+  property_name?: string;
+  room_number: string;
+  old_start_date?: string;
+  old_duration_months?: number;
+  extension_months: number;
+  monthly_rate: number;
+  total_amount: number;
+  payment_method: string;
+  status: 'pending' | 'paid' | 'cancelled';
+  midtrans_order_id?: string;
+  invoice_id?: string;
+  notes?: string;
+  created_at?: string;
+  paid_at?: string;
+}
+
 export interface Booking {
   id: number;
   tenant_name: string;

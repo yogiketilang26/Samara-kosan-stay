@@ -11,13 +11,15 @@ interface PropertyDetailProps {
   rooms: Room[];
   onBack: () => void;
   onSelectRoom: (room: Room) => void;
+  onViewRoomDetail?: (room: Room) => void;
 }
 
 export const PropertyDetail: React.FC<PropertyDetailProps> = ({
   property,
   rooms,
   onBack,
-  onSelectRoom
+  onSelectRoom,
+  onViewRoomDetail
 }) => {
   const propertyRooms = rooms.filter(r => r.property_id === property.id && r.status === 'available');
 
@@ -135,6 +137,7 @@ export const PropertyDetail: React.FC<PropertyDetailProps> = ({
                 key={room.id}
                 room={room}
                 onSelect={() => onSelectRoom(room)}
+                onViewDetail={onViewRoomDetail}
               />
             ))}
           </div>

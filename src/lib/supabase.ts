@@ -5,7 +5,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { 
-  Property, Room, Tenant, Booking, PaymentInvoice, Maintenance, 
+  Property, Room, Tenant, ContractExtension, Booking, PaymentInvoice, Maintenance, 
   UserSystem, ActivityLog, Survey, AccountCOA, FinancialTransaction, 
   JournalEntry, SystemSettings, Coupon, PettyCashRequest, FixedAsset,
   Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, Facility
@@ -1164,123 +1164,15 @@ export const database = {
     debit_account_id: number;
     credit_account_id: number;
   }): Promise<void> {
-    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
-    const {
-      category,
-      description,
-      amount,
-      type,
-      reference_type,
-      reference_id,
-      created_by,
-      debit_account_id,
-      credit_account_id
-    } = payload;
+    const res = await fetch('/api/admin/financial-transaction/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
 
-    const trxDate = new Date().toISOString().split('T')[0];
-
-    try {
-      const trxNoSupabase = `TRX-${trxDate.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
-
-      // Try running PostgreSQL atomic stored RPC function
-      const { data: rpcResult, error: rpcError } = await supabase.rpc('post_financial_transaction', {
-        p_transaction_no: trxNoSupabase,
-        p_transaction_date: trxDate,
-        p_category: category,
-        p_description: description,
-        p_amount: amount,
-        p_type: type,
-        p_reference_type: reference_type || null,
-        p_reference_id: reference_id || null,
-        p_created_by: created_by,
-        p_debit_account_id: debit_account_id,
-        p_credit_account_id: credit_account_id
-      });
-
-      if (rpcError) {
-        console.warn("[Posting Engine] RPC failed, running direct database atomic fallback.", rpcError);
-
-        let insertedTrx: any = null;
-        let insertedDebJrn: any = null;
-        let insertedCredJrn: any = null;
-        let oldDebitBalance: number | null = null;
-        let oldCreditBalance: number | null = null;
-
-        try {
-          const { data: debAcc } = await supabase.from('accounts').select('balance, type').eq('id', debit_account_id).single();
-          const { data: credAcc } = await supabase.from('accounts').select('balance, type').eq('id', credit_account_id).single();
-          
-          if (!debAcc || !credAcc) throw new Error("Account validation failed during transaction.");
-          oldDebitBalance = Number(debAcc.balance || 0);
-          oldCreditBalance = Number(credAcc.balance || 0);
-
-          const trxPayload = {
-            transaction_no: trxNoSupabase,
-            transaction_date: trxDate,
-            category,
-            description,
-            amount,
-            type,
-            reference_type: reference_type || null,
-            reference_id: reference_id || null,
-            created_by
-          };
-          const { data: trxData, error: trxErr } = await supabase.from('financial_transactions').insert(trxPayload).select().single();
-          if (trxErr) throw trxErr;
-          insertedTrx = trxData;
-
-          const jrnNoSupabase = `JRN-${trxDate.replace(/-/g, '')}-${String(insertedTrx.id).padStart(5, '0')}`;
-
-          const debPayload = {
-            journal_no: jrnNoSupabase,
-            transaction_id: insertedTrx.id,
-            account_id: debit_account_id,
-            debit: amount,
-            credit: 0
-          };
-          const { data: debJrn, error: debErr } = await supabase.from('journal_entries').insert(debPayload).select().single();
-          if (debErr) throw debErr;
-          insertedDebJrn = debJrn;
-
-          const credPayload = {
-            journal_no: jrnNoSupabase,
-            transaction_id: insertedTrx.id,
-            account_id: credit_account_id,
-            debit: 0,
-            credit: amount
-          };
-          const { data: credJrn, error: credErr } = await supabase.from('journal_entries').insert(credPayload).select().single();
-          if (credErr) throw credErr;
-          insertedCredJrn = credJrn;
-
-          const isAssetOrExpense = debAcc.type === 'asset' || debAcc.type === 'expense';
-          const newDebitBalance = isAssetOrExpense 
-            ? oldDebitBalance + amount 
-            : Math.max(0, oldDebitBalance - amount);
-          await safeSupabaseUpsert('accounts', { balance: newDebitBalance }, debit_account_id);
-
-          const isLiabilityOrEquityOrRevenue = credAcc.type === 'liability' || credAcc.type === 'equity' || credAcc.type === 'revenue';
-          const newCreditBalance = isLiabilityOrEquityOrRevenue 
-            ? oldCreditBalance + amount 
-            : Math.max(0, oldCreditBalance - amount);
-          await safeSupabaseUpsert('accounts', { balance: newCreditBalance }, credit_account_id);
-
-          console.log("[Posting Engine] DB transactions completed and committed successfully.");
-        } catch (dbErr) {
-          console.error("[Posting Engine] DB transaction error. Rolling back...", dbErr);
-          if (insertedCredJrn) await supabase.from('journal_entries').delete().eq('id', insertedCredJrn.id);
-          if (insertedDebJrn) await supabase.from('journal_entries').delete().eq('id', insertedDebJrn.id);
-          if (insertedTrx) await supabase.from('financial_transactions').delete().eq('id', insertedTrx.id);
-          if (oldDebitBalance !== null) await safeSupabaseUpsert('accounts', { balance: oldDebitBalance }, debit_account_id);
-          if (oldCreditBalance !== null) await safeSupabaseUpsert('accounts', { balance: oldCreditBalance }, credit_account_id);
-          throw dbErr;
-        }
-      } else {
-        console.log("[Posting Engine] RPC post_financial_transaction executed successfully on Supabase:", rpcResult);
-      }
-    } catch (err) {
-      console.error("Database posting transaction failed:", err);
-      throw err;
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || 'Gagal memposting transaksi keuangan di server.');
     }
   },
 
@@ -1737,6 +1629,83 @@ export const database = {
       console.error('deleteTenant failed:', err);
       throw err;
     }
+  },
+
+  // --- CONTRACT EXTENSIONS ---
+  async fetchContractExtensions(options?: { limit?: number; offset?: number }): Promise<ContractExtension[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('contract_extensions')
+        .select('*')
+        .order('id', { ascending: false })
+        .range(offset, offset + limit - 1);
+      if (error) {
+        logSupabaseError('fetchContractExtensions', error);
+        return [];
+      }
+      return data as ContractExtension[];
+    } catch (err) {
+      logSupabaseError('fetchContractExtensions', err, true);
+      return [];
+    }
+  },
+
+  async saveContractExtension(ext: Partial<ContractExtension>): Promise<ContractExtension> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = ext.id;
+      const payload = { ...ext };
+      delete (payload as any).id;
+
+      const { data, error } = await safeSupabaseUpsert('contract_extensions', payload, id);
+      if (error) {
+        logSupabaseError('saveContractExtension', error);
+        throw new Error(`Gagal menyimpan perpanjangan kontrak: ${error.message}`);
+      }
+      const updated = (data && data.length > 0 ? data[0] : ext) as ContractExtension;
+      return updated;
+    } catch (err: any) {
+      console.error('saveContractExtension failed:', err);
+      throw err;
+    }
+  },
+
+  async settleContractExtension(payload: {
+    tenantId: number;
+    extensionMonths: number;
+    totalAmount: number;
+    paymentMethod: string;
+    midtransOrderId?: string;
+    transactionId?: string;
+    notes?: string;
+  }): Promise<{ success: boolean; invoiceId: string; newDurationMonths: number }> {
+    const res = await fetch('/api/admin/contract-extension/settle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenantId: payload.tenantId,
+        extensionMonths: payload.extensionMonths,
+        totalAmount: payload.totalAmount,
+        paymentMethod: payload.paymentMethod,
+        midtransOrderId: payload.midtransOrderId,
+        transactionId: payload.transactionId,
+        notes: payload.notes
+      })
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || 'Gagal memproses perpanjangan kontrak di server.');
+    }
+
+    const result = await res.json();
+
+    await this.logActivity("Super Admin", "CONTRACT_EXTENSION", `Perpanjangan sewa ID tenant ${payload.tenantId} sebanyak ${payload.extensionMonths} bulan.`);
+
+    return result;
   },
 
   async deleteSurvey(id: number): Promise<boolean> {

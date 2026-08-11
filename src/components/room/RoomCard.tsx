@@ -7,22 +7,34 @@ import { Layers, Maximize } from 'lucide-react';
 interface RoomCardProps {
   room: Room;
   onSelect: () => void;
+  onViewDetail?: () => void;
 }
 
-export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect }) => {
+export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect, onViewDetail }) => {
+  const totalPhotos = [room.image_url, ...(room.images || [])].filter(Boolean).length;
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-4 hover:border-slate-700 transition-all shadow-lg font-sans overflow-hidden">
       {room.image_url && (
-        <div className="h-40 -mx-4 -mt-4 mb-1 relative overflow-hidden rounded-t-2xl">
+        <div 
+          onClick={onViewDetail || onSelect}
+          className="h-40 -mx-4 -mt-4 mb-1 relative overflow-hidden rounded-t-2xl cursor-pointer group"
+          title="Klik untuk melihat foto & detail kamar"
+        >
           <img 
             src={room.image_url} 
             alt={`Kamar ${room.room_number}`}
             referrerPolicy="no-referrer"
-            className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
+            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
             onError={(e) => {
               (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
             }}
           />
+          {totalPhotos > 0 && (
+            <span className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-md text-white text-[9px] font-mono px-2 py-0.5 rounded border border-white/20">
+              📷 {totalPhotos} Foto
+            </span>
+          )}
         </div>
       )}
       <div className="flex justify-between items-start">
@@ -69,17 +81,27 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect }) => {
           )}
         </div>
 
-        <button
-          onClick={onSelect}
-          disabled={room.status !== 'available'}
-          className={`px-3 py-1.5 rounded-xl font-bold uppercase text-[9px] tracking-wider transition-all cursor-pointer ${
-            room.status === 'available'
-              ? 'bg-amber-500 hover:bg-amber-450 text-black shadow-md'
-              : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-50'
-          }`}
-        >
-          {room.status === 'available' ? 'Pesan Kamar' : 'Tidak Tersedia'}
-        </button>
+        <div className="flex items-center gap-1.5">
+          {onViewDetail && (
+            <button
+              onClick={onViewDetail}
+              className="px-2.5 py-1.5 rounded-xl font-bold uppercase text-[9px] tracking-wider transition-all cursor-pointer bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700"
+            >
+              Foto
+            </button>
+          )}
+          <button
+            onClick={onSelect}
+            disabled={room.status !== 'available'}
+            className={`px-3 py-1.5 rounded-xl font-bold uppercase text-[9px] tracking-wider transition-all cursor-pointer ${
+              room.status === 'available'
+                ? 'bg-amber-500 hover:bg-amber-450 text-black shadow-md'
+                : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-50'
+            }`}
+          >
+            {room.status === 'available' ? 'Pesan Kamar' : 'Tidak Tersedia'}
+          </button>
+        </div>
       </div>
     </div>
   );

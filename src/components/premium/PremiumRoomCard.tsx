@@ -6,24 +6,45 @@ import * as LucideIcons from 'lucide-react';
 interface PremiumRoomCardProps {
   room: Room;
   onSelect: (room: Room) => void;
+  onViewDetail?: (room: Room) => void;
 }
 
-export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect }) => {
+export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect, onViewDetail }) => {
   const isAvailable = room.status === 'available';
+  const totalPhotos = [room.image_url, ...(room.images || [])].filter(Boolean).length;
+
+  const handleDetailClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onViewDetail) {
+      onViewDetail(room);
+    } else {
+      onSelect(room);
+    }
+  };
 
   return (
     <div 
       className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 flex flex-col justify-between space-y-5 hover:border-[#0D9488] hover:shadow-xl transition-all duration-300 group overflow-hidden"
       id={`premium-room-card-${room.id}`}
     >
-      {/* Visual Top - Room Thumbnail with Badge */}
-      <div className="relative h-48 sm:h-52 -mx-5 -mt-5 mb-1 bg-slate-100 overflow-hidden rounded-t-[24px] select-none">
+      {/* Visual Top - Room Thumbnail with Badge & Photo Gallery Preview Trigger */}
+      <div 
+        onClick={handleDetailClick}
+        className="relative h-48 sm:h-52 -mx-5 -mt-5 mb-1 bg-slate-100 overflow-hidden rounded-t-[24px] select-none cursor-pointer group/img"
+        title="Klik untuk melihat galeri foto & detail lengkap kamar ini"
+      >
         <img 
           src={room.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=600&q=80"} 
           alt={`Kamar ${room.room_number}`}
           referrerPolicy="no-referrer"
-          className="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
+          className="w-full h-full object-cover transition-transform duration-500 group-hover/img:scale-108"
         />
+
+        {/* Hover overlay indicator */}
+        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover/img:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-1.5 text-white font-bold text-xs bg-gradient-to-t from-black/70 via-black/20 to-transparent">
+          <LucideIcons.Camera className="w-4 h-4 text-amber-300" />
+          <span>Lihat {totalPhotos > 1 ? `${totalPhotos} Foto Galeri` : 'Detail Foto'}</span>
+        </div>
         
         {/* Availability Badge */}
         <div className="absolute top-4 left-4">
@@ -45,6 +66,16 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
             {room.room_type}
           </span>
         </div>
+
+        {/* Photo count badge */}
+        {totalPhotos > 0 && (
+          <div className="absolute bottom-3 right-3">
+            <span className="bg-black/75 backdrop-blur-md text-white text-[9px] font-mono font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-sm border border-white/20">
+              <LucideIcons.Image className="w-3 h-3 text-amber-300" />
+              {totalPhotos} Foto
+            </span>
+          </div>
+        )}
 
         {/* Daily Option Tag */}
         {room.is_daily_enabled && (
@@ -118,18 +149,27 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
       </div>
 
       {/* Button Action Block */}
-      <div className="pt-2">
+      <div className="pt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={handleDetailClick}
+          className="w-full py-2.5 px-2 bg-white border border-[#E2E8F0] hover:border-[#0D9488] hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl font-bold text-xs transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+        >
+          <LucideIcons.Info className="w-3.5 h-3.5 text-[#0D9488]" />
+          <span>Detail & Foto</span>
+        </button>
+
         <button
           type="button"
           onClick={() => onSelect(room)}
           disabled={!isAvailable}
-          className={`w-full py-3 rounded-xl font-bold text-xs transition-all duration-300 cursor-pointer text-center ${
+          className={`w-full py-2.5 px-2 rounded-xl font-bold text-xs transition-all duration-300 cursor-pointer text-center flex items-center justify-center gap-1 ${
             isAvailable
-              ? 'bg-[#0D9488] hover:bg-[#115E59] text-white shadow-sm hover:shadow-md'
+              ? 'bg-[#0D9488] hover:bg-[#115E59] text-white shadow-xs hover:shadow-md'
               : 'bg-[#F1F5F9] text-[#94A3B8] cursor-not-allowed border border-[#E2E8F0]'
           }`}
         >
-          {isAvailable ? 'Pesan Kamar Sekarang' : 'Kamar Tidak Tersedia'}
+          <span>{isAvailable ? 'Pesan Kamar' : 'Terisi'}</span>
         </button>
       </div>
     </div>

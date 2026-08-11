@@ -251,7 +251,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         id: room?.id,
         property_id: Number(formData.property_id),
         room_number: formData.room_number,
-        room_type: formData.room_type,
+        room_type: formData.room_type as 'Standard' | 'Deluxe' | 'Premium',
         price: Number(formData.price),
         size_sqm: Number(formData.size_sqm),
         floor: Number(formData.floor),

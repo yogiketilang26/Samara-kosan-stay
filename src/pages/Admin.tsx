@@ -4,7 +4,8 @@ import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAUL
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { observability, useRenderCounter } from '../lib/observability';
-import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem } from '../types';
+import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem } from '../types';
+import { loadMidtransSnapScript, requestSnapTokenFromServer } from '../lib/midtrans';
 import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
 import { Loader } from '../components/common/Loader';
@@ -22,7 +23,7 @@ import {
   History, Users, UserPlus, Download, Search, UserCheck, Activity,
   FileText, Printer, ShieldPlus, Trash, UserCog, Terminal, HelpCircle,
   ExternalLink, RefreshCw, Server, Copy, Mail, Play, RotateCw,
-  Sparkles, Landmark, Coins, ShoppingBag, Wrench, Wallet, Percent, Shield,
+  Sparkles, Landmark, Coins, ShoppingBag, Wrench, Wallet, Percent, Shield, ShieldCheck,
   TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle,
   FileSignature, PenTool, Upload, CheckCircle2
 } from 'lucide-react';
@@ -410,6 +411,9 @@ export default function Admin({}: AdminProps) {
   const { data: masterFacilitiesData, loading: masterFacilitiesLoading, refetch: refetchMasterFacilities } = useRealtimeTable<any>(
     'facilities',
     () => database.fetchMasterFacilities());
+  const { data: contractExtensionsData, refetch: refetchContractExtensions } = useRealtimeTable<ContractExtension>(
+    'contract_extensions',
+    () => database.fetchContractExtensions());
 
   const hooksLoading = propertiesLoading || roomsLoading || bookingsLoading || surveysLoading || couponsLoading ||
     transactionsLoading || activityLogsLoading || usersLoading || tenantsLoading || accountsLoading ||
@@ -438,6 +442,25 @@ export default function Admin({}: AdminProps) {
   const [users, setUsers] = useState<UserSystem[]>([]);
   const [tenantsList, setTenantsList] = useState<Tenant[]>([]);
   const [tenantFilter, setTenantFilter] = useState<'active' | 'checkout'>('active');
+  const [selectedTenantPropertyFilter, setSelectedTenantPropertyFilter] = useState<string>('all');
+
+  // Contract Extension States
+  const [showExtensionModal, setShowExtensionModal] = useState(false);
+  const [selectedTenantForExtension, setSelectedTenantForExtension] = useState<Tenant | null>(null);
+  const [extensionMonths, setExtensionMonths] = useState(1);
+  const [extensionMonthlyRate, setExtensionMonthlyRate] = useState(1500000);
+  const [extensionPaymentMethod, setExtensionPaymentMethod] = useState<'midtrans' | 'manual'>('midtrans');
+  const [extensionNotes, setExtensionNotes] = useState('');
+  const [isProcessingExtension, setIsProcessingExtension] = useState(false);
+  const [contractExtensionsList, setContractExtensionsList] = useState<ContractExtension[]>([]);
+  const [showExtensionProofModal, setShowExtensionProofModal] = useState(false);
+  const [selectedExtensionProof, setSelectedExtensionProof] = useState<ContractExtension | null>(null);
+  const [selectedTenantForHistory, setSelectedTenantForHistory] = useState<Tenant | null>(null);
+  const [showTenantHistoryModal, setShowTenantHistoryModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (contractExtensionsData) setContractExtensionsList(contractExtensionsData);
+  }, [contractExtensionsData]);
   const [loading, setLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
@@ -1228,6 +1251,158 @@ export default function Admin({}: AdminProps) {
         }
       }
     );
+  };
+
+  const handleProcessExtension = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTenantForExtension) return;
+
+    const tenant = selectedTenantForExtension;
+    const totalAmount = Number(extensionMonthlyRate) * Number(extensionMonths);
+
+    setIsProcessingExtension(true);
+    try {
+      const propertyName = properties.find(p => p.id === tenant.property_id)?.name || 'Gedung Kos Samara';
+
+      if (extensionPaymentMethod === 'midtrans') {
+        const orderId = `EXT-${tenant.id}-${Date.now()}`;
+
+        await database.saveContractExtension({
+          tenant_id: tenant.id,
+          tenant_name: tenant.full_name,
+          property_id: tenant.property_id,
+          property_name: propertyName,
+          room_number: tenant.room_number,
+          old_start_date: tenant.start_date,
+          old_duration_months: tenant.duration_months,
+          extension_months: Number(extensionMonths),
+          monthly_rate: Number(extensionMonthlyRate),
+          total_amount: totalAmount,
+          payment_method: 'Midtrans SNAP',
+          status: 'pending',
+          midtrans_order_id: orderId,
+          notes: extensionNotes || `Perpanjangan kontrak ${extensionMonths} Bulan - Kamar ${tenant.room_number}`
+        });
+
+        await loadMidtransSnapScript();
+
+        const snapRes = await requestSnapTokenFromServer({
+          orderId,
+          grossAmount: totalAmount,
+          description: `Perpanjangan Kontrak Kos Kamar ${tenant.room_number} (${extensionMonths} Bulan) - ${tenant.full_name}`,
+          customerDetails: {
+            name: tenant.full_name,
+            email: tenant.email || 'tenant@samarastay.com',
+            phone: tenant.phone
+          }
+        });
+
+        if (snapRes && snapRes.token && (window as any).snap) {
+          (window as any).snap.pay(snapRes.token, {
+            onSuccess: async (result: any) => {
+              console.log('[Midtrans Snap Extension Success]', result);
+              showToast('Pembayaran perpanjangan kontrak via Midtrans berhasil! Memperbarui status...');
+              // Tunggu sejenak agar webhook server sempat memproses
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+              startModuleRefresh('tenants');
+              startModuleRefresh('payments');
+              startModuleRefresh('transactions');
+              await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+              
+              // Ambil record yang baru disettle oleh webhook/server
+              const { data: updatedExt } = await supabase
+                .from('contract_extensions')
+                .select('*')
+                .eq('midtrans_order_id', orderId)
+                .maybeSingle();
+
+              const newProof: ContractExtension = (updatedExt as any) || {
+                id: Date.now(),
+                tenant_id: tenant.id,
+                tenant_name: tenant.full_name,
+                property_id: tenant.property_id,
+                property_name: propertyName,
+                room_number: tenant.room_number,
+                old_start_date: tenant.start_date,
+                old_duration_months: tenant.duration_months,
+                extension_months: Number(extensionMonths),
+                monthly_rate: Number(extensionMonthlyRate),
+                total_amount: totalAmount,
+                payment_method: 'Midtrans SNAP',
+                status: 'paid',
+                midtrans_order_id: orderId,
+                invoice_id: updatedExt?.invoice_id || `INV-EXT-${tenant.id}`,
+                notes: extensionNotes || `Perpanjangan sewa ${extensionMonths} bulan`,
+                created_at: new Date().toISOString()
+              };
+
+              setShowExtensionModal(false);
+              setSelectedExtensionProof(newProof);
+              setShowExtensionProofModal(true);
+            },
+            onPending: async (result: any) => {
+              showToast('Transaksi perpanjangan menunggu pembayaran Midtrans.', 'error');
+              await refetchContractExtensions();
+              setShowExtensionModal(false);
+            },
+            onError: (err: any) => {
+              console.error('[Midtrans Snap Extension Error]', err);
+              showToast('Gagal memproses pembayaran via Midtrans.', 'error');
+            },
+            onClose: () => {
+              showToast('Pop-up pembayaran Midtrans ditutup.');
+            }
+          });
+        } else {
+          showToast('Gagal memperoleh token pembayaran Midtrans. Mengalihkan ke transaksi manual.', 'error');
+        }
+      } else {
+        const orderId = `EXT-${tenant.id}-${Date.now()}`;
+        const res = await database.settleContractExtension({
+          tenantId: tenant.id,
+          extensionMonths: Number(extensionMonths),
+          totalAmount,
+          paymentMethod: 'Tunai / Transfer Manual',
+          midtransOrderId: orderId,
+          notes: extensionNotes || `Pelunasan langsung perpanjangan sewa ${extensionMonths} bulan`
+        });
+
+        showToast(`Perpanjangan kontrak ${tenant.full_name} (${extensionMonths} Bulan) berhasil diproses!`);
+        startModuleRefresh('tenants');
+        startModuleRefresh('payments');
+        startModuleRefresh('transactions');
+        await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+        
+        const newProof: ContractExtension = {
+          id: Date.now(),
+          tenant_id: tenant.id,
+          tenant_name: tenant.full_name,
+          property_id: tenant.property_id,
+          property_name: propertyName,
+          room_number: tenant.room_number,
+          old_start_date: tenant.start_date,
+          old_duration_months: tenant.duration_months,
+          extension_months: Number(extensionMonths),
+          monthly_rate: Number(extensionMonthlyRate),
+          total_amount: totalAmount,
+          payment_method: 'Tunai / Transfer Manual',
+          status: 'paid',
+          midtrans_order_id: orderId,
+          invoice_id: res?.invoiceId || `INV-EXT-${tenant.id}`,
+          notes: extensionNotes || `Pelunasan langsung perpanjangan sewa ${extensionMonths} bulan`,
+          created_at: new Date().toISOString()
+        };
+
+        setShowExtensionModal(false);
+        setSelectedExtensionProof(newProof);
+        setShowExtensionProofModal(true);
+      }
+    } catch (err: any) {
+      console.error('Error processing contract extension:', err);
+      showToast(err.message || 'Gagal memperpanjang kontrak.', 'error');
+    } finally {
+      setIsProcessingExtension(false);
+    }
   };
 
   const handleSaveFacility = async (e: React.FormEvent) => {
@@ -4756,37 +4931,62 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               </button>
             </div>
 
-            {/* Sub-tabs for filtering Active vs Checked Out tenants */}
-            <div className="flex gap-2 p-1 bg-[#F1F5F9] rounded-2xl w-fit">
-              <button
-                type="button"
-                onClick={() => setTenantFilter('active')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  tenantFilter === 'active'
-                    ? 'bg-white text-[#0D9488] shadow-xs'
-                    : 'text-[#64748B] hover:text-[#3A444D]'
-                }`}
-              >
-                Aktif Berjalan
-              </button>
-              <button
-                type="button"
-                onClick={() => setTenantFilter('checkout')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  tenantFilter === 'checkout'
-                    ? 'bg-white text-[#0D9488] shadow-xs'
-                    : 'text-[#64748B] hover:text-[#3A444D]'
-                }`}
-              >
-                Sudah Check-Out
-              </button>
+            {/* Sub-tabs & Building Filters for Tenants */}
+            <div className="flex items-center justify-between flex-wrap gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
+              {/* Filter 1: Status Aktif / Check-Out */}
+              <div className="flex gap-2 p-1 bg-[#F1F5F9] rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setTenantFilter('active')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    tenantFilter === 'active'
+                      ? 'bg-white text-[#0D9488] shadow-xs'
+                      : 'text-[#64748B] hover:text-[#3A444D]'
+                  }`}
+                >
+                  Aktif Berjalan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTenantFilter('checkout')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    tenantFilter === 'checkout'
+                      ? 'bg-white text-[#0D9488] shadow-xs'
+                      : 'text-[#64748B] hover:text-[#3A444D]'
+                  }`}
+                >
+                  Sudah Check-Out
+                </button>
+              </div>
+
+              {/* Filter 2: Pemisah Gedung Kos */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-600 flex items-center gap-1 font-mono">
+                  <Building2 size={14} className="text-[#0D9488]" />
+                  Gedung Kos:
+                </span>
+                <select
+                  value={selectedTenantPropertyFilter}
+                  onChange={(e) => setSelectedTenantPropertyFilter(e.target.value)}
+                  className="bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0D9488] shadow-xs cursor-pointer"
+                >
+                  <option value="all">🏢 Semua Gedung Kos ({properties.length})</option>
+                  {properties.map(p => (
+                    <option key={p.id} value={String(p.id)}>
+                      📍 {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {tenantsList
                 .filter(t => {
                   const isCheckout = t.status === 'checkout';
-                  return tenantFilter === 'checkout' ? isCheckout : !isCheckout;
+                  const matchesStatus = tenantFilter === 'checkout' ? isCheckout : !isCheckout;
+                  const matchesProperty = selectedTenantPropertyFilter === 'all' || String(t.property_id) === String(selectedTenantPropertyFilter);
+                  return matchesStatus && matchesProperty;
                 })
                 .map(t => {
                 const propertyName = properties.find(p => p.id === t.property_id)?.name || 'Properti Kos';
@@ -4866,40 +5066,96 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           </span>
                         </div>
                         {t.status !== 'checkout' && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              customConfirm(
-                                'Check Out Penghuni',
-                                `Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`,
-                                async () => {
-                                  await database.saveTenant({ ...t, status: 'checkout' });
-                                  const rList = rooms.filter(x => x.room_number === t.room_number);
-                                  for (const matchedRoom of rList) {
-                                    await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
-                                  }
-                                  const matchedBooking = bookings.find(b => 
-                                    b.room_number === t.room_number && 
-                                    b.property_id === t.property_id && 
-                                    (b.tenant_name.toLowerCase() === t.full_name.toLowerCase() || 
-                                     (b.occupant_name && b.occupant_name.toLowerCase() === t.full_name.toLowerCase())) &&
-                                    b.status === 'approved'
-                                  );
-                                  if (matchedBooking) {
-                                    await database.saveBooking({ ...matchedBooking, status: 'checkout' });
-                                  }
-                                  database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name} (Status: Checkout)`);
-                                  startModuleRefresh('tenants');
-                                  await refetchTenants();
-                                  await refetchRooms();
-                                  showToast(`Penghuni ${t.full_name} berhasil di-checkout.`);
-                                }
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {(() => {
+                              const tenantExts = contractExtensionsList.filter(ext => ext.tenant_id === t.id || (ext.tenant_name && ext.tenant_name.toLowerCase() === t.full_name.toLowerCase()));
+                              return (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {tenantExts.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (tenantExts.length === 1) {
+                                          setSelectedExtensionProof(tenantExts[0]);
+                                          setShowExtensionProofModal(true);
+                                        } else {
+                                          setSelectedTenantForHistory(t);
+                                          setShowTenantHistoryModal(true);
+                                        }
+                                      }}
+                                      className="bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <FileText size={11} className="text-[#0D9488]" />
+                                      Bukti Invoice Perpanjangan {tenantExts.length > 1 ? `(${tenantExts.length})` : ''}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedTenantForHistory(t);
+                                      setShowTenantHistoryModal(true);
+                                    }}
+                                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-[10px] font-bold px-2 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                    title="Lihat Seluruh Riwayat Pembayaran & Invoice"
+                                  >
+                                    <History size={11} className="text-slate-600" />
+                                    Riwayat Bayar
+                                  </button>
+                                </div>
                               );
-                            }}
-                            className="text-amber-600 hover:text-amber-700 text-[10px] font-bold font-sans transition-colors cursor-pointer bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg"
-                          >
-                            Proses Check-Out
-                          </button>
+                            })()}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const matchedRoom = rooms.find(r => r.room_number === t.room_number);
+                                const defaultPrice = matchedRoom ? matchedRoom.price : 1500000;
+                                setSelectedTenantForExtension(t);
+                                setExtensionMonths(1);
+                                setExtensionMonthlyRate(defaultPrice);
+                                setExtensionPaymentMethod('midtrans');
+                                setExtensionNotes('');
+                                setShowExtensionModal(true);
+                              }}
+                              className="bg-[#0D9488] hover:bg-[#115E59] text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all shadow-xs flex items-center gap-1 cursor-pointer"
+                            >
+                              <RotateCw size={11} />
+                              Perpanjang Kontrak
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                customConfirm(
+                                  'Check Out Penghuni',
+                                  `Keluarkan penghuni ${t.full_name} dan kosongkan kamar?`,
+                                  async () => {
+                                    await database.saveTenant({ ...t, status: 'checkout' });
+                                    const rList = rooms.filter(x => x.room_number === t.room_number);
+                                    for (const matchedRoom of rList) {
+                                      await database.saveRoom({ ...matchedRoom, status: 'available', current_tenant_name: '' });
+                                    }
+                                    const matchedBooking = bookings.find(b => 
+                                      b.room_number === t.room_number && 
+                                      b.property_id === t.property_id && 
+                                      (b.tenant_name.toLowerCase() === t.full_name.toLowerCase() || 
+                                       (b.occupant_name && b.occupant_name.toLowerCase() === t.full_name.toLowerCase())) &&
+                                      b.status === 'approved'
+                                    );
+                                    if (matchedBooking) {
+                                      await database.saveBooking({ ...matchedBooking, status: 'checkout' });
+                                    }
+                                    database.logActivity("System", "RELEASE_TENANT", `Pelepasan masa kontrak hunian ${t.full_name} (Status: Checkout)`);
+                                    startModuleRefresh('tenants');
+                                    await refetchTenants();
+                                    await refetchRooms();
+                                    showToast(`Penghuni ${t.full_name} berhasil di-checkout.`);
+                                  }
+                                );
+                              }}
+                              className="text-amber-600 hover:text-amber-700 text-[10px] font-bold font-sans transition-colors cursor-pointer bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg"
+                            >
+                              Proses Check-Out
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -4909,14 +5165,115 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
               {tenantsList.filter(t => {
                 const isCheckout = t.status === 'checkout';
-                return tenantFilter === 'checkout' ? isCheckout : !isCheckout;
+                const matchesStatus = tenantFilter === 'checkout' ? isCheckout : !isCheckout;
+                const matchesProperty = selectedTenantPropertyFilter === 'all' || String(t.property_id) === String(selectedTenantPropertyFilter);
+                return matchesStatus && matchesProperty;
               }).length === 0 && (
-                <div className="col-span-2 text-center text-slate-500 text-xs py-10">
-                  {tenantFilter === 'checkout' 
-                    ? 'Belum ada penyewa yang sudah check-out.' 
-                    : 'Belum ada penyewa yang check-in aktif berjalan.'}
+                <div className="col-span-2 text-center text-slate-500 text-xs py-10 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                  <p className="font-bold text-slate-600">
+                    {tenantFilter === 'checkout' 
+                      ? 'Belum ada penyewa yang sudah check-out' 
+                      : 'Belum ada penyewa yang check-in aktif berjalan'}
+                    {selectedTenantPropertyFilter !== 'all' && ` pada ${properties.find(p => String(p.id) === selectedTenantPropertyFilter)?.name || 'Gedung Kos yang dipilih'}`}.
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1">Data disinkronkan secara realtime dari Supabase.</p>
                 </div>
               )}
+            </div>
+
+            {/* Section: Realtime Contract Extensions Ledger */}
+            <div className="mt-8 pt-6 border-t border-[#E2E8F0] space-y-4 text-left">
+              <div className="flex justify-between items-center flex-wrap gap-2">
+                <div>
+                  <h3 className="text-base font-extrabold font-display text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
+                    <History size={16} className="text-[#0D9488]" />
+                    Riwayat Realtime Perpanjangan Kontrak & Invoice Payment
+                  </h3>
+                  <p className="text-xs text-[#64748B]">Data perpanjangan kontrak otomatis terhubung ke sistem Keuangan, Ledger COA & Webhook Midtrans.</p>
+                </div>
+                <span className="text-[10px] font-mono bg-teal-50 text-teal-700 px-2.5 py-1 rounded-full font-bold border border-teal-200">
+                  Total: {contractExtensionsList.length} Transaksi
+                </span>
+              </div>
+
+              <div className="bg-white border border-[#E2E8F0] rounded-[20px] overflow-hidden shadow-xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#F8FAFC] text-[#64748B] font-mono uppercase text-[10px] font-bold border-b border-[#E2E8F0]">
+                      <tr>
+                        <th className="p-3.5 pl-5">Tanggal & Order ID</th>
+                        <th className="p-3.5">Nama Penghuni</th>
+                        <th className="p-3.5">Gedung & Unit</th>
+                        <th className="p-3.5">Durasi Perpanjangan</th>
+                        <th className="p-3.5">Nominal Total</th>
+                        <th className="p-3.5">Metode Bayar</th>
+                        <th className="p-3.5">Status</th>
+                        <th className="p-3.5 text-right pr-5">Aksi / Invoice</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#F1F5F9] text-[#3A444D]">
+                      {contractExtensionsList.map(ext => (
+                        <tr key={ext.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="p-3.5 pl-5">
+                            <p className="font-mono text-[11px] font-bold text-slate-800">{ext.midtrans_order_id || `EXT-${ext.id}`}</p>
+                            <p className="text-[10px] text-slate-500 font-mono">{new Date(ext.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                          </td>
+                          <td className="p-3.5 font-bold text-slate-800 capitalize">
+                            {ext.tenant_name}
+                          </td>
+                          <td className="p-3.5">
+                            <p className="font-bold text-slate-800">{ext.property_name || 'Gedung Kos'}</p>
+                            <p className="text-[10px] text-[#0D9488] font-mono font-bold">Kamar {ext.room_number}</p>
+                          </td>
+                          <td className="p-3.5">
+                            <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded-lg text-[11px]">
+                              +{ext.extension_months} Bulan
+                            </span>
+                          </td>
+                          <td className="p-3.5 font-mono font-extrabold text-emerald-600">
+                            {formatRupiah(ext.total_amount)}
+                          </td>
+                          <td className="p-3.5 font-mono text-[10px] text-slate-600 font-semibold">
+                            {ext.payment_method || 'Midtrans SNAP'}
+                          </td>
+                          <td className="p-3.5">
+                            <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded-full font-mono border ${
+                              ext.status === 'paid'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : ext.status === 'failed'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                            }`}>
+                              {ext.status === 'paid' ? 'LUNAS (PAID)' : ext.status === 'failed' ? 'GAGAL' : 'PENDING'}
+                            </span>
+                          </td>
+                          <td className="p-3.5 text-right pr-5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedExtensionProof(ext);
+                                setShowExtensionProofModal(true);
+                              }}
+                              className="px-3 py-1.5 bg-slate-100 hover:bg-[#0D9488] hover:text-white text-slate-700 rounded-xl font-bold transition-all text-[10px] flex items-center gap-1 ml-auto cursor-pointer shadow-2xs"
+                            >
+                              <FileText size={12} />
+                              Bukti Invoice
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+
+                      {contractExtensionsList.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="text-center py-8 text-slate-400 text-xs font-medium">
+                            Belum ada riwayat perpanjangan kontrak pembayaran kos.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -7105,6 +7462,388 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold transition-all text-xs cursor-pointer shadow-xs disabled:opacity-50"
               >
                 {isProcessingPetty ? "Memproses..." : "Konfirmasi Tolak"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal: Perpanjangan Kontrak Pembayaran Kos */}
+      {showExtensionModal && selectedTenantForExtension && (
+        <Modal
+          isOpen={showExtensionModal}
+          onClose={() => setShowExtensionModal(false)}
+          title="Sistem Perpanjangan Kontrak Hunian (Extension)"
+        >
+          <form onSubmit={handleProcessExtension} className="space-y-4 font-sans text-slate-800 text-left">
+            <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4 space-y-2">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h4 className="font-extrabold text-teal-900 text-sm">{selectedTenantForExtension.full_name}</h4>
+                  <p className="text-[11px] text-teal-700 font-medium">
+                    {properties.find(p => p.id === selectedTenantForExtension.property_id)?.name || 'Gedung Kos Samara'} - <strong className="font-mono">Unit {selectedTenantForExtension.room_number}</strong>
+                  </p>
+                </div>
+                <span className="text-[10px] font-mono font-bold bg-teal-600 text-white px-2 py-0.5 rounded-full">
+                  {selectedTenantForExtension.duration_months || 1} Bulan Aktif
+                </span>
+              </div>
+              <div className="text-[11px] text-teal-800 pt-1 border-t border-teal-200/60 flex justify-between font-mono">
+                <span>Tanggal Mulai Kontrak:</span>
+                <span className="font-bold">{selectedTenantForExtension.start_date}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Jangka Waktu Perpanjangan (Bulan)</label>
+              <select
+                value={extensionMonths}
+                onChange={(e) => setExtensionMonths(Number(e.target.value))}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-[#0D9488]"
+              >
+                <option value={1}>1 Bulan</option>
+                <option value={2}>2 Bulan</option>
+                <option value={3}>3 Bulan (1 Triwulan)</option>
+                <option value={6}>6 Bulan (1 Semester)</option>
+                <option value={12}>12 Bulan (1 Tahun)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Harga Sewa Kamar per Bulan (Rp)</label>
+              <input
+                type="number"
+                required
+                min={100000}
+                value={extensionMonthlyRate}
+                onChange={(e) => setExtensionMonthlyRate(Number(e.target.value))}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 outline-none focus:border-[#0D9488]"
+              />
+            </div>
+
+            <div className="bg-slate-100 p-3.5 rounded-2xl flex justify-between items-center">
+              <span className="text-xs font-bold text-slate-700">Total Nominal Pembayaran:</span>
+              <span className="text-base font-extrabold font-mono text-[#0D9488]">
+                {formatRupiah(Number(extensionMonthlyRate) * Number(extensionMonths))}
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Metode Pembayaran & Settlement</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExtensionPaymentMethod('midtrans')}
+                  className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
+                    extensionPaymentMethod === 'midtrans'
+                      ? 'border-[#0D9488] bg-teal-50 text-[#0D9488] font-bold shadow-xs'
+                      : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                  }`}
+                >
+                  <p className="text-xs font-bold flex items-center gap-1.5">
+                    <ShieldCheck size={14} /> Midtrans Online (Snap / QRIS)
+                  </p>
+                  <p className="text-[10px] text-slate-500 mt-1">Pembayaran via payment gateway otomatis real-time.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExtensionPaymentMethod('manual')}
+                  className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
+                    extensionPaymentMethod === 'manual'
+                      ? 'border-[#0D9488] bg-teal-50 text-[#0D9488] font-bold shadow-xs'
+                      : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                  }`}
+                >
+                  <p className="text-xs font-bold flex items-center gap-1.5">
+                    <Wallet size={14} /> Pelunasan Tunai / Transfer Direct
+                  </p>
+                  <p className="text-[10px] text-slate-500 mt-1">Otomatis update durasi & catat posting ledger kas.</p>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Catatan Tambahan (Opsional)</label>
+              <input
+                type="text"
+                value={extensionNotes}
+                onChange={(e) => setExtensionNotes(e.target.value)}
+                placeholder="Contoh: Perpanjangan semester ganjil 2026"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-[#0D9488]"
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowExtensionModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                disabled={isProcessingExtension}
+                className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-bold transition-all text-xs cursor-pointer shadow-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {isProcessingExtension ? (
+                  <>
+                    <RotateCw size={13} className="animate-spin text-white" />
+                    <span>Memproses...</span>
+                  </>
+                ) : (
+                  extensionPaymentMethod === 'midtrans' ? 'Lanjut Pembayaran Midtrans' : 'Konfirmasi Pelunasan Manual'
+                )}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Modal: Bukti Invoice Perpanjangan Kontrak */}
+      {showExtensionProofModal && selectedExtensionProof && (
+        <Modal
+          isOpen={showExtensionProofModal}
+          onClose={() => setShowExtensionProofModal(false)}
+          title="Bukti Invoice Pelunasan Perpanjangan Kontrak"
+        >
+          <div className="space-y-5 font-sans text-slate-800 text-left">
+            <div id="extension-invoice-print-area" className="p-6 bg-white border-2 border-dashed border-teal-200 rounded-3xl space-y-4 shadow-sm relative overflow-hidden">
+              <div className="flex justify-between items-start border-b border-slate-200 pb-4">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900 font-display tracking-tight">SAMARA STAY</h3>
+                  <p className="text-[10px] text-teal-600 font-mono font-bold uppercase tracking-wider">Premium Residence & Boarding House</p>
+                </div>
+                <div className="text-right">
+                  <span className="inline-block px-3 py-1 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-full font-mono uppercase border border-emerald-300">
+                    STATUS: LUNAS (PAID)
+                  </span>
+                  <p className="text-[10px] text-slate-500 font-mono mt-1">No. Invoice: {selectedExtensionProof.midtrans_order_id || `INV-EXT-${selectedExtensionProof.id}`}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Nama Penghuni:</span>
+                    <span className="font-extrabold text-slate-800 text-sm capitalize">{selectedExtensionProof.tenant_name}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Lokasi Gedung Kos:</span>
+                    <span className="font-bold text-slate-800">{selectedExtensionProof.property_name || 'Gedung Kos Samara'}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Nomor Kamar:</span>
+                    <span className="font-extrabold text-[#0D9488] text-sm font-mono">Kamar {selectedExtensionProof.room_number}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Jangka Perpanjangan:</span>
+                    <span className="font-extrabold text-slate-900 font-mono">+{selectedExtensionProof.extension_months} Bulan</span>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-teal-50 border border-teal-100 rounded-2xl flex justify-between items-center">
+                  <span className="text-xs font-bold text-teal-900">Total Nominal Lunas:</span>
+                  <span className="text-lg font-black font-mono text-[#0D9488]">{formatRupiah(selectedExtensionProof.total_amount)}</span>
+                </div>
+
+                <div className="text-[10px] text-slate-500 font-mono space-y-0.5 pt-1">
+                  <p>Metode Pembayaran: <strong className="text-slate-700">{selectedExtensionProof.payment_method || 'Midtrans SNAP'}</strong></p>
+                  <p>Waktu Transaksi: {new Date(selectedExtensionProof.created_at).toLocaleString('id-ID')}</p>
+                  {selectedExtensionProof.notes && <p>Catatan: {selectedExtensionProof.notes}</p>}
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-200 flex justify-between items-end">
+                <div className="text-[9px] text-slate-400">
+                  <p className="font-bold text-slate-600">Terverifikasi Sistem Keuangan Samara Stay</p>
+                  <p>Posting Otomatis ke Ledger COA 1010/4000</p>
+                </div>
+                <div className="text-center">
+                  <span className="text-[9px] text-teal-700 font-mono font-bold block mb-1">[STEMPEL DIGITAL DITERIMA]</span>
+                  <div className="w-16 h-16 border-2 border-teal-600 rounded-full flex items-center justify-center p-1 text-[8px] font-black text-teal-700 uppercase tracking-tighter text-center mx-auto rotate-[-12deg]">
+                    LUNAS<br/>SAMARA STAY
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowExtensionProofModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer text-center"
+              >
+                Tutup
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.print();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-bold transition-all text-xs cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
+              >
+                <Printer size={14} />
+                Cetak / Download Invoice
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal: Riwayat Pembayaran & Invoice Penghuni */}
+      {showTenantHistoryModal && selectedTenantForHistory && (
+        <Modal
+          isOpen={showTenantHistoryModal}
+          onClose={() => setShowTenantHistoryModal(false)}
+          title={`Riwayat Pembayaran & Invoice - ${selectedTenantForHistory.full_name}`}
+        >
+          <div className="space-y-4 font-sans text-slate-800 text-left">
+            <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4 flex justify-between items-center flex-wrap gap-2">
+              <div>
+                <h4 className="font-extrabold text-teal-900 text-sm">{selectedTenantForHistory.full_name}</h4>
+                <p className="text-xs text-teal-700 font-medium">
+                  {properties.find(p => p.id === selectedTenantForHistory.property_id)?.name || 'Gedung Kos Samara'} - <strong className="font-mono">Unit {selectedTenantForHistory.room_number}</strong>
+                </p>
+                <p className="text-[10px] text-teal-600 font-mono mt-0.5">WhatsApp: {selectedTenantForHistory.phone}</p>
+              </div>
+              <div className="text-right">
+                <span className={`text-[10px] uppercase font-bold px-2.5 py-1 rounded-full font-mono border ${
+                  selectedTenantForHistory.payment_status === 'paid'
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : 'bg-amber-100 text-amber-800 border-amber-300'
+                }`}>
+                  {selectedTenantForHistory.payment_status === 'paid' ? 'STATUS: LUNAS' : 'BELUM LUNAS'}
+                </span>
+                <p className="text-[10px] text-slate-500 font-mono mt-1">Mulai: {selectedTenantForHistory.start_date}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                <History size={14} className="text-[#0D9488]" />
+                Daftar Transaksi Perpanjangan & Invoice Payment
+              </h4>
+
+              {(() => {
+                const tenantExts = contractExtensionsList.filter(ext => ext.tenant_id === selectedTenantForHistory.id || (ext.tenant_name && ext.tenant_name.toLowerCase() === selectedTenantForHistory.full_name.toLowerCase()));
+                const tenantPayments = payments.filter(p => p.tenant_name && p.tenant_name.toLowerCase() === selectedTenantForHistory.full_name.toLowerCase());
+
+                if (tenantExts.length === 0 && tenantPayments.length === 0) {
+                  return (
+                    <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-500 font-medium">
+                      Belum ada catatan riwayat perpanjangan kontrak atau invoice pembayaran khusus penghuni ini.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+                    {tenantExts.map((ext) => (
+                      <div key={`ext-${ext.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-xs hover:border-teal-300 transition-all flex justify-between items-center flex-wrap gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold text-slate-900">{ext.midtrans_order_id || `EXT-${ext.id}`}</span>
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-teal-50 text-teal-700 border border-teal-200 font-mono">
+                              +{ext.extension_months} Bulan
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">
+                            Metode: <strong className="text-slate-700">{ext.payment_method || 'Midtrans SNAP'}</strong> • {new Date(ext.created_at || Date.now()).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </p>
+                          {ext.notes && <p className="text-[10px] text-slate-400 italic">{ext.notes}</p>}
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <div className="text-right font-mono">
+                            <span className="text-xs font-extrabold text-emerald-600 block">{formatRupiah(ext.total_amount)}</span>
+                            <span className={`text-[8px] uppercase font-bold px-1.5 py-0.5 rounded border ${
+                              ext.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                            }`}>
+                              {ext.status === 'paid' ? 'LUNAS (PAID)' : 'PENDING'}
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedExtensionProof(ext);
+                              setShowExtensionProofModal(true);
+                            }}
+                            className="px-3 py-1.5 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            <FileText size={12} />
+                            Bukti Invoice
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    {tenantPayments.filter(p => !tenantExts.some(e => e.midtrans_order_id === p.midtrans_order_id || e.invoice_id === p.id)).map((p) => (
+                      <div key={`pay-${p.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-xs hover:border-teal-300 transition-all flex justify-between items-center flex-wrap gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold text-slate-900">{p.id}</span>
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
+                              Invoice Pelunasan
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">
+                            Metode: <strong className="text-slate-700">{p.method}</strong> • {p.payment_date}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <div className="text-right font-mono">
+                            <span className="text-xs font-extrabold text-emerald-600 block">{formatRupiah(p.amount)}</span>
+                            <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200">
+                              LUNAS
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedExtensionProof({
+                                id: Date.now(),
+                                tenant_id: selectedTenantForHistory.id,
+                                tenant_name: selectedTenantForHistory.full_name,
+                                property_id: selectedTenantForHistory.property_id,
+                                property_name: properties.find(prop => prop.id === selectedTenantForHistory.property_id)?.name || 'Gedung Kos Samara',
+                                room_number: selectedTenantForHistory.room_number,
+                                extension_months: selectedTenantForHistory.duration_months || 1,
+                                total_amount: p.amount,
+                                payment_method: p.method,
+                                status: 'paid',
+                                midtrans_order_id: p.midtrans_order_id || p.id,
+                                invoice_id: p.id,
+                                created_at: p.payment_date
+                              });
+                              setShowExtensionProofModal(true);
+                            }}
+                            className="px-3 py-1.5 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            <FileText size={12} />
+                            Bukti Invoice
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowTenantHistoryModal(false)}
+                className="w-full py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer text-center"
+              >
+                Tutup Riwayat
               </button>
             </div>
           </div>

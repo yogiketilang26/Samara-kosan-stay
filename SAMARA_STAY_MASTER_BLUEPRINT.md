@@ -275,8 +275,12 @@ Samara Stay is a full-stack, enterprise-grade Property Management System (PMS) a
 ## 5. END USER ARCHITECTURE & WORKFLOWS
 
 ### Features & Execution Details:
-1. **Property Browsing:** Public access to property grid with realtime available room counts.
-2. **Room Details:** Displays room photos, facilities, daily/monthly pricing, rules, and terms.
+1. **Property Browsing:** Public access to property grid with realtime available room counts and filter controls.
+2. **Room Details & Photo Gallery Lightbox:**
+   * **Multi-Photo Indicators:** Room cards display a photo counter badge (`📷 X Foto`) and thumbnail overlays.
+   * **Interactive Room Detail Modal (`selectedRoomForDetail`):** Displays HD cover photos, multi-photo swipeable gallery (`RoomGallery`), facilities list, floor level, dimensions ($m^2$), pricing breakdowns (Monthly & Daily Transit), rules, and terms.
+   * **Full-Screen Image Lightbox (`selectedRoomImage`):** Clicking any gallery photo opens a high-resolution, full-screen lightbox viewer with zoom controls.
+   * **Modal Integration in Checkout Flow:** Clicking the active room summary box inside the `BookingForm` modal automatically opens the room photo gallery without losing user progress in the checkout flow.
 3. **Room Booking:**
    * User selects duration (monthly/daily), applies active coupon.
    * Fills tenant profile (Full Name, Phone, Email, Identity No/KTP).
@@ -545,9 +549,21 @@ $$\text{Total Assets} = \text{Total Liabilities} + \text{Total Equity} + \text{N
 
 ## 23. PERFORMANCE, RE-RENDER & DENSITY AUDIT
 
-* **Centralized Realtime:** Single WebSocket connection (`db-global-realtime`) prevents connection multiplication across component trees.
-* **Image Optimization:** Browser-side canvas image compression (`imageCompressor.ts`) prevents large binary payload bloat.
-* **Code Splitting:** Modular component separation across `components/room`, `components/property`, `components/transaction`, `components/premium`, `components/coupon`.
+### 1. Component Rendering Logic Analysis (`Admin.tsx`)
+* **Monolithic Top-Level State Container:** `Admin.tsx` manages over 30 top-level `useState` hooks covering all 16 ERP operational modules (`properties`, `rooms`, `tenants`, `bookings`, `payments`, `journalEntries`, `accounts`, `pettyCashRequests`, `purchaseOrders`, `fixedAssets`, etc.).
+* **Re-render Impact:** Because sub-tab sections are rendered as inline JSX blocks within `Admin.tsx` rather than isolated `React.memo` wrapped components, any atomic state update (e.g., typing in a filter text field, opening a petty cash modal, or updating a role dropdown) triggers a full-tree re-render of the entire 7,000+ line component.
+* **Realtime Broadcast Cascading:** The global `SupabaseRealtimeManager` dispatches WebSocket table changes directly to top-level setters (`setBookings`, `setRooms`, `setPayments`). Receiving a broadcast event causes a top-level state update and full view re-render.
+* **Optimization Strategy (Architecture Audit):** Sub-tabs (e.g., `AccountingTab`, `PettyCashTab`, `PurchaseOrderTab`) can be extracted into standalone memoized sub-components using `React.memo`. Localizing form inputs (`newPettyCashForm`, `userForm`) inside dialog modals will prevent typing keystrokes from re-rendering the surrounding statistics cards and table views.
+
+### 2. Component Rendering & State Synchronization Analysis (`Home.tsx`)
+* **Derived Data Recalculations:** `Home.tsx` evaluates property and room filter predicates (`filteredProperties`, `filteredRooms`, room availability counters) synchronously on every render frame.
+* **Search & Filter Optimization:** Heavy array filtering operations over property lists and facility tags re-run during unrelated state changes (such as modal open/close transitions). Encapsulating filter logic within `useMemo` hooks bound to `[properties, rooms, searchQuery, selectedCity, facilityFilter]` avoids redundant array allocations during UI animations.
+* **Modal State Synchronization:** Modals (`BookingForm`, `SurveyForm`, `PropertyDetail`) consume state directly from `Home.tsx`. State synchronization between `activeRoom` and `checkoutFlow` (fixed in v12) ensures that opening the booking modal from any grid card automatically synchronizes the duration selector and total cost calculation engine without state lag.
+
+### 3. General Asset & Network Optimization
+* **Centralized Realtime Singleton:** The single WebSocket connection (`db-global-realtime`) prevents connection multiplication across component trees.
+* **Client-Side Image Downscaling:** Browser-side canvas image compression (`imageCompressor.ts`) prevents large binary payload bloat during file uploads.
+* **Code Splitting & UI Density:** Modular component separation across `components/room`, `components/property`, `components/transaction`, `components/premium`, and `components/coupon` maintains clean layout density across desktop and mobile screens.
 
 ---
 
@@ -737,9 +753,14 @@ Samara Stay v12 is a fully integrated, production-ready Property Management Syst
 
 ### Key Operational Capabilities:
 * **Tenant Booking:** End-to-end self-service booking with instant QRIS/Virtual Account payments via Midtrans SNAP.
-* **Automated Accounting:** Every paid booking or survey DP automatically generates double-entry general ledger journal entries (`post_financial_transaction`), updating trial balances, income statements, and balance sheets in real time.
+* **Contract Extension System (Perpanjangan Kontrak):** Super Admin can trigger online (Midtrans SNAP) or offline (Cash/Direct Transfer) lease renewals for active tenants directly in the Admin portal.
+  * **Realtime Synchronization:** Automatically updates tenant lease duration (`duration_months`), recalculates expiration dates, and logs history in `contract_extensions` table via PostgreSQL atomic RPC `settle_contract_extension`.
+  * **Financial Double-Entry Ledger Integration:** Every contract extension payment automatically generates double-entry general ledger journal entries (Debits Cash/Bank 1010, Credits Room Rental Revenue 4000), updates trial balances, income statements, and balance sheets in real time.
+  * **Digital Invoice Proof:** Generates official printable/downloadable paid invoices featuring tenant name, property building, room number, extended duration, payment method, and official digital stamp.
+  * **Midtrans Webhook Integration:** Midtrans `EXT-` order ID webhooks automatically process extension payments, trigger atomic RPC settlement, and dispatch confirmation emails via MailerSend.
+* **Automated Accounting:** Every paid booking, survey DP, or contract extension automatically generates double-entry general ledger journal entries (`post_financial_transaction`), updating trial balances, income statements, and balance sheets in real time.
 * **Legal Compliance:** Integrated HTML5 signature pad captures tenant digital signatures, embedding them directly into PDF lease agreements and automated email receipts via MailerSend.
-* **Realtime Operations:** A unified WebSocket manager ensures that room status updates, new bookings, petty cash requests, and payment approvals refresh instantly across all connected admin dashboards without requiring manual page reloads.
+* **Realtime Operations:** A unified WebSocket manager ensures that room status updates, new bookings, contract extensions, petty cash requests, and payment approvals refresh instantly across all connected admin dashboards without requiring manual page reloads.
 
 ---
 *DOCUMENTATION COMPLETED — MASTER BLUEPRINT AUTHORIZED FOR SAMARA STAY ERP V12.0*
