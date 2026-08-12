@@ -4,7 +4,7 @@ import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAUL
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { observability, useRenderCounter } from '../lib/observability';
-import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem } from '../types';
+import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, MidtransClearingTransaction, BankReconciliationMatch } from '../types';
 import { loadMidtransSnapScript, requestSnapTokenFromServer } from '../lib/midtrans';
 import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
@@ -523,7 +523,7 @@ export default function Admin({}: AdminProps) {
   const [payments, setPayments] = useState<PaymentInvoice[]>([]);
   const [paymentSearch, setPaymentSearch] = useState('');
   const [paymentFilterStatus, setPaymentFilterStatus] = useState('all');
-  const [activeFinanceSubTab, setActiveFinanceSubTab] = useState<'overview' | 'ledger' | 'ar' | 'ap' | 'assets' | 'petty' | 'tax' | 'audit'>('overview');
+  const [activeFinanceSubTab, setActiveFinanceSubTab] = useState<'overview' | 'ledger' | 'clearing' | 'reconciliation' | 'ar' | 'ap' | 'assets' | 'petty' | 'tax' | 'audit'>('overview');
   const [journalViewMode, setJournalViewMode] = useState<'transactions' | 'double_entry'>('transactions');
   const [ledgerSearch, setLedgerSearch] = useState('');
   const [ledgerAccountFilter, setLedgerAccountFilter] = useState('all');
@@ -701,9 +701,15 @@ export default function Admin({}: AdminProps) {
   const { data: inventoryData } = useRealtimeTable<InventoryItem>(
     'inventory_items',
     () => database.fetchInventoryItems());
-  const { data: bankStatementData } = useRealtimeTable<BankStatementItem>(
+  const { data: bankStatementData, refetch: refetchBankStatement } = useRealtimeTable<BankStatementItem>(
     'bank_statement_items',
     () => database.fetchBankStatementItems());
+  const { data: clearingTransactionsData, refetch: refetchClearingTransactions } = useRealtimeTable<MidtransClearingTransaction>(
+    'midtrans_clearing_transactions',
+    () => database.fetchMidtransClearingTransactions());
+  const { data: reconciliationMatchesData, refetch: refetchReconciliationMatches } = useRealtimeTable<BankReconciliationMatch>(
+    'bank_reconciliation_matches',
+    () => database.fetchBankReconciliationMatches());
 
   // Component states synchronized with Supabase
   const [pettyCashRequests, setPettyCashRequests] = useState<PettyCashRequest[]>([]);
@@ -713,7 +719,19 @@ export default function Admin({}: AdminProps) {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [bankStatement, setBankStatement] = useState<BankStatementItem[]>([]);
+  const [clearingTransactions, setClearingTransactions] = useState<MidtransClearingTransaction[]>([]);
+  const [reconciliationMatches, setReconciliationMatches] = useState<BankReconciliationMatch[]>([]);
   const [reconciliationCandidates, setReconciliationCandidates] = useState<Record<number, PaymentInvoice[]>>({});
+  const [isAutoMatching, setIsAutoMatching] = useState(false);
+  const [isImportingBankStatement, setIsImportingBankStatement] = useState(false);
+  const [clearingSearchQuery, setClearingSearchQuery] = useState('');
+  const [clearingFilterStatus, setClearingFilterStatus] = useState<string>('all');
+  const [reconciliationSearchQuery, setReconciliationSearchQuery] = useState('');
+  const [manualMatchModalOpen, setManualMatchModalOpen] = useState<BankStatementItem | null>(null);
+  const [selectedClearingId, setSelectedClearingId] = useState<number | null>(null);
+  const [manualFeeAmount, setManualFeeAmount] = useState<number>(0);
+  const [manualMatchNotes, setManualMatchNotes] = useState<string>('');
+  const [isSubmittingManualMatch, setIsSubmittingManualMatch] = useState(false);
 
   // Synchronize component state with real-time data
   useEffect(() => {
@@ -743,6 +761,14 @@ export default function Admin({}: AdminProps) {
   useEffect(() => {
     if (bankStatementData) setBankStatement(bankStatementData);
   }, [bankStatementData]);
+
+  useEffect(() => {
+    if (clearingTransactionsData) setClearingTransactions(clearingTransactionsData);
+  }, [clearingTransactionsData]);
+
+  useEffect(() => {
+    if (reconciliationMatchesData) setReconciliationMatches(reconciliationMatchesData);
+  }, [reconciliationMatchesData]);
 
   // Filtered petty cash requests
   const filteredPettyCashRequests = pettyCashRequests.filter(req => {
@@ -1301,44 +1327,37 @@ export default function Admin({}: AdminProps) {
           (window as any).snap.pay(snapRes.token, {
             onSuccess: async (result: any) => {
               console.log('[Midtrans Snap Extension Success]', result);
-              showToast('Pembayaran perpanjangan kontrak via Midtrans berhasil! Memperbarui status...');
-              // Tunggu sejenak agar webhook server sempat memproses
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-              startModuleRefresh('tenants');
-              startModuleRefresh('payments');
-              startModuleRefresh('transactions');
-              await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
-              
-              // Ambil record yang baru disettle oleh webhook/server
-              const { data: updatedExt } = await supabase
-                .from('contract_extensions')
-                .select('*')
-                .eq('midtrans_order_id', orderId)
-                .maybeSingle();
-
-              const newProof: ContractExtension = (updatedExt as any) || {
-                id: Date.now(),
-                tenant_id: tenant.id,
-                tenant_name: tenant.full_name,
-                property_id: tenant.property_id,
-                property_name: propertyName,
-                room_number: tenant.room_number,
-                old_start_date: tenant.start_date,
-                old_duration_months: tenant.duration_months,
-                extension_months: Number(extensionMonths),
-                monthly_rate: Number(extensionMonthlyRate),
-                total_amount: totalAmount,
-                payment_method: 'Midtrans SNAP',
-                status: 'paid',
-                midtrans_order_id: orderId,
-                invoice_id: updatedExt?.invoice_id || `INV-EXT-${tenant.id}`,
-                notes: extensionNotes || `Perpanjangan sewa ${extensionMonths} bulan`,
-                created_at: new Date().toISOString()
-              };
-
+              showToast('Pembayaran diterima Midtrans. Menunggu konfirmasi settlement dari server...');
               setShowExtensionModal(false);
-              setSelectedExtensionProof(newProof);
-              setShowExtensionProofModal(true);
+
+              let attempts = 0;
+              const maxAttempts = 10; // ~20 detik total
+              const pollInterval = setInterval(async () => {
+                attempts++;
+                const { data: updatedExt } = await supabase
+                  .from('contract_extensions')
+                  .select('*')
+                  .eq('midtrans_order_id', orderId)
+                  .maybeSingle();
+
+                if (updatedExt && updatedExt.status === 'paid') {
+                  clearInterval(pollInterval);
+                  startModuleRefresh('tenants');
+                  startModuleRefresh('payments');
+                  startModuleRefresh('transactions');
+                  await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+
+                  const newProof: ContractExtension = updatedExt as ContractExtension;
+                  setSelectedExtensionProof(newProof);
+                  setShowExtensionProofModal(true);
+                  showToast('Perpanjangan kontrak berhasil dikonfirmasi!');
+                } else if (attempts >= maxAttempts) {
+                  clearInterval(pollInterval);
+                  showToast('Pembayaran diterima, tapi konfirmasi server memerlukan waktu lebih lama. Cek kembali di daftar Perpanjangan Kontrak dalam beberapa saat.', 'error');
+                  startModuleRefresh('tenants');
+                  await refetchContractExtensions();
+                }
+              }, 2000);
             },
             onPending: async (result: any) => {
               showToast('Transaksi perpanjangan menunggu pembayaran Midtrans.', 'error');
@@ -3007,6 +3026,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                    {[
                      { id: 'overview', name: 'Dashboard & AI Analytics', icon: Sparkles },
                      { id: 'ledger', name: 'Ledger & Laporan', icon: Landmark },
+                     { id: 'clearing', name: 'Kliring Midtrans (1200)', icon: ArrowRightLeft },
+                     { id: 'reconciliation', name: 'Rekonsiliasi Bank', icon: CheckCircle2 },
                      { id: 'ar', name: 'Piutang & Pendapatan (AR)', icon: Coins },
                      { id: 'ap', name: 'Biaya & Pengadaan (AP)', icon: ShoppingBag },
                      { id: 'assets', name: 'Aset & Pemeliharaan', icon: Wrench },
@@ -3520,6 +3541,536 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                       </div>
 
+                    </div>
+                  )}
+
+                  {/* SUBTAB: MIDTRANS CLEARING ACCOUNT (1200) */}
+                  {activeFinanceSubTab === 'clearing' && (
+                    <div className="space-y-6 animate-fade-in">
+                      {/* Summary Cards */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Total Kliring Masuk (Gross)</span>
+                          <div className="text-xl font-bold font-mono text-slate-900">
+                            {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.gross_amount || 0), 0))}
+                          </div>
+                          <p className="text-[10px] text-slate-500">Volume akumulasi pembayaran Midtrans (1200)</p>
+                        </div>
+
+                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Total Biaya Layanan (5030)</span>
+                          <div className="text-xl font-bold font-mono text-amber-600">
+                            {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.fee_amount || 0), 0))}
+                          </div>
+                          <p className="text-[10px] text-slate-500">Potongan Merchant Admin Fee Midtrans</p>
+                        </div>
+
+                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Pending Settlement / Reconcile</span>
+                          <div className="text-xl font-bold font-mono text-blue-600">
+                            {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.outstanding_amount || 0), 0))}
+                          </div>
+                          <p className="text-[10px] text-slate-500">Saldo Piutang Kliring belum cair ke Kas Bank (1010)</p>
+                        </div>
+
+                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Total Sudah Rekonsiliasi</span>
+                          <div className="text-xl font-bold font-mono text-emerald-600">
+                            {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.reconciled_amount || 0), 0))}
+                          </div>
+                          <p className="text-[10px] text-slate-500">Saldo yang telah terverifikasi mutasi bank</p>
+                        </div>
+                      </div>
+
+                      {/* Main Clearing Table */}
+                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-gray-100 pb-3">
+                          <div>
+                            <span className="text-[10px] text-indigo-600 font-bold uppercase font-mono tracking-wider block">Pencatatan Piutang Kliring Midtrans (COA 1200)</span>
+                            <h3 className="text-sm font-bold text-slate-800 font-display mt-0.5">Daftar Transaksi Midtrans Pending Settlement Bank</h3>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="relative">
+                              <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                              <input
+                                type="text"
+                                placeholder="Cari Order ID / Penyewa..."
+                                value={clearingSearchQuery}
+                                onChange={(e) => setClearingSearchQuery(e.target.value)}
+                                className="pl-8 pr-3 py-1.5 text-xs rounded-xl border border-gray-200 outline-none bg-slate-50 focus:border-indigo-500 focus:bg-white"
+                              />
+                            </div>
+
+                            <select
+                              value={clearingFilterStatus}
+                              onChange={(e) => setClearingFilterStatus(e.target.value)}
+                              className="text-xs p-1.5 rounded-xl border border-gray-200 bg-white font-medium"
+                            >
+                              <option value="all">Semua Status Kliring</option>
+                              <option value="pending">Pending Settlement</option>
+                              <option value="partially_cleared">Sebagian Reconciled</option>
+                              <option value="reconciled">Selesai (Reconciled)</option>
+                            </select>
+
+                            <button
+                              onClick={() => refetchClearingTransactions()}
+                              className="p-2 text-slate-600 hover:text-slate-900 bg-slate-50 border border-slate-200 rounded-xl"
+                              title="Refresh Data"
+                            >
+                              <RotateCw size={13} />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-gray-100 text-[10px] text-gray-400 font-bold font-mono uppercase bg-slate-50">
+                                <th className="py-3 px-3">MIDTRANS ORDER ID</th>
+                                <th className="py-3 px-3">PENYEWA & PROPERTI</th>
+                                <th className="py-3 px-3 text-right">GROSS (RP)</th>
+                                <th className="py-3 px-3 text-right">MIDTRANS FEE (RP)</th>
+                                <th className="py-3 px-3 text-right">NET NOMINAL (RP)</th>
+                                <th className="py-3 px-3 text-right">RECONCILED (RP)</th>
+                                <th className="py-3 px-3 text-center">STATUS KLIRING</th>
+                                <th className="py-3 px-3 text-right">TANGGAL SETTLEMENT</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 font-medium text-slate-700">
+                              {clearingTransactions
+                                .filter(c => {
+                                  const matchesSearch = !clearingSearchQuery.trim() ||
+                                    (c.midtrans_order_id || '').toLowerCase().includes(clearingSearchQuery.toLowerCase()) ||
+                                    (c.tenant_name || '').toLowerCase().includes(clearingSearchQuery.toLowerCase());
+                                  const matchesStatus = clearingFilterStatus === 'all' || c.clearing_status === clearingFilterStatus;
+                                  return matchesSearch && matchesStatus;
+                                })
+                                .map((c) => (
+                                  <tr key={c.id} className="hover:bg-slate-50/60 transition-colors">
+                                    <td className="py-3.5 px-3 font-mono text-[11px] text-indigo-600 font-bold">
+                                      {c.midtrans_order_id}
+                                      {c.midtrans_transaction_id && (
+                                        <span className="block text-[9px] text-slate-400 font-normal">{c.midtrans_transaction_id}</span>
+                                      )}
+                                    </td>
+                                    <td className="py-3.5 px-3">
+                                      <p className="font-bold text-slate-800">{c.tenant_name || 'Pelanggan Kos'}</p>
+                                      <span className="text-[9px] text-slate-400 font-mono">Properti ID #{c.property_id || '-'}</span>
+                                    </td>
+                                    <td className="py-3.5 px-3 text-right font-mono font-bold text-slate-900">
+                                      {formatRupiah(c.gross_amount)}
+                                    </td>
+                                    <td className="py-3.5 px-3 text-right font-mono text-amber-600">
+                                      {formatRupiah(c.fee_amount)}
+                                    </td>
+                                    <td className="py-3.5 px-3 text-right font-mono text-blue-600 font-bold">
+                                      {formatRupiah(c.net_amount)}
+                                    </td>
+                                    <td className="py-3.5 px-3 text-right font-mono text-emerald-600 font-bold">
+                                      {formatRupiah(c.reconciled_amount)}
+                                    </td>
+                                    <td className="py-3.5 px-3 text-center">
+                                      <span className={`text-[9px] px-2 py-0.5 rounded-full font-extrabold uppercase ${
+                                        c.clearing_status === 'reconciled' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                                        c.clearing_status === 'partially_cleared' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                                        'bg-blue-50 text-blue-700 border border-blue-200'
+                                      }`}>
+                                        {c.clearing_status === 'reconciled' ? 'Selesai Reconciled' :
+                                         c.clearing_status === 'partially_cleared' ? 'Parsial' : 'Pending Bank'}
+                                      </span>
+                                    </td>
+                                    <td className="py-3.5 px-3 text-right text-[10px] text-slate-500 font-mono">
+                                      {c.settled_at ? new Date(c.settled_at).toLocaleDateString('id-ID') : new Date(c.created_at).toLocaleDateString('id-ID')}
+                                    </td>
+                                  </tr>
+                                ))}
+
+                              {clearingTransactions.length === 0 && (
+                                <tr>
+                                  <td colSpan={8} className="py-10 text-center text-slate-400 font-medium">
+                                    Belum ada transaksi piutang kliring Midtrans tercatat.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUBTAB: BANK RECONCILIATION ENGINE */}
+                  {activeFinanceSubTab === 'reconciliation' && (
+                    <div className="space-y-6 animate-fade-in">
+                      {/* Control Banner & Automated Matching */}
+                      <div className="bg-slate-900 text-white rounded-3xl p-6 border border-slate-800 shadow-xl space-y-4">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                          <div>
+                            <span className="text-[10px] text-emerald-400 font-mono uppercase tracking-wider font-extrabold flex items-center gap-1.5">
+                              <CheckCircle2 size={12} className="text-emerald-400" />
+                              Automated Financial Settlement & Reconciliation Engine
+                            </span>
+                            <h3 className="text-lg font-black text-white font-display mt-0.5">Pencocokan Mutasi Rekening Bank vs Piutang Kliring Midtrans</h3>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              disabled={isAutoMatching}
+                              onClick={async () => {
+                                setIsAutoMatching(true);
+                                try {
+                                  const res = await fetch('/api/admin/reconciliation/auto-match', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({})
+                                  });
+                                  const json = await res.json();
+                                  if (res.ok && json.success) {
+                                    alert(`Auto-Match Selesai!\n${json.message}\nTotal Nominal Dicocokkan: ${formatRupiah(json.totalAmountMatched || 0)}`);
+                                    refetchBankStatement();
+                                    refetchClearingTransactions();
+                                    refetchReconciliationMatches();
+                                  } else {
+                                    alert("Auto-Match Gagal: " + (json.error || 'Terjadi kesalahan pada server.'));
+                                  }
+                                } catch (err: any) {
+                                  alert("Kesalahan jaringan: " + err.message);
+                                } finally {
+                                  setIsAutoMatching(false);
+                                }
+                              }}
+                              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2.5 rounded-2xl transition-all cursor-pointer flex items-center gap-2 shadow-md disabled:opacity-50"
+                            >
+                              <RotateCw size={13} className={isAutoMatching ? 'animate-spin' : ''} />
+                              {isAutoMatching ? 'Memproses Auto-Match...' : 'Jalankan Auto-Match Engine'}
+                            </button>
+
+                            <button
+                              onClick={async () => {
+                                const csvInput = prompt(
+                                  "Paste baris mutasi bank (Format per baris: TANGGAL,DESKRIPSI,NOMINAL,DEBIT/CREDIT):\nContoh:\n2026-08-12,MDR SETTLEMENT MIDTRANS #INV-1002,1500000,credit"
+                                );
+                                if (!csvInput) return;
+
+                                const lines = csvInput.split('\n').filter(l => l.trim().length > 0);
+                                const parsed = lines.map(line => {
+                                  const parts = line.split(',');
+                                  return {
+                                    date: parts[0]?.trim() || new Date().toISOString().split('T')[0],
+                                    desc: parts[1]?.trim() || 'Mutasi Masuk Rekening Bank',
+                                    amount: Number(parts[2]?.trim() || 0),
+                                    type: parts[3]?.trim()?.toLowerCase() || 'credit'
+                                  };
+                                });
+
+                                try {
+                                  const res = await fetch('/api/admin/bank-statement/import', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ items: parsed })
+                                  });
+                                  const json = await res.json();
+                                  if (res.ok && json.success) {
+                                    alert(`Berhasil mengimpor ${json.insertedCount} mutasi rekening bank!`);
+                                    refetchBankStatement();
+                                  } else {
+                                    alert("Gagal impor mutasi: " + (json.error || 'Unknown error'));
+                                  }
+                                } catch (err: any) {
+                                  alert("Gagal impor mutasi: " + err.message);
+                                }
+                              }}
+                              className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-4 py-2.5 rounded-2xl transition-all cursor-pointer flex items-center gap-2 border border-slate-700"
+                            >
+                              <Upload size={13} />
+                              Impor Mutasi Bank (CSV)
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Summary Numbers */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-slate-800">
+                          <div>
+                            <span className="text-[10px] text-slate-400 font-mono uppercase">Mutasi Unmatched (Belum Cocok)</span>
+                            <div className="text-lg font-bold font-mono text-amber-400">
+                              {bankStatement.filter(b => !b.matched).length} Transaksi (
+                              {formatRupiah(bankStatement.filter(b => !b.matched).reduce((sum, b) => sum + b.amount, 0))})
+                            </div>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] text-slate-400 font-mono uppercase">Mutasi Matched (Sudah Rekonsiliasi)</span>
+                            <div className="text-lg font-bold font-mono text-emerald-400">
+                              {bankStatement.filter(b => b.matched).length} Transaksi
+                            </div>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] text-slate-400 font-mono uppercase">Riwayat Match Rekonsiliasi</span>
+                            <div className="text-lg font-bold font-mono text-indigo-400">
+                              {reconciliationMatches.length} Pasang Record
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Main Two-Column Matching View */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Left Column: Bank Statement Items needing Match */}
+                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
+                          <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                            <div>
+                              <span className="text-[10px] text-gray-400 font-bold uppercase font-mono tracking-wider block">Bank Statement Stream</span>
+                              <h3 className="text-sm font-bold text-slate-800 font-display">Mutasi Masuk Rekening Bank Mandiri</h3>
+                            </div>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                              {bankStatement.filter(b => !b.matched).length} Belum Dicocokkan
+                            </span>
+                          </div>
+
+                          <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                            {bankStatement.map(stmt => (
+                              <div key={stmt.id} className={`p-3.5 rounded-2xl border transition-all ${
+                                stmt.matched ? 'bg-slate-50 border-slate-100 opacity-60' : 'bg-white border-amber-200/80 shadow-xs'
+                              }`}>
+                                <div className="flex justify-between items-start gap-2">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono text-[9px] text-slate-400">#{stmt.id}</span>
+                                      <span className="text-[10px] text-slate-500 font-mono">{stmt.date}</span>
+                                    </div>
+                                    <p className="text-xs font-bold text-slate-800 mt-0.5">{stmt.desc}</p>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <span className="text-xs font-bold font-mono text-emerald-600">{formatRupiah(stmt.amount)}</span>
+                                  </div>
+                                </div>
+
+                                <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-100">
+                                  <span className="text-[9px] font-mono text-slate-400">
+                                    {stmt.matched ? `Matched (Ref: ${stmt.matchedRef || 'RPC'})` : 'Status: Ready to Match'}
+                                  </span>
+
+                                  {!stmt.matched && (
+                                    <button
+                                      onClick={() => {
+                                        setManualMatchModalOpen(stmt);
+                                        setSelectedClearingId(null);
+                                        setManualFeeAmount(0);
+                                        setManualMatchNotes('');
+                                      }}
+                                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-3 py-1.5 rounded-xl cursor-pointer shadow-xs transition-colors"
+                                    >
+                                      Cocokkan Manual
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+
+                            {bankStatement.length === 0 && (
+                              <p className="text-xs text-slate-400 text-center py-8">Belum ada mutasi bank diimpor.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Right Column: History of Reconciliation Matches */}
+                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
+                          <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                            <div>
+                              <span className="text-[10px] text-gray-400 font-bold uppercase font-mono tracking-wider block">Audit Log Match</span>
+                              <h3 className="text-sm font-bold text-slate-800 font-display">Riwayat Pencocokan & Journal Ledger (1010 vs 1200)</h3>
+                            </div>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              {reconciliationMatches.length} Matches Total
+                            </span>
+                          </div>
+
+                          <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                            {reconciliationMatches.map(m => (
+                              <div key={m.id} className="p-3.5 bg-slate-50 border border-slate-200/70 rounded-2xl space-y-2">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <span className="font-mono text-[9px] text-slate-400">Match ID #{m.id}</span>
+                                    <p className="text-xs font-bold text-slate-800">{m.notes || 'Pencocokan Rekonsiliasi Bank'}</p>
+                                  </div>
+                                  <span className="text-[9px] px-2 py-0.5 rounded font-extrabold uppercase bg-emerald-100 text-emerald-800 font-mono">
+                                    {m.status}
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 text-[10px] bg-white p-2 rounded-xl border border-slate-100 font-mono">
+                                  <div>
+                                    <span className="text-slate-400 block text-[8px]">NOMINAL CAIR (1010)</span>
+                                    <span className="font-bold text-emerald-600">{formatRupiah(m.matched_amount)}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-400 block text-[8px]">POTONGAN FEE (5030)</span>
+                                    <span className="font-bold text-amber-600">{formatRupiah(m.fee_amount)}</span>
+                                  </div>
+                                </div>
+
+                                <div className="flex justify-between text-[9px] text-slate-400 font-mono pt-1">
+                                  <span>Oleh: {m.created_by}</span>
+                                  <span>{new Date(m.created_at).toLocaleString('id-ID')}</span>
+                                </div>
+                              </div>
+                            ))}
+
+                            {reconciliationMatches.length === 0 && (
+                              <p className="text-xs text-slate-400 text-center py-8">Belum ada riwayat rekonsiliasi yang diselesaikan.</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Manual Match Modal */}
+                      {manualMatchModalOpen && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+                          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-gray-100">
+                            <div className="flex justify-between items-start border-b border-gray-100 pb-3">
+                              <div>
+                                <span className="text-[10px] text-indigo-600 font-bold uppercase font-mono">Form Rekonsiliasi Manual</span>
+                                <h3 className="text-base font-bold text-slate-800 font-display">Cocokkan Mutasi Bank dengan Transaksi Midtrans</h3>
+                              </div>
+                              <button
+                                onClick={() => setManualMatchModalOpen(null)}
+                                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                              >
+                                <X size={18} />
+                              </button>
+                            </div>
+
+                            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 space-y-1 font-sans">
+                              <span className="text-[10px] text-slate-400 font-bold uppercase font-mono block">Data Mutasi Bank Dipilih</span>
+                              <div className="flex justify-between items-center text-xs">
+                                <span className="font-bold text-slate-800">{manualMatchModalOpen.desc}</span>
+                                <span className="font-bold font-mono text-emerald-600">{formatRupiah(manualMatchModalOpen.amount)}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 font-mono block">Tanggal: {manualMatchModalOpen.date}</span>
+                            </div>
+
+                            <div className="space-y-4">
+                              <div>
+                                <label className="text-[10px] text-slate-600 font-bold uppercase font-mono block mb-1">
+                                  Pilih Target Transaksi Kliring Midtrans (COA 1200)
+                                </label>
+                                <select
+                                  value={selectedClearingId || ''}
+                                  onChange={(e) => {
+                                    const cid = Number(e.target.value);
+                                    setSelectedClearingId(cid);
+                                    const clr = clearingTransactions.find(c => c.id === cid);
+                                    if (clr) {
+                                      setManualFeeAmount(clr.fee_amount || 0);
+                                    }
+                                  }}
+                                  className="w-full text-xs p-2.5 rounded-xl border border-gray-200 font-medium bg-white text-slate-900 outline-none focus:border-indigo-500"
+                                >
+                                  <option value="">-- Pilih Transaksi Midtrans --</option>
+                                  {clearingTransactions
+                                    .filter(c => c.clearing_status !== 'reconciled')
+                                    .map(c => (
+                                      <option key={c.id} value={c.id}>
+                                        {c.midtrans_order_id} - {c.tenant_name} (Gross: {formatRupiah(c.gross_amount)} | Fee: {formatRupiah(c.fee_amount)})
+                                      </option>
+                                    ))}
+                                </select>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-[10px] text-slate-600 font-bold uppercase font-mono block mb-1">
+                                    Nominal Dicairkan (Rp)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    value={manualMatchModalOpen.amount}
+                                    readOnly
+                                    className="w-full text-xs p-2.5 rounded-xl border border-gray-200 font-bold bg-slate-50 font-mono text-slate-800"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-[10px] text-slate-600 font-bold uppercase font-mono block mb-1">
+                                    Biaya Midtrans Fee (5030)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    value={manualFeeAmount}
+                                    onChange={(e) => setManualFeeAmount(Number(e.target.value))}
+                                    className="w-full text-xs p-2.5 rounded-xl border border-gray-200 font-bold font-mono text-amber-600"
+                                  />
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="text-[10px] text-slate-600 font-bold uppercase font-mono block mb-1">
+                                  Catatan Rekonsiliasi
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Contoh: Pencocokan manual settlement Bank Mandiri"
+                                  value={manualMatchNotes}
+                                  onChange={(e) => setManualMatchNotes(e.target.value)}
+                                  className="w-full text-xs p-2.5 rounded-xl border border-gray-200 outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+                              <button
+                                onClick={() => setManualMatchModalOpen(null)}
+                                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+                              >
+                                Batal
+                              </button>
+
+                              <button
+                                disabled={!selectedClearingId || isSubmittingManualMatch}
+                                onClick={async () => {
+                                  if (!selectedClearingId) return;
+                                  setIsSubmittingManualMatch(true);
+
+                                  try {
+                                    const res = await fetch('/api/admin/reconciliation/match', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        bankStatementId: manualMatchModalOpen.id,
+                                        clearingId: selectedClearingId,
+                                        reconciledAmount: manualMatchModalOpen.amount,
+                                        feeAmount: manualFeeAmount,
+                                        notes: manualMatchNotes,
+                                        createdBy: 'Finance Administrator'
+                                      })
+                                    });
+
+                                    const json = await res.json();
+                                    if (res.ok && json.success) {
+                                      alert("Pencocokan rekonsiliasi manual berhasil diselesaikan!");
+                                      setManualMatchModalOpen(null);
+                                      refetchBankStatement();
+                                      refetchClearingTransactions();
+                                      refetchReconciliationMatches();
+                                    } else {
+                                      alert("Gagal melakukan rekonsiliasi: " + (json.error || 'Terjadi kesalahan'));
+                                    }
+                                  } catch (err: any) {
+                                    alert("Terjadi kesalahan jaringan: " + err.message);
+                                  } finally {
+                                    setIsSubmittingManualMatch(false);
+                                  }
+                                }}
+                                className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md disabled:opacity-50"
+                              >
+                                {isSubmittingManualMatch ? 'Menyimpan...' : 'Selesaikan Match & Journaling'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}{/* SUBTAB 3: REVENUE & ACCOUNTS RECEIVABLE (AR) */}
                  {activeFinanceSubTab === 'ar' && (
@@ -5240,11 +5791,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded-full font-mono border ${
                               ext.status === 'paid'
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : ext.status === 'failed'
+                                : ext.status === 'cancelled'
                                   ? 'bg-rose-50 text-rose-700 border-rose-200'
                                   : 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
                             }`}>
-                              {ext.status === 'paid' ? 'LUNAS (PAID)' : ext.status === 'failed' ? 'GAGAL' : 'PENDING'}
+                              {ext.status === 'paid' ? 'LUNAS (PAID)' : ext.status === 'cancelled' ? 'DIBATALKAN' : 'PENDING'}
                             </span>
                           </td>
                           <td className="p-3.5 text-right pr-5">
@@ -7815,6 +8366,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 property_name: properties.find(prop => prop.id === selectedTenantForHistory.property_id)?.name || 'Gedung Kos Samara',
                                 room_number: selectedTenantForHistory.room_number,
                                 extension_months: selectedTenantForHistory.duration_months || 1,
+                                monthly_rate: p.amount,
                                 total_amount: p.amount,
                                 payment_method: p.method,
                                 status: 'paid',

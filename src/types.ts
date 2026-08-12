@@ -373,3 +373,49 @@ export interface BankStatementItem {
   created_at?: string;
 }
 
+export interface MidtransClearingTransaction {
+  id: number;
+  payment_id?: string | null;
+  booking_id?: number | null;
+  survey_id?: number | null;
+  contract_extension_id?: number | null;
+  midtrans_order_id: string;
+  midtrans_transaction_id?: string | null;
+  gross_amount: number;
+  fee_amount: number;
+  net_amount: number;
+  reconciled_amount: number;
+  outstanding_amount: number;
+  clearing_status: 'pending' | 'cleared' | 'partially_cleared' | 'reconciled' | 'disputed';
+  property_id?: number | null;
+  tenant_name?: string | null;
+  created_at?: string;
+  settled_at?: string;
+}
+
+export interface BankReconciliationMatch {
+  id: number;
+  bank_statement_id: number;
+  clearing_transaction_id: number;
+  matched_amount: number;
+  fee_amount: number;
+  difference_amount: number;
+  adjustment_category?: string | null;
+  status: 'matched' | 'partially_matched' | 'unmatched' | 'exception';
+  notes?: string | null;
+  created_by: string;
+  created_at?: string;
+  property_id?: number | null;
+}
+
+export interface ReconciliationSummary {
+  openingClearingBalance: number;
+  newSettlementsAmount: number;
+  gatewayFeesAmount: number;
+  bankTransfersAmount: number;
+  closingClearingBalance: number;
+  unreconciledCount: number;
+  matchedCount: number;
+  reconciliationRate: number;
+}
+

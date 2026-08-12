@@ -1,7 +1,7 @@
 # SAMARA STAY ERP & PROPERTY MANAGEMENT SYSTEM — MASTER SYSTEM BLUEPRINT & ARCHITECTURE AUDIT
 
 > **DOCUMENT STATUS:** OFFICIAL ARCHITECTURAL AUDIT & REVERSE-ENGINEERED BLUEPRINT  
-> **APPLICATION VERSION:** Samara Stay ERP v12.0 (Production Candidate)  
+> **APPLICATION VERSION:** Samara Stay ERP v14.0 (Production Candidate - Property Financial Dimension & Hardened Settlement)  
 > **TARGET RUNTIME:** Vite 6 + React 19 + TypeScript + Express + Supabase (PostgreSQL / Auth / Realtime / Storage) + Midtrans SNAP + MailerSend API  
 > **COMPLIANCE NOTICE:** Read-only architectural assessment. Zero code or configuration modifications performed.
 
@@ -721,15 +721,24 @@ flowchart TD
 ## 31. CRITICAL FINDINGS & VULNERABILITIES
 
 ### Summary of Audit Findings:
-1. **Financial Booking Flow State Bug (FIXED IN V12):**
+1. **Property Dimension in Financial Transactions (ADDED IN V14):**
+   * *Feature:* Added `property_id` column to `financial_transactions` via Migration 020 & 021 to enable property-level Profit & Loss reporting.
+   * *Resolution:* Updated `post_financial_transaction` and `settle_contract_extension` RPCs with `p_property_id` support (defaulting to NULL for backward compatibility), backfilled historical payment references, and attached `property_id` in webhook settlements.
+2. **Settlement Polling & Proof Safety (FIXED IN V14):**
+   * *Issue:* `onSuccess` callback in Midtrans SNAP contract extension previously used a single 2-second timeout and constructed an in-memory fallback proof object with hardcoded `status: 'paid'`.
+   * *Resolution:* Replaced single timeout with interval polling against `contract_extensions` until status is confirmed 'paid' in DB before rendering proof modal.
+3. **Contract Extension & Financial RPC Security Vulnerability (FIXED IN V13):**
+   * *Issue:* `settle_contract_extension` RPC was previously exposed directly to `anon` client requests with disabled RLS on `contract_extensions`, allowing potential unauthorized extension calls directly from browser dev console.
+   * *Resolution (Migration 019 & v13 Server Proxy):* Re-enabled RLS on `contract_extensions`, revoked execution permissions on `settle_contract_extension` & `post_financial_transaction` from `anon`/`authenticated`, created secure Express API routes `/api/admin/contract-extension/settle` and `/api/admin/financial-transaction/post` protected by `requireAdminAuth` using `SUPABASE_SERVICE_ROLE_KEY`. Refactored client calls in `src/lib/supabase.ts` and `src/pages/Admin.tsx` to proxy exclusively through server endpoints.
+2. **Financial Booking Flow State Bug (FIXED IN V12):**
    * *Issue:* Clicking a room card directly from property detail grid previously opened the booking modal without explicitly setting `checkoutFlow('monthly')`, leaving it as `'none'`.
    * *Resolution:* Applied fix in `Home.tsx` (~line 3117) to explicitly trigger `setCheckoutFlow('monthly')`.
-2. **Type-Safety Annotations (FIXED IN V12):**
+3. **Type-Safety Annotations (FIXED IN V12 & V13):**
    * *Issue:* `RoomForm.tsx` missing explicit cast for `room_type` literal union, and `Admin.tsx` missing `'user'` role in `userForm.role` state type annotation.
    * *Resolution:* Applied explicit type casts in `RoomForm.tsx` and `Admin.tsx`.
-3. **Midtrans Webhook Security:**
+4. **Midtrans Webhook Security:**
    * *Status:* Fully verified. HMAC SHA-512 signature checking and idempotency via `webhook_events` prevents signature spoofing or double-settlement.
-4. **Service Role Key Isolation:**
+5. **Service Role Key Isolation:**
    * *Status:* Fully verified. `SUPABASE_SERVICE_ROLE_KEY` is present only in server-side code (`server.ts`) and is never leaked to client bundles.
 
 ---
@@ -737,7 +746,7 @@ flowchart TD
 ## 32. SAFE FIX PRIORITY ROADMAP (P0 - P3)
 
 * **P0 — MUST FIX BEFORE PRODUCTION (CRITICAL):**
-  * *Status:* **0 Pending Issues**. (Financial booking flow bug fixed in v12).
+  * *Status:* **0 Pending Issues**. (RPC & RLS security vulnerability fixed in v13; Financial booking flow bug fixed in v12).
 * **P1 — HIGH PRIORITY:**
   * Ensure production domain is added to MailerSend authorized senders list and verified via DKIM/SPF DNS records.
 * **P2 — IMPORTANT:**
@@ -749,11 +758,13 @@ flowchart TD
 
 ## 33. SAMARA STAY — CURRENT SYSTEM BLUEPRINT
 
-Samara Stay v12 is a fully integrated, production-ready Property Management System and ERP Financial Engine.
+Samara Stay v14 is a fully integrated, production-ready, security-hardened Property Management System and ERP Financial Engine with multi-property financial dimensions.
 
 ### Key Operational Capabilities:
 * **Tenant Booking:** End-to-end self-service booking with instant QRIS/Virtual Account payments via Midtrans SNAP.
-* **Contract Extension System (Perpanjangan Kontrak):** Super Admin can trigger online (Midtrans SNAP) or offline (Cash/Direct Transfer) lease renewals for active tenants directly in the Admin portal.
+* **Property Financial Dimension:** `financial_transactions` ledger entries now record `property_id` across automated booking settlements, survey deposits, and contract extensions, enabling future per-property P&L reporting.
+* **Contract Extension System (Perpanjangan Kontrak - Hardened Polling & Security):** Super Admin can trigger online (Midtrans SNAP) or offline (Cash/Direct Transfer) lease renewals for active tenants directly in the Admin portal.
+  * **Server-Side Security:** Execution of contract extensions and financial transactions is protected behind Express server endpoints (`/api/admin/contract-extension/settle` & `/api/admin/financial-transaction/post`) with admin session verification (`requireAdminAuth`) and `service_role` execution.
   * **Realtime Synchronization:** Automatically updates tenant lease duration (`duration_months`), recalculates expiration dates, and logs history in `contract_extensions` table via PostgreSQL atomic RPC `settle_contract_extension`.
   * **Financial Double-Entry Ledger Integration:** Every contract extension payment automatically generates double-entry general ledger journal entries (Debits Cash/Bank 1010, Credits Room Rental Revenue 4000), updates trial balances, income statements, and balance sheets in real time.
   * **Digital Invoice Proof:** Generates official printable/downloadable paid invoices featuring tenant name, property building, room number, extended duration, payment method, and official digital stamp.
@@ -763,4 +774,4 @@ Samara Stay v12 is a fully integrated, production-ready Property Management Syst
 * **Realtime Operations:** A unified WebSocket manager ensures that room status updates, new bookings, contract extensions, petty cash requests, and payment approvals refresh instantly across all connected admin dashboards without requiring manual page reloads.
 
 ---
-*DOCUMENTATION COMPLETED — MASTER BLUEPRINT AUTHORIZED FOR SAMARA STAY ERP V12.0*
+*DOCUMENTATION COMPLETED — MASTER BLUEPRINT AUTHORIZED FOR SAMARA STAY ERP V14.0*

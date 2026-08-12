@@ -8,7 +8,8 @@ import {
   Property, Room, Tenant, ContractExtension, Booking, PaymentInvoice, Maintenance, 
   UserSystem, ActivityLog, Survey, AccountCOA, FinancialTransaction, 
   JournalEntry, SystemSettings, Coupon, PettyCashRequest, FixedAsset,
-  Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, Facility
+  Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, Facility,
+  MidtransClearingTransaction, BankReconciliationMatch
 } from '../types';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
@@ -445,6 +446,10 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
 }
 
 function logSupabaseError(context: string, error: any, isException = false) {
+  if (error && (error.code === 'PGRST205' || error.message?.includes('Could not find the table') || error.message?.includes('schema cache'))) {
+    console.warn(`[SUPABASE NOTICE] [${context}] Table or endpoint not provisioned in remote schema cache:`, error.message || error);
+    return;
+  }
   console.error(`[SUPABASE ERROR] [${context}]`, error);
 }
 
@@ -2254,6 +2259,80 @@ export const database = {
     } catch (err) {
       logSupabaseError('saveBankStatementItem', err, true);
       throw err;
+    }
+  },
+
+  // --- MIDTRANS CLEARING & RECONCILIATION ---
+  async fetchMidtransClearingTransactions(options?: { limit?: number; offset?: number }): Promise<MidtransClearingTransaction[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 200;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('midtrans_clearing_transactions')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: false });
+      if (error) {
+        logSupabaseError('fetchMidtransClearingTransactions', error);
+        return [];
+      }
+      return (data || []).map((item: any) => ({
+        id: item.id,
+        payment_id: item.payment_id,
+        booking_id: item.booking_id,
+        survey_id: item.survey_id,
+        contract_extension_id: item.contract_extension_id,
+        midtrans_order_id: item.midtrans_order_id,
+        midtrans_transaction_id: item.midtrans_transaction_id,
+        gross_amount: Number(item.gross_amount || 0),
+        fee_amount: Number(item.fee_amount || 0),
+        net_amount: Number(item.net_amount || 0),
+        reconciled_amount: Number(item.reconciled_amount || 0),
+        outstanding_amount: Number(item.outstanding_amount || 0),
+        clearing_status: item.clearing_status,
+        property_id: item.property_id,
+        tenant_name: item.tenant_name,
+        created_at: item.created_at,
+        settled_at: item.settled_at
+      }));
+    } catch (err) {
+      logSupabaseError('fetchMidtransClearingTransactions', err, true);
+      return [];
+    }
+  },
+
+  async fetchBankReconciliationMatches(options?: { limit?: number; offset?: number }): Promise<BankReconciliationMatch[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 200;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('bank_reconciliation_matches')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: false });
+      if (error) {
+        logSupabaseError('fetchBankReconciliationMatches', error);
+        return [];
+      }
+      return (data || []).map((item: any) => ({
+        id: item.id,
+        bank_statement_id: item.bank_statement_id,
+        clearing_transaction_id: item.clearing_transaction_id,
+        matched_amount: Number(item.matched_amount || 0),
+        fee_amount: Number(item.fee_amount || 0),
+        difference_amount: Number(item.difference_amount || 0),
+        adjustment_category: item.adjustment_category,
+        status: item.status,
+        notes: item.notes,
+        created_by: item.created_by,
+        created_at: item.created_at,
+        property_id: item.property_id
+      }));
+    } catch (err) {
+      logSupabaseError('fetchBankReconciliationMatches', err, true);
+      return [];
     }
   },
 

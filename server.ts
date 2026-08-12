@@ -234,7 +234,8 @@ async function startServer() {
         reference_id,
         created_by,
         debit_account_id,
-        credit_account_id
+        credit_account_id,
+        property_id
       } = req.body;
 
       if (!category || !description || !amount || !type || !debit_account_id || !credit_account_id) {
@@ -262,7 +263,8 @@ async function startServer() {
         p_reference_id: reference_id || null,
         p_created_by: created_by || 'Admin',
         p_debit_account_id: debit_account_id,
-        p_credit_account_id: credit_account_id
+        p_credit_account_id: credit_account_id,
+        p_property_id: property_id || null
       });
 
       if (rpcErr) {
@@ -969,7 +971,30 @@ async function startServer() {
                 });
               }
 
-              // 6. Post double-entry financial accounting transaction
+              // Record Midtrans Gateway Clearing Item
+              try {
+                const feeAmt = Number(notification.fee_amount || 0);
+                const grossAmt = Number(booking.total_price || notification.gross_amount || 0);
+                await supabase.from('midtrans_clearing_transactions').upsert({
+                  midtrans_order_id: orderId,
+                  midtrans_transaction_id: notification.transaction_id || null,
+                  payment_id: invoiceId,
+                  booking_id: booking.id,
+                  gross_amount: grossAmt,
+                  fee_amount: feeAmt,
+                  net_amount: grossAmt - feeAmt,
+                  reconciled_amount: 0,
+                  outstanding_amount: grossAmt,
+                  clearing_status: 'cleared',
+                  property_id: booking.property_id || null,
+                  tenant_name: booking.tenant_name,
+                  settled_at: new Date().toISOString()
+                }, { onConflict: 'midtrans_order_id' });
+              } catch (clrErr) {
+                console.warn('[SUPABASE WEBHOOK WARNING] Midtrans clearing insert warning:', clrErr);
+              }
+
+              // 6. Post double-entry financial accounting transaction (DR 1200 Midtrans Clearing, CR 4000 Revenue)
               try {
                 const trxDate = new Date().toISOString().split('T')[0];
                 const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
@@ -983,8 +1008,9 @@ async function startServer() {
                   p_reference_type: 'payment',
                   p_reference_id: invoiceId,
                   p_created_by: 'Midtrans Webhook',
-                  p_debit_account_id: 1010,
-                  p_credit_account_id: 4000
+                  p_debit_account_id: 1200,
+                  p_credit_account_id: 4000,
+                  p_property_id: booking?.property_id || null
                 });
 
                 if (rpcErr) {
@@ -998,7 +1024,8 @@ async function startServer() {
                     type: 'income',
                     reference_type: 'payment',
                     reference_id: invoiceId,
-                    created_by: 'Midtrans Webhook'
+                    created_by: 'Midtrans Webhook',
+                    property_id: booking?.property_id || null
                   });
                 }
               } catch (finErr) {
@@ -1219,7 +1246,30 @@ async function startServer() {
               const { error: payErr } = await supabase.from('payments').insert(srvInvPayload);
               if (payErr) console.error('[SUPABASE WEBHOOK ERROR] Create survey invoice error:', payErr);
 
-              // 5. Post double-entry financial accounting transaction for survey DP
+              // Record Midtrans Gateway Clearing Item
+              try {
+                const feeAmt = Number(notification.fee_amount || 0);
+                const grossAmt = Number(survey.dp_amount || 500000);
+                await supabase.from('midtrans_clearing_transactions').upsert({
+                  midtrans_order_id: orderId,
+                  midtrans_transaction_id: notification.transaction_id || null,
+                  payment_id: srvInvPayload.id,
+                  survey_id: survey.id,
+                  gross_amount: grossAmt,
+                  fee_amount: feeAmt,
+                  net_amount: grossAmt - feeAmt,
+                  reconciled_amount: 0,
+                  outstanding_amount: grossAmt,
+                  clearing_status: 'cleared',
+                  property_id: survey.property_id || null,
+                  tenant_name: survey.tenant_name,
+                  settled_at: new Date().toISOString()
+                }, { onConflict: 'midtrans_order_id' });
+              } catch (clrErr) {
+                console.warn('[SUPABASE WEBHOOK WARNING] Midtrans survey clearing insert warning:', clrErr);
+              }
+
+              // 5. Post double-entry financial accounting transaction for survey DP (DR 1200 Midtrans Clearing, CR 1300 Deposit)
               try {
                 const trxDate = new Date().toISOString().split('T')[0];
                 const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
@@ -1233,8 +1283,9 @@ async function startServer() {
                   p_reference_type: 'payment',
                   p_reference_id: srvInvPayload.id,
                   p_created_by: 'Midtrans Webhook',
-                  p_debit_account_id: 1010, // Kas & Bank Mandiri
-                  p_credit_account_id: 1300 // Uang Muka Penyewa / DP
+                  p_debit_account_id: 1200, // Piutang Kliring Midtrans
+                  p_credit_account_id: 1300, // Uang Muka / Deposit Survey
+                  p_property_id: survey?.property_id || null
                 });
 
                 if (rpcErr) {
@@ -1247,7 +1298,8 @@ async function startServer() {
                     type: 'dp_booking',
                     reference_type: 'payment',
                     reference_id: srvInvPayload.id,
-                    created_by: 'Midtrans Webhook'
+                    created_by: 'Midtrans Webhook',
+                    property_id: survey?.property_id || null
                   });
                 }
               } catch (finErr) {
@@ -1322,6 +1374,30 @@ async function startServer() {
               });
 
               let invoiceId = rpcRes?.invoice_id || `INV-EXT-${Math.floor(1000 + Math.random() * 9000)}`;
+
+              // Record Midtrans Gateway Clearing Item
+              try {
+                const feeAmt = Number(notification.fee_amount || 0);
+                const grossAmt = Number(totalAmount || notification.gross_amount || 0);
+                const { data: tenantObjClr } = await supabase.from('tenants').select('full_name, property_id').eq('id', tenantId).maybeSingle();
+                await supabase.from('midtrans_clearing_transactions').upsert({
+                  midtrans_order_id: orderId,
+                  midtrans_transaction_id: notification.transaction_id || null,
+                  payment_id: invoiceId,
+                  contract_extension_id: ext?.id || null,
+                  gross_amount: grossAmt,
+                  fee_amount: feeAmt,
+                  net_amount: grossAmt - feeAmt,
+                  reconciled_amount: 0,
+                  outstanding_amount: grossAmt,
+                  clearing_status: 'cleared',
+                  property_id: tenantObjClr?.property_id || null,
+                  tenant_name: tenantObjClr?.full_name || null,
+                  settled_at: new Date().toISOString()
+                }, { onConflict: 'midtrans_order_id' });
+              } catch (clrErr) {
+                console.warn('[SUPABASE WEBHOOK WARNING] Midtrans contract extension clearing insert warning:', clrErr);
+              }
 
               if (rpcErr) {
                 console.warn('[SUPABASE WEBHOOK WARNING] Contract extension RPC error, fallback manual execution:', rpcErr.message);
@@ -2081,6 +2157,190 @@ async function startServer() {
       return res.json({ success: true, message: 'Kata sandi berhasil diperbarui' });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan sistem' });
+    }
+  });
+
+  // =========================================================================
+  // ADMIN API: BANK RECONCILIATION & MIDTRANS CLEARING ENGINE
+  // =========================================================================
+
+  // 1. Manual Match Endpoint
+  app.post('/api/admin/reconciliation/match', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { bankStatementId, clearingId, reconciledAmount, feeAmount, notes, createdBy } = req.body;
+
+      if (!bankStatementId || !clearingId || !reconciledAmount) {
+        return res.status(400).json({ error: 'bankStatementId, clearingId, dan reconciledAmount wajib diisi.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase service role belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('reconcile_bank_statement_entry', {
+        p_bank_statement_id: bankStatementId,
+        p_clearing_id: clearingId,
+        p_reconciled_amount: Number(reconciledAmount),
+        p_fee_amount: Number(feeAmount || 0),
+        p_created_by: createdBy || 'Finance Administrator',
+        p_notes: notes || null
+      });
+
+      if (rpcErr) {
+        console.error('[Admin API] reconcile_bank_statement_entry RPC error:', rpcErr);
+        return res.status(500).json({ error: rpcErr.message || 'Gagal merekonsiliasi transaksi.' });
+      }
+
+      return res.status(200).json({ success: true, data: rpcRes });
+    } catch (err: any) {
+      console.error('[Admin API] reconciliation/match failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 2. Automated Matching Engine Endpoint
+  app.post('/api/admin/reconciliation/auto-match', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { propertyId } = req.body;
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase service role belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Fetch unmatched credit bank statement items
+      let stmtQuery = supabaseAdmin
+        .from('bank_statement_items')
+        .select('*')
+        .eq('matched', false)
+        .eq('type', 'credit');
+
+      const { data: bankItems, error: stmtErr } = await stmtQuery;
+      if (stmtErr) return res.status(500).json({ error: stmtErr.message });
+
+      // Fetch unreconciled midtrans clearing items
+      let clrQuery = supabaseAdmin
+        .from('midtrans_clearing_transactions')
+        .select('*')
+        .in('clearing_status', ['pending', 'cleared', 'partially_cleared']);
+
+      if (propertyId) {
+        clrQuery = clrQuery.eq('property_id', propertyId);
+      }
+
+      const { data: clearingItems, error: clrErr } = await clrQuery;
+      if (clrErr) return res.status(500).json({ error: clrErr.message });
+
+      let matchedCount = 0;
+      let totalAmountMatched = 0;
+      const matchResults: any[] = [];
+
+      for (const item of bankItems || []) {
+        // Pass 1: Search by exact Order ID in bank description
+        let match = (clearingItems || []).find((c: any) =>
+          c.midtrans_order_id && item.desc && item.desc.toUpperCase().includes(c.midtrans_order_id.toUpperCase())
+        );
+
+        // Pass 2: Search by exact amount match if unique candidate within date window
+        if (!match) {
+          const amountCandidates = (clearingItems || []).filter((c: any) =>
+            Math.abs(Number(c.gross_amount) - Number(item.amount)) < 1 ||
+            Math.abs(Number(c.net_amount) - Number(item.amount)) < 1
+          );
+
+          if (amountCandidates.length === 1) {
+            match = amountCandidates[0];
+          }
+        }
+
+        if (match) {
+          const recAmount = Number(item.amount);
+          const feeAmt = Number(match.fee_amount || 0);
+
+          const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('reconcile_bank_statement_entry', {
+            p_bank_statement_id: item.id,
+            p_clearing_id: match.id,
+            p_reconciled_amount: recAmount,
+            p_fee_amount: feeAmt,
+            p_created_by: 'Auto-Match Reconciliation Engine',
+            p_notes: `Otomatis dicocokkan berdasarkan kriteria Order ID / Nominal (${match.midtrans_order_id})`
+          });
+
+          if (!rpcErr && rpcRes?.success) {
+            matchedCount++;
+            totalAmountMatched += recAmount;
+            matchResults.push({
+              bankStatementId: item.id,
+              orderId: match.midtrans_order_id,
+              amount: recAmount,
+              fee: feeAmt
+            });
+
+            // Remove matched item from remaining pool
+            const idx = clearingItems.findIndex((c: any) => c.id === match.id);
+            if (idx !== -1) clearingItems.splice(idx, 1);
+          }
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        matchedCount,
+        totalAmountMatched,
+        matchResults,
+        message: `Berhasil mencocokkan ${matchedCount} transaksi secara otomatis.`
+      });
+    } catch (err: any) {
+      console.error('[Admin API] reconciliation/auto-match failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 3. Bank Statement Batch Import Endpoint
+  app.post('/api/admin/bank-statement/import', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { items } = req.body;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'Format data mutasi bank tidak valid.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase service role belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const recordsToInsert = items.map((it: any) => ({
+        date: it.date || new Date().toISOString().split('T')[0],
+        desc: it.desc || 'Mutasi Masuk Rekening Bank Mandiri',
+        amount: Number(it.amount || 0),
+        type: it.type || (Number(it.amount) >= 0 ? 'credit' : 'debit'),
+        matched: false,
+        matched_ref: null
+      }));
+
+      const { data, error } = await supabaseAdmin
+        .from('bank_statement_items')
+        .insert(recordsToInsert)
+        .select();
+
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+
+      return res.status(200).json({
+        success: true,
+        insertedCount: data?.length || 0,
+        data
+      });
+    } catch (err: any) {
+      console.error('[Admin API] bank-statement/import failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
     }
   });
 

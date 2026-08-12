@@ -27,6 +27,8 @@ export const ACCOUNTS_COA = [
   { id: 1010, name: 'Kas Utama Bank Mandiri', type: 'asset', balance: 0 },
   { id: 1020, name: 'Kas Kecil (Petty Cash)', type: 'asset', balance: 0 },
   { id: 1100, name: 'Piutang Sewa Tenant', type: 'asset', balance: 0 },
+  { id: 1200, name: 'Piutang Kliring Midtrans (Gateway Clearing)', type: 'asset', balance: 0 },
+  { id: 1300, name: 'Hutang Titipan Uang Muka / Deposit Survey', type: 'liability', balance: 0 },
   { id: 2100, name: 'Hutang Pajak PBJT Daerah (10%)', type: 'liability', balance: 0 },
   { id: 3000, name: 'Modal Awal Pemilik', type: 'equity', balance: 0 },
   { id: 4000, name: 'Pendapatan Sewa Bulanan', type: 'revenue', balance: 0 },
@@ -34,5 +36,6 @@ export const ACCOUNTS_COA = [
   { id: 4200, name: 'Pendapatan DP Survey Hangus', type: 'revenue', balance: 0 },
   { id: 5010, name: 'Biaya Air Bersih PAM & Listrik', type: 'expense', balance: 0 },
   { id: 5020, name: 'Biaya Internet Fiber Wifi', type: 'expense', balance: 0 },
+  { id: 5030, name: 'Biaya Layanan Midtrans / Payment Gateway', type: 'expense', balance: 0 },
   { id: 5050, name: 'Biaya Kebersihan & Gaji Operator', type: 'expense', balance: 0 }
 ];
