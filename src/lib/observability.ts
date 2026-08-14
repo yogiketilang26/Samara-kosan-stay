@@ -299,28 +299,52 @@ class ObservabilitySystem {
   }
 
   // --- ERROR TRACKING ---
+  private isIgnoredBenignError(message?: string, stack?: string): boolean {
+    if (!message && !stack) return false;
+    const str = `${message || ''} ${stack || ''}`.toLowerCase();
+    return (
+      str.includes('websocket closed without opened') ||
+      str.includes('@vite/client') ||
+      str.includes('[vite]') ||
+      str.includes('failed to connect to websocket') ||
+      str.includes('resizeobserver loop') ||
+      str.includes('chrome-extension://') ||
+      str.includes('moz-extension://')
+    );
+  }
+
   private setupGlobalErrorHandler() {
     if (typeof window === 'undefined') return;
 
     window.addEventListener('error', (event) => {
+      const msg = event.message || 'Uncaught error';
+      const stack = event.error?.stack;
+      if (this.isIgnoredBenignError(msg, stack)) return;
+
       this.recordError({
-        message: event.message || 'Uncaught error',
-        stack: event.error?.stack,
+        message: msg,
+        stack,
         url: window.location.href,
       });
     });
 
     window.addEventListener('unhandledrejection', (event) => {
       const reason = event.reason;
+      const msg = reason?.message || String(reason || '');
+      const stack = reason?.stack;
+      if (this.isIgnoredBenignError(msg, stack)) return;
+
       this.recordError({
-        message: `Unhandled promise rejection: ${reason?.message || reason}`,
-        stack: reason?.stack,
+        message: `Unhandled promise rejection: ${msg}`,
+        stack,
         url: window.location.href,
       });
     });
   }
 
   public recordError(err: Omit<ErrorLog, 'id' | 'timestamp' | 'userEmail'>) {
+    if (this.isIgnoredBenignError(err.message, err.stack)) return;
+
     const errorLog: ErrorLog = {
       id: `err-${Math.random().toString(36).slice(2, 9)}`,
       ...err,
@@ -337,6 +361,11 @@ class ObservabilitySystem {
 
   public getErrorLogs(): ErrorLog[] {
     return this.errorLogs;
+  }
+
+  public clearErrorLogs(): void {
+    this.errorLogs = [];
+    this.notify();
   }
 
   // --- REACT RENDERS TRACKING ---

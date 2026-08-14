@@ -3,22 +3,73 @@
 -- PostgreSQL Database Schema & Transactional Posting Engine
 -- =========================================================================
 
--- 1. Create journal_entries Table (Double-Entry Ledger Bookkeeping)
+-- 1. Create accounts Table (Chart of Accounts / COA)
+CREATE TABLE IF NOT EXISTS accounts (
+  id INT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  type VARCHAR(50) NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  balance NUMERIC(15, 2) DEFAULT 0 NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+-- Seed Master Chart of Accounts (COA)
+INSERT INTO accounts (id, name, type, category, balance) VALUES
+(1000, 'Kas Kecil (Petty Cash)', 'asset', 'Kas & Bank', 5000000),
+(1010, 'Kas & Bank (BCA / Mandiri Operasional)', 'asset', 'Kas & Bank', 25000000),
+(1020, 'Bank Penampung Midtrans Escrow', 'asset', 'Kas & Bank', 0),
+(1200, 'Piutang Kliring Midtrans', 'asset', 'Piutang & Kliring', 0),
+(1300, 'Titipan Uang Muka / Deposit Survey', 'liability', 'Kewajiban Jangka Pendek', 0),
+(2000, 'Deposit Jaminan Sewa Kamar', 'liability', 'Kewajiban Jangka Pendek', 15000000),
+(2100, 'Hutang Vendor & Operasional', 'liability', 'Kewajiban Jangka Pendek', 0),
+(3000, 'Modal Pemilik (Owner Equity)', 'equity', 'Ekuitas', 50000000),
+(4000, 'Pendapatan Sewa Kamar', 'revenue', 'Pendapatan Utama', 0),
+(4100, 'Pendapatan Denda & Keterlambatan', 'revenue', 'Pendapatan Lain-lain', 0),
+(4200, 'Pendapatan DP Survey Hangus', 'revenue', 'Pendapatan Lain-lain', 0),
+(5000, 'Beban Listrik, Air, & Utilitas', 'expense', 'Beban Operasional', 0),
+(5010, 'Beban Kebersihan & Perawatan Kamar', 'expense', 'Beban Operasional', 0),
+(5020, 'Beban Keamanan & Lingkungan', 'expense', 'Beban Operasional', 0),
+(5030, 'Beban MDR / Transaksi Payment Gateway Midtrans', 'expense', 'Beban Operasional', 0),
+(5100, 'Beban Operasional Umum & Petty Cash', 'expense', 'Beban Operasional', 0),
+(5200, 'Beban Gaji Karyawan & Penjaga Kos', 'expense', 'Beban Operasional', 0),
+(5300, 'Beban Internet & WiFi Kos', 'expense', 'Beban Operasional', 0)
+ON CONFLICT (id) DO NOTHING;
+
+-- 2. Create financial_transactions Table (Parent Transaction Header)
+CREATE TABLE IF NOT EXISTS financial_transactions (
+  id BIGSERIAL PRIMARY KEY,
+  transaction_no VARCHAR(50) NOT NULL UNIQUE,
+  transaction_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  category VARCHAR(100) NOT NULL,
+  description TEXT,
+  amount NUMERIC(15, 2) NOT NULL,
+  type VARCHAR(50) NOT NULL,
+  reference_type VARCHAR(50),
+  reference_id VARCHAR(50),
+  created_by VARCHAR(100),
+  property_id INT REFERENCES properties(id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_financial_transactions_property_id ON financial_transactions(property_id);
+CREATE INDEX IF NOT EXISTS idx_financial_transactions_date ON financial_transactions(transaction_date);
+
+-- 3. Create journal_entries Table (Double-Entry Ledger Bookkeeping)
 CREATE TABLE IF NOT EXISTS journal_entries (
   id BIGSERIAL PRIMARY KEY,
   journal_no VARCHAR(50) NOT NULL,
-  transaction_id BIGINT NOT NULL,
-  account_id BIGINT NOT NULL,
+  transaction_id BIGINT NOT NULL REFERENCES financial_transactions(id) ON DELETE CASCADE,
+  account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
   debit NUMERIC(15, 2) DEFAULT 0 NOT NULL,
   credit NUMERIC(15, 2) DEFAULT 0 NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
--- 2. Add indexing for lightning-fast queries and general ledger performance
+-- 4. Add indexing for lightning-fast queries and general ledger performance
 CREATE INDEX IF NOT EXISTS idx_journal_entries_transaction_id ON journal_entries(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_journal_entries_account_id ON journal_entries(account_id);
 
--- 3. Create a PostgreSQL Stored Function for Atomic Posting
+-- 5. Create a PostgreSQL Stored Function for Atomic Posting
 -- This function guarantees ACID compliance (Atomicity, Consistency, Isolation, Durability).
 -- Any error inside this block triggers an automatic rollback of all database changes.
 CREATE OR REPLACE FUNCTION post_financial_transaction(
@@ -32,7 +83,8 @@ CREATE OR REPLACE FUNCTION post_financial_transaction(
   p_reference_id VARCHAR(50),
   p_created_by VARCHAR(100),
   p_debit_account_id INT,
-  p_credit_account_id INT
+  p_credit_account_id INT,
+  p_property_id INT DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -55,7 +107,8 @@ BEGIN
     type,
     reference_type,
     reference_id,
-    created_by
+    created_by,
+    property_id
   ) VALUES (
     p_transaction_no,
     p_transaction_date,
@@ -65,7 +118,8 @@ BEGIN
     p_type,
     p_reference_type,
     p_reference_id,
-    p_created_by
+    p_created_by,
+    p_property_id
   ) RETURNING id INTO v_transaction_id;
 
   -- Generate sequential Journal Entry number

@@ -21,7 +21,7 @@ export const PropertyDetail: React.FC<PropertyDetailProps> = ({
   onSelectRoom,
   onViewRoomDetail
 }) => {
-  const propertyRooms = rooms.filter(r => r.property_id === property.id && r.status === 'available');
+  const propertyRooms = rooms.filter(r => r.property_id === property.id && (r.status === 'available' || r.status === 'reserved' || !r.status));
 
   return (
     <div className="space-y-6 font-sans">

@@ -10,7 +10,7 @@ interface PremiumRoomCardProps {
 }
 
 export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect, onViewDetail }) => {
-  const isAvailable = room.status === 'available';
+  const isAvailable = room.status === 'available' || room.status === 'reserved' || !room.status;
   const totalPhotos = [room.image_url, ...(room.images || [])].filter(Boolean).length;
 
   const handleDetailClick = (e: React.MouseEvent) => {

@@ -13,6 +13,8 @@ interface RoomCardProps {
 export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect, onViewDetail }) => {
   const totalPhotos = [room.image_url, ...(room.images || [])].filter(Boolean).length;
 
+  const isAvailable = room.status === 'available' || room.status === 'reserved' || !room.status;
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-4 hover:border-slate-700 transition-all shadow-lg font-sans overflow-hidden">
       {room.image_url && (
@@ -92,14 +94,14 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect, onViewDetail
           )}
           <button
             onClick={onSelect}
-            disabled={room.status !== 'available'}
+            disabled={!isAvailable}
             className={`px-3 py-1.5 rounded-xl font-bold uppercase text-[9px] tracking-wider transition-all cursor-pointer ${
-              room.status === 'available'
+              isAvailable
                 ? 'bg-amber-500 hover:bg-amber-450 text-black shadow-md'
                 : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-50'
             }`}
           >
-            {room.status === 'available' ? 'Pesan Kamar' : 'Tidak Tersedia'}
+            {isAvailable ? 'Pesan Kamar' : 'Tidak Tersedia'}
           </button>
         </div>
       </div>

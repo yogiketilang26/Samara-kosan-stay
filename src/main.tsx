@@ -1,38 +1,66 @@
-import {StrictMode} from 'react';
-import {createRoot} from 'react-dom/client';
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
-import { configureSupabaseDynamically } from './lib/supabase';
+import { configureSupabaseDynamically, isSupabaseConfigured } from './lib/supabase';
 
-// Fetch runtime configuration from backend to ensure browser is always in sync with server-side credentials
-fetch('/api/config')
-  .then(res => {
-    if (!res.ok) {
-      throw new Error(`Server returned status: ${res.status}`);
-    }
-    return res.json();
-  })
-  .then(config => {
-    if (config.supabaseUrl && config.supabaseAnonKey && config.supabaseUrl !== 'undefined' && config.supabaseAnonKey !== 'undefined') {
-      const configured = configureSupabaseDynamically(config.supabaseUrl, config.supabaseAnonKey);
-      if (!configured) {
-        throw new Error('Supabase client failed to initialize with provided config values.');
+async function fetchConfigWithRetry(retries = 3, delayMs = 500): Promise<any> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch('/api/config', { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        return await res.json();
       }
-    } else {
-      throw new Error('Supabase credentials missing or invalid in backend environment config.');
+      console.warn(`[CONFIG SYNC] /api/config responded with status ${res.status}, attempt ${attempt}/${retries}`);
+    } catch (err: any) {
+      console.warn(`[CONFIG SYNC] Failed to fetch /api/config (attempt ${attempt}/${retries}):`, err.message || err);
     }
-    
-    // Success: Render standard App
-    createRoot(document.getElementById('root')!).render(
+
+    if (attempt < retries) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return null;
+}
+
+async function initializeApp() {
+  const rootElement = document.getElementById('root')!;
+
+  try {
+    const config = await fetchConfigWithRetry(3, 400);
+
+    if (config && config.supabaseUrl && config.supabaseAnonKey && config.supabaseUrl !== 'undefined' && config.supabaseAnonKey !== 'undefined') {
+      configureSupabaseDynamically(config.supabaseUrl, config.supabaseAnonKey);
+    } else if (!isSupabaseConfigured) {
+      // If server config is not available and Vite env is not present, check if we have any fallback
+      console.warn('[CONFIG SYNC] Runtime config not fetched and Vite env vars missing.');
+    }
+
+    // Render standard App
+    createRoot(rootElement).render(
       <StrictMode>
         <App />
-      </StrictMode>,
+      </StrictMode>
     );
-  })
-  .catch(err => {
-    console.error('FATAL STARTUP ERROR:', err);
-    // Render high-quality error page to fail loud and clear
-    createRoot(document.getElementById('root')!).render(
+  } catch (err: any) {
+    console.error('STARTUP WARNING:', err);
+
+    // If Supabase was already configured via build-time env vars, proceed to render
+    if (isSupabaseConfigured) {
+      createRoot(rootElement).render(
+        <StrictMode>
+          <App />
+        </StrictMode>
+      );
+      return;
+    }
+
+    // Otherwise render high-quality recovery page
+    createRoot(rootElement).render(
       <StrictMode>
         <div className="min-h-screen flex items-center justify-center bg-[#F8F9FA] px-4 py-12 font-sans">
           <div className="w-full max-w-md p-8 bg-white rounded-xl shadow-lg border border-red-100 text-center">
@@ -43,10 +71,10 @@ fetch('/api/config')
             </div>
             <h1 className="text-xl font-bold text-gray-900 mb-2">Inisialisasi Sistem Gagal</h1>
             <p className="text-sm text-gray-600 mb-6">
-              Aplikasi Samara Stay gagal memuat karena konfigurasi runtime database Supabase tidak ditemukan atau tidak valid.
+              Aplikasi Samara Stay gagal memuat karena konfigurasi runtime database Supabase tidak dapat diakses.
             </p>
             <div className="p-3 bg-red-50 rounded-lg text-left text-xs font-mono text-red-700 break-all mb-6">
-              {err.message || String(err)}
+              {err?.message || String(err)}
             </div>
             <button 
               onClick={() => window.location.reload()}
@@ -59,4 +87,7 @@ fetch('/api/config')
         </div>
       </StrictMode>
     );
-  });
+  }
+}
+
+initializeApp();

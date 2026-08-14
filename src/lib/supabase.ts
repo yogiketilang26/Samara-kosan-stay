@@ -20,6 +20,20 @@ export let isSupabaseConfigured = Boolean(activeSupabaseUrl && activeSupabaseAno
 
 export const DEFAULT_OWNER_SIGNATURE = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='90' viewBox='0 0 240 90'><path d='M 15 45 C 30 18, 40 8, 55 32 C 65 48, 75 12, 90 28 C 100 38, 105 18, 125 42 C 140 22, 155 52, 175 28 C 190 32, 205 22, 218 38' fill='none' stroke='%231e293b' stroke-width='2.8' stroke-linecap='round'/><path d='M 25 58 Q 110 46 210 52' fill='none' stroke='%232E6F40' stroke-width='2' stroke-dasharray='3 2'/><text x='110' y='72' font-family='sans-serif' font-size='9' font-weight='bold' fill='%232E6F40' text-anchor='middle' letter-spacing='1'>SAMARA STAY OWNER</text><text x='110' y='83' font-family='monospace' font-size='7' fill='%2364748b' text-anchor='middle'>OFFICIAL DIGITAL STAMP</text></svg>`;
 
+export async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  try {
+    const sessionRes = await supabase.auth.getSession();
+    const token = sessionRes.data.session?.access_token;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch (e) {}
+  return headers;
+}
+
 // Standardize Auth Client: Always initialize one client instance using safe placeholders to prevent GoTrue/client creation crashes
 export let supabase = createClient(
   activeSupabaseUrl || 'https://placeholder-project.supabase.co',
@@ -682,8 +696,18 @@ export const database = {
             category: f.category,
             description: f.description
           }));
+
+        // Business rule: Rooms remain available for other tenants and surveys until officially paid/occupied.
+        const normalizedStatus = (r.status === 'reserved' || !r.status) ? 'available' : r.status;
+        
+        // Auto-heal any lingering 'reserved' status in Supabase
+        if (r.status === 'reserved') {
+          safeSupabaseUpsert('rooms', { status: 'available' }, r.id).catch(e => console.warn('[Auto-heal Room Status]', e));
+        }
+
         const cleanRoom = { 
           ...r, 
+          status: normalizedStatus,
           facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(r.facilities) ? r.facilities : [])
         };
         delete cleanRoom.room_facilities;
@@ -965,21 +989,12 @@ export const database = {
 
       const updated = (data && data.length > 0 ? data[0] : { ...existing, ...survey }) as Survey;
 
-      // Confirmed survey side-effects (payment + room reservation)
+      // Confirmed survey side-effects (payment invoice creation)
+      // Note: In accordance with business rules, rooms remain OPEN/AVAILABLE for public booking & surveys
+      // until full official rental payment (pelunasan resmi) is completed. Only the specific time-slot is locked.
       if (updated.status === 'survey_confirmed') {
         const isFree = Number(updated.dp_amount) === 0;
         if (!isFree) {
-          const { data: roomData } = await supabase
-            .from('rooms')
-            .select('*')
-            .eq('property_id', updated.property_id)
-            .eq('room_number', updated.room_number)
-            .maybeSingle();
-
-          if (roomData) {
-            await safeSupabaseUpsert('rooms', { status: 'reserved' }, roomData.id);
-          }
-
           const targetInvoiceId = updated.invoice_id || `INV-SRV-${Math.floor(1000 + Math.random()*9000)}`;
           const srvInvPayload = {
             id: targetInvoiceId,
@@ -1001,20 +1016,15 @@ export const database = {
           const payId = existingPayment ? existingPayment.id : targetInvoiceId;
           await safeSupabaseUpsert('payments', srvInvPayload, existingPayment ? existingPayment.id : undefined);
 
-          await this.recordFinancialRevenue(payId, 1300, updated.dp_amount, `DP Survey Kamar ${updated.room_number} - ${updated.tenant_name}`);
+          // Note: Recording financial revenue double-entry accounting is an admin/webhook accounting operation.
+          // Wrapped in try/catch so unauthenticated users saving a survey do not fail.
+          try {
+            await this.recordFinancialRevenue(payId, 1300, updated.dp_amount, `DP Survey Kamar ${updated.room_number} - ${updated.tenant_name}`);
+          } catch (finErr) {
+            console.warn('[SUPABASE NOTICE] Financial revenue double-entry recording deferred to server webhook or admin session:', finErr);
+          }
         }
       } else if (updated.status === 'no_show' || updated.status === 'expired') {
-        const { data: roomData } = await supabase
-          .from('rooms')
-          .select('*')
-          .eq('property_id', updated.property_id)
-          .eq('room_number', updated.room_number)
-          .maybeSingle();
-
-        if (roomData && roomData.status === 'reserved') {
-          await safeSupabaseUpsert('rooms', { status: 'available' }, roomData.id);
-        }
-
         const { data: existingPayment } = await supabase
           .from('payments')
           .select('*')
@@ -1026,7 +1036,11 @@ export const database = {
         }
 
         if (updated.status === 'no_show' && Number(updated.dp_amount) > 0) {
-          await this.recordFinancialReclassification(1300, 4200, updated.dp_amount, `DP Survey Hangus (No Show) - Reservasi ${updated.reservation_number}`);
+          try {
+            await this.recordFinancialReclassification(1300, 4200, updated.dp_amount, `DP Survey Hangus (No Show) - Reservasi ${updated.reservation_number}`);
+          } catch (finErr) {
+            console.warn('[SUPABASE NOTICE] Financial reclassification recording deferred to server webhook or admin session:', finErr);
+          }
         }
       }
 
@@ -1168,10 +1182,12 @@ export const database = {
     created_by: string;
     debit_account_id: number;
     credit_account_id: number;
+    property_id?: number | null;
   }): Promise<void> {
+    const headers = await getAuthHeaders();
     const res = await fetch('/api/admin/financial-transaction/post', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload)
     });
 
@@ -1687,9 +1703,10 @@ export const database = {
     transactionId?: string;
     notes?: string;
   }): Promise<{ success: boolean; invoiceId: string; newDurationMonths: number }> {
+    const headers = await getAuthHeaders();
     const res = await fetch('/api/admin/contract-extension/settle', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         tenantId: payload.tenantId,
         extensionMonths: payload.extensionMonths,
@@ -1854,7 +1871,7 @@ export const database = {
       if (roomErr) throw roomErr;
 
       const totalRooms = rooms ? rooms.length : 0;
-      const availableRooms = rooms ? rooms.filter(r => r.status === 'available').length : 0;
+      const availableRooms = rooms ? rooms.filter(r => r.status === 'available' || r.status === 'reserved' || !r.status).length : 0;
 
       const { error: propErr } = await safeSupabaseUpsert('properties', {
         total_rooms: totalRooms,

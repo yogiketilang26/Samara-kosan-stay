@@ -1,8 +1,15 @@
-import React, { useState } from 'react';
-import { Room, Property, Coupon } from '../../types';
+import React, { useState, useEffect } from 'react';
+import { Room, Property, Coupon, Survey } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
-import { Calendar, Tag, ShieldAlert } from 'lucide-react';
+import { Calendar, Tag, ShieldAlert, Clock, Lock, CheckCircle2, Info } from 'lucide-react';
 import { SignaturePad } from './SignaturePad';
+
+export const SURVEY_SLOTS = [
+  { value: '09:00 - 11:00', label: 'Pagi', time: '09:00 - 11:00 WIB' },
+  { value: '13:00 - 15:00', label: 'Siang', time: '13:00 - 15:00 WIB' },
+  { value: '16:00 - 18:00', label: 'Sore', time: '16:00 - 18:00 WIB' },
+  { value: '19:00 - 20:30', label: 'Malam', time: '19:00 - 20:30 WIB' }
+];
 
 interface BookingFormProps {
   property: Property;
@@ -19,6 +26,7 @@ interface BookingFormProps {
   setBookingPeriodDays: (d: number) => void;
   bookingCheckInDate: string;
   setBookingCheckInDate: (date: string) => void;
+  surveys?: Survey[];
   surveyForm: {
     fullName: string;
     nik: string;
@@ -65,6 +73,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   setBookingPeriodDays,
   bookingCheckInDate,
   setBookingCheckInDate,
+  surveys = [],
   surveyForm,
   setSurveyForm,
   bookingForm,
@@ -76,6 +85,28 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   setSignatureUrl
 }) => {
   const [sigError, setSigError] = useState('');
+
+  // Check if a specific time slot is already locked/booked by another active survey
+  const isSlotLocked = (slotValue: string) => {
+    if (!surveys || surveys.length === 0) return false;
+    return surveys.some(s => 
+      s.property_id === property.id &&
+      s.room_number === room.room_number &&
+      s.survey_date === surveyForm.date &&
+      s.survey_time_slot === slotValue &&
+      (s.status === 'survey_confirmed' || s.status === 'pending_payment')
+    );
+  };
+
+  // Auto-switch to first available slot if currently selected slot is locked on the selected date
+  useEffect(() => {
+    if (checkoutFlow === 'survey' && isSlotLocked(surveyForm.slot)) {
+      const firstAvail = SURVEY_SLOTS.find(s => !isSlotLocked(s.value));
+      if (firstAvail) {
+        setSurveyForm((prev: any) => ({ ...prev, slot: firstAvail.value }));
+      }
+    }
+  }, [surveyForm.date, surveys, room.room_number, property.id, checkoutFlow]);
 
   const getPriceCalcs = () => {
     const rentBase = checkoutFlow === 'daily' 
@@ -115,6 +146,11 @@ export const BookingForm: React.FC<BookingFormProps> = ({
     e.preventDefault();
     setSigError('');
 
+    if (checkoutFlow === 'survey' && isSlotLocked(surveyForm.slot)) {
+      setSigError(`Slot jam kunjungan ${surveyForm.slot} pada tanggal ${surveyForm.date} telah dipesan oleh pengunjung lain. Mohon pilih slot jam lain yang masih tersedia.`);
+      return;
+    }
+
     if (!isAgreed) {
       setSigError('Anda harus menyetujui Kebijakan & Peraturan Kos terlebih dahulu.');
       return;
@@ -144,7 +180,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                     : 'text-[#64748B] hover:text-[#1E293B] hover:bg-slate-200'
                 }`}
               >
-                🔒 Komitmen DP (Kunci Unit)
+                🔒 Komitmen DP (Prioritas)
               </button>
               <button
                 type="button"
@@ -160,15 +196,24 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </div>
           </div>
 
+          {/* Educational notice regarding room availability and slot locking */}
+          <div className="bg-emerald-50/80 border border-emerald-200/80 p-3 rounded-2xl flex gap-2.5 text-[10px] leading-relaxed text-emerald-950 shadow-xs">
+            <Info size={15} className="shrink-0 text-[#2E6F40] mt-0.5" />
+            <div>
+              <strong className="text-emerald-900 font-bold block mb-0.5">Ketentuan Ketersediaan Kamar & Penguncian Jam:</strong>
+              <span>Selama belum melakukan pembayaran sewa resmi (pelunasan penuh), unit kamar <strong>tetap terbuka</strong> dan calon penyewa lain dapat membuat janji survey juga. Sistem hanya mengunci <strong>slot jam yang Anda pilih</strong> agar tidak terjadi jadwal ganda pada unit ini.</span>
+            </div>
+          </div>
+
           {surveyForm.isWithoutDp ? (
-            <div className="bg-blue-50 border border-blue-200/60 p-3.5 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-blue-900">
+            <div className="bg-blue-50 border border-blue-200/60 p-3 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-blue-900">
               <ShieldAlert size={14} className="shrink-0 text-blue-600" />
-              <p><strong>Skema Tanpa DP:</strong> Bebas biaya jaminan! Namun unit kamar tetap dibuka untuk umum dan dapat disewa oleh orang lain sewaktu-waktu sebelum kedatangan Anda. Pilih skema DP untuk mengunci unit Anda.</p>
+              <p><strong>Skema Tanpa DP:</strong> Bebas biaya jaminan! Anda dapat datang langsung sesuai slot waktu yang Anda pilih di bawah.</p>
             </div>
           ) : (
-            <div className="bg-amber-50 border border-amber-200/60 p-3.5 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-amber-900">
-              <ShieldAlert size={14} className="shrink-0 text-amber-600 animate-pulse" />
-              <p>Sewa Komitmen Survey membutuhkan DP Rp 500.000. Jaminan ini akan hangus jika Anda tidak hadir sesuai jadwal (No-Show), namun sepenuhnya dikembalikan/dikompensasikan ke harga sewa jika lanjut sewa (Covenan Transparansi).</p>
+            <div className="bg-amber-50 border border-amber-200/60 p-3 rounded-2xl flex gap-2 text-[10px] leading-relaxed text-amber-900">
+              <ShieldAlert size={14} className="shrink-0 text-amber-600" />
+              <p>DP Survey Rp 500.000 adalah jaminan komitmen kehadiran. Jaminan ini akan langsung <strong>mengurangi sisa tagihan sewa</strong> jika Anda melanjutkan sewa resmi (Covenan Transparansi).</p>
             </div>
           )}
 
@@ -195,27 +240,90 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Tanggal Kunjungan</label>
-              <input 
-                type="date" required
-                value={surveyForm.date}
-                onChange={(e) => setSurveyForm({ ...surveyForm, date: e.target.value })}
-                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
-              />
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <Calendar size={11} className="text-[#2E6F40]" />
+                  Tanggal Kunjungan
+                </label>
+                <input 
+                  type="date" required
+                  min={new Date().toISOString().split('T')[0]}
+                  value={surveyForm.date}
+                  onChange={(e) => setSurveyForm({ ...surveyForm, date: e.target.value })}
+                  className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <Clock size={11} className="text-[#2E6F40]" />
+                  Slot Jam Terpilih
+                </label>
+                <select
+                  value={surveyForm.slot}
+                  onChange={(e) => setSurveyForm({ ...surveyForm, slot: e.target.value })}
+                  className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-semibold cursor-pointer outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
+                >
+                  {SURVEY_SLOTS.map(s => {
+                    const locked = isSlotLocked(s.value);
+                    return (
+                      <option key={s.value} value={s.value} disabled={locked}>
+                        {s.label} ({s.time}) {locked ? '— 🔒 Terisi / Dipesan' : '— Tersedia'}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
             </div>
-            <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Slot Jam Kunjungan</label>
-              <select
-                value={surveyForm.slot}
-                onChange={(e) => setSurveyForm({ ...surveyForm, slot: e.target.value })}
-                className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-semibold cursor-pointer outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
-              >
-                <option value="09:00 - 11:00">Pagi (09:00 - 11:00)</option>
-                <option value="13:00 - 15:00">Siang (13:00 - 15:00)</option>
-                <option value="16:00 - 18:00">Sore (16:00 - 18:00)</option>
-              </select>
+
+            {/* Visual Interactive Time Slot Grid */}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex justify-between items-center text-[9px] font-mono uppercase font-bold text-[#64748B]">
+                <span>Pilih Slot Waktu Kunjungan (Unit {room.room_number})</span>
+                <span className="text-[8px] font-medium lowercase text-slate-500">*slot terkunci jika ada janji lain</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {SURVEY_SLOTS.map((slot) => {
+                  const locked = isSlotLocked(slot.value);
+                  const isSelected = surveyForm.slot === slot.value;
+                  return (
+                    <button
+                      key={slot.value}
+                      type="button"
+                      disabled={locked}
+                      onClick={() => !locked && setSurveyForm({ ...surveyForm, slot: slot.value })}
+                      className={`p-2.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
+                        locked
+                          ? 'bg-slate-100/70 border-slate-200 text-slate-400 cursor-not-allowed opacity-70'
+                          : isSelected
+                          ? 'bg-[#2E6F40] border-[#2E6F40] text-white shadow-xs ring-2 ring-[#2E6F40]/20'
+                          : 'bg-white border-slate-200 text-slate-700 hover:border-[#2E6F40]/60 hover:bg-emerald-50/20 cursor-pointer'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] font-extrabold uppercase font-mono tracking-wide ${isSelected ? 'text-white' : locked ? 'text-slate-400' : 'text-slate-900'}`}>
+                          {slot.label}
+                        </span>
+                        {locked ? (
+                          <span className="flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-0.5 rounded-md bg-red-100 text-red-700 font-mono">
+                            <Lock size={9} /> Penuh
+                          </span>
+                        ) : isSelected ? (
+                          <CheckCircle2 size={12} className="text-white" />
+                        ) : (
+                          <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 font-mono">
+                            Buka
+                          </span>
+                        )}
+                      </div>
+                      <span className={`text-[9px] font-mono mt-1 ${isSelected ? 'text-emerald-100' : locked ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {slot.time}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 

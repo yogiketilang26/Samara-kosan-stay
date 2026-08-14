@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import * as LucideIcons from 'lucide-react';
-import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAULT_OWNER_SIGNATURE } from '../lib/supabase';
+import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAULT_OWNER_SIGNATURE, getAuthHeaders } from '../lib/supabase';
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { observability, useRenderCounter } from '../lib/observability';
@@ -1990,31 +1990,43 @@ export default function Admin({}: AdminProps) {
         await safeSupabaseUpsert('rooms', { status: 'available' }, roomData.id);
       }
 
-      if (cancelSurveyActionType === 'forfeit') {
-        await database.postFinancialTransaction({
-          category: "Penerimaan Sewa",
-          description: `DP Survey Hangus - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
-          amount: 500000,
-          type: "income",
-          reference_type: "survey",
-          reference_id: String(s.id),
-          created_by: "Admin",
-          debit_account_id: 1300,
-          credit_account_id: 4200
-        });
+      const hasDp = Number(s.dp_amount) > 0;
+
+      if (hasDp && cancelSurveyActionType === 'forfeit') {
+        try {
+          await database.postFinancialTransaction({
+            category: "Penerimaan Sewa",
+            description: `DP Survey Hangus - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
+            amount: Number(s.dp_amount) || 500000,
+            type: "income",
+            reference_type: "survey",
+            reference_id: String(s.id),
+            created_by: "Admin",
+            debit_account_id: 1300,
+            credit_account_id: 4200,
+            property_id: s.property_id || null
+          });
+        } catch (finErr) {
+          console.warn('[Admin] Warning posting forfeit financial transaction:', finErr);
+        }
         database.logActivity("System", "SURVEY_CANCEL_FORFEIT", `DP Survey Hangus (Forfeit) untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
-      } else if (cancelSurveyActionType === 'refund') {
-        await database.postFinancialTransaction({
-          category: "Biaya Operasional",
-          description: `Pengembalian (Refund) DP Survey - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
-          amount: 500000,
-          type: "expense",
-          reference_type: "survey",
-          reference_id: String(s.id),
-          created_by: "Admin",
-          debit_account_id: 1300,
-          credit_account_id: 1010
-        });
+      } else if (hasDp && cancelSurveyActionType === 'refund') {
+        try {
+          await database.postFinancialTransaction({
+            category: "Biaya Operasional",
+            description: `Pengembalian (Refund) DP Survey - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
+            amount: Number(s.dp_amount) || 500000,
+            type: "expense",
+            reference_type: "survey",
+            reference_id: String(s.id),
+            created_by: "Admin",
+            debit_account_id: 1300,
+            credit_account_id: 1010,
+            property_id: s.property_id || null
+          });
+        } catch (finErr) {
+          console.warn('[Admin] Warning posting refund financial transaction:', finErr);
+        }
         database.logActivity("System", "SURVEY_CANCEL_REFUND", `DP Survey dikembalikan (Refund) untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
       } else {
         database.logActivity("System", "SURVEY_CANCEL_FREE", `Survey Kunjungan Tanpa DP dibatalkan untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
@@ -3720,9 +3732,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                               onClick={async () => {
                                 setIsAutoMatching(true);
                                 try {
+                                  const headers = await getAuthHeaders();
                                   const res = await fetch('/api/admin/reconciliation/auto-match', {
                                     method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
+                                    headers,
                                     body: JSON.stringify({})
                                   });
                                   const json = await res.json();
@@ -3765,9 +3778,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 });
 
                                 try {
+                                  const headers = await getAuthHeaders();
                                   const res = await fetch('/api/admin/bank-statement/import', {
                                     method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
+                                    headers,
                                     body: JSON.stringify({ items: parsed })
                                   });
                                   const json = await res.json();
@@ -4034,9 +4048,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                   setIsSubmittingManualMatch(true);
 
                                   try {
+                                    const headers = await getAuthHeaders();
                                     const res = await fetch('/api/admin/reconciliation/match', {
                                       method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
+                                      headers,
                                       body: JSON.stringify({
                                         bankStatementId: manualMatchModalOpen.id,
                                         clearingId: selectedClearingId,
@@ -7005,8 +7020,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <button
                         type="button"
                         onClick={() => {
-                          // Clear errors locally
-                          (observability as any).errorLogs = [];
+                          observability.clearErrorLogs();
                           setObservabilityTrigger(prev => prev + 1);
                         }}
                         className="text-[9px] text-[#64748B] hover:text-white font-bold border border-white/10 rounded-lg py-1 px-2.5 hover:bg-white/5 transition-all cursor-pointer"
@@ -8312,9 +8326,13 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           <div className="text-right font-mono">
                             <span className="text-xs font-extrabold text-emerald-600 block">{formatRupiah(ext.total_amount)}</span>
                             <span className={`text-[8px] uppercase font-bold px-1.5 py-0.5 rounded border ${
-                              ext.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                              ext.status === 'paid'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : ext.status === 'cancelled'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-amber-50 text-amber-700 border-amber-200'
                             }`}>
-                              {ext.status === 'paid' ? 'LUNAS (PAID)' : 'PENDING'}
+                              {ext.status === 'paid' ? 'LUNAS (PAID)' : ext.status === 'cancelled' ? 'DIBATALKAN' : 'PENDING'}
                             </span>
                           </div>
 

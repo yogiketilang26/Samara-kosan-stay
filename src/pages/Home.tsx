@@ -149,13 +149,17 @@ export default function Home({}: HomeProps) {
   const { data: tenantsData, loading: tenantsLoading } = useRealtimeTable<Tenant>(
     'tenants',
     () => database.fetchTenants());
+  const { data: surveysData, loading: surveysLoading } = useRealtimeTable<Survey>(
+    'surveys',
+    () => database.fetchSurveys());
 
-  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading || tenantsLoading;
+  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading || tenantsLoading || surveysLoading;
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [surveys, setSurveys] = useState<Survey[]>([]);
   const [loading, setLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
@@ -333,12 +337,13 @@ export default function Home({}: HomeProps) {
     setCoupons(couponsData || []);
     setSettings(sett);
     setTenants(tenantsData || []);
+    setSurveys(surveysData || []);
     
     if (filteredProps && filteredProps.length > 0) {
       const maxPriceVal = Math.max(...filteredProps.map(p => p.price));
       setPriceRange(Math.max(5000000, maxPriceVal));
     }
-  }, [propertiesData, roomsData, couponsData, settingsData, tenantsData]);
+  }, [propertiesData, roomsData, couponsData, settingsData, tenantsData, surveysData]);
 
   useEffect(() => {
     if (!hooksLoading) {
@@ -1332,7 +1337,7 @@ export default function Home({}: HomeProps) {
     const matchPrice = p.price <= priceRange;
 
     const pRooms = rooms.filter(r => r.property_id === p.id);
-    const matchAvailability = !onlyAvailable || pRooms.some(r => r.status === 'available');
+    const matchAvailability = !onlyAvailable || pRooms.some(r => r.status === 'available' || r.status === 'reserved' || !r.status);
 
     // Advanced facilities filters (connected to master facilities list from Supabase)
     const matchFacilities = selectedRoomFacilities.length === 0 ||
@@ -1359,7 +1364,7 @@ export default function Home({}: HomeProps) {
 
     const matchType = selectedType === 'all' || parentProperty.type === selectedType;
     const matchPrice = r.price <= priceRange;
-    const matchAvailability = !onlyAvailable || r.status === 'available';
+    const matchAvailability = !onlyAvailable || (r.status === 'available' || r.status === 'reserved' || !r.status);
 
     // Advanced facilities filters (connected to master facilities list from Supabase)
     const matchFacilities = selectedRoomFacilities.length === 0 || 
@@ -1796,7 +1801,7 @@ export default function Home({}: HomeProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-10">
               {properties.slice(0, 4).map((p, idx) => {
                 const pRooms = rooms.filter(r => r.property_id === p.id);
-                const availableCount = pRooms.filter(r => r.status === 'available').length;
+                const availableCount = pRooms.filter(r => r.status === 'available' || r.status === 'reserved' || !r.status).length;
                 
                 // Check if property is Kost Atikah Kemayoran (strictly excluding Tiara/Cempaka/Ciputra)
                 const nameLower = p.name.toLowerCase();
@@ -2260,7 +2265,7 @@ export default function Home({}: HomeProps) {
                 filteredProperties.length > 0 ? (
                   filteredProperties.map(p => {
                     const pRooms = rooms.filter(r => r.property_id === p.id);
-                    const availableCount = pRooms.filter(r => r.status === 'available').length;
+                    const availableCount = pRooms.filter(r => r.status === 'available' || r.status === 'reserved' || !r.status).length;
                     return (
                       <div
                         key={p.id}
@@ -2372,15 +2377,20 @@ export default function Home({}: HomeProps) {
                             referrerPolicy="no-referrer"
                           />
                           <div className="absolute top-2.5 left-2.5">
-                            <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase font-mono border shadow-sm ${
-                              r.status === 'available' 
-                                ? 'bg-emerald-600 text-white border-emerald-700' 
-                                : r.status === 'occupied' 
-                                  ? 'bg-amber-600 text-white border-amber-700' 
-                                  : 'bg-rose-600 text-white border-rose-700'
-                            }`}>
-                              {r.status === 'available' ? 'KOSONG' : r.status === 'occupied' ? 'TERISI' : 'PERBAIKAN'}
-                            </span>
+                            {(() => {
+                              const isAvail = r.status === 'available' || r.status === 'reserved' || !r.status;
+                              return (
+                                <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase font-mono border shadow-sm ${
+                                  isAvail 
+                                    ? 'bg-emerald-600 text-white border-emerald-700' 
+                                    : r.status === 'occupied' 
+                                      ? 'bg-amber-600 text-white border-amber-700' 
+                                      : 'bg-rose-600 text-white border-rose-700'
+                                }`}>
+                                  {isAvail ? 'KOSONG' : r.status === 'occupied' ? 'TERISI' : 'PERBAIKAN'}
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
 
@@ -2422,7 +2432,7 @@ export default function Home({}: HomeProps) {
                             </div>
 
                             <div className="flex gap-1.5 shrink-0 items-center">
-                              {r.status === 'available' && (
+                              {(r.status === 'available' || r.status === 'reserved' || !r.status) && (
                                 <button
                                   type="button"
                                   onClick={() => setSelectedRoomForDetail(r)}
@@ -2444,14 +2454,14 @@ export default function Home({}: HomeProps) {
                               </button>
                               <button
                                 type="button"
-                                disabled={r.status !== 'available'}
+                                disabled={!(r.status === 'available' || r.status === 'reserved' || !r.status)}
                                 onClick={() => {
                                   setActiveProperty(p);
                                   setActiveRoom(r);
                                   setCheckoutFlow('monthly');
                                 }}
                                 className={`font-extrabold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
-                                  r.status === 'available' 
+                                  (r.status === 'available' || r.status === 'reserved' || !r.status)
                                     ? 'bg-[#2E6F40] hover:bg-[#1f4b2b] text-white' 
                                     : 'bg-slate-100 text-[#64748B] border border-slate-200 cursor-not-allowed shadow-none'
                                 }`}
@@ -3117,13 +3127,13 @@ export default function Home({}: HomeProps) {
                 <p className="text-[11px] text-[#64748B] font-medium mt-0.5">Pilih kamar terbaik yang sesuai dengan budget dan kenyamanan Anda</p>
               </div>
               <span className="text-[11px] font-extrabold font-mono text-[#0D9488] bg-[#0D9488]/10 px-2.5 py-1 rounded-lg">
-                {rooms.filter(r => r.property_id === activeProperty.id && r.status === 'available').length} UNIT KOSONG
+                {rooms.filter(r => r.property_id === activeProperty.id && (r.status === 'available' || r.status === 'reserved' || !r.status)).length} UNIT KOSONG
               </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {rooms.filter(r => r.property_id === activeProperty.id).map(r => {
-                const isAvailable = r.status === 'available';
+                const isAvailable = r.status === 'available' || r.status === 'reserved' || !r.status;
                 const isSelected = activeRoom?.id === r.id;
                 return (
                   <div
@@ -3315,6 +3325,7 @@ export default function Home({}: HomeProps) {
               setBookingPeriodDays={setBookingPeriodDays}
               bookingCheckInDate={bookingCheckInDate}
               setBookingCheckInDate={setBookingCheckInDate}
+              surveys={surveys}
               surveyForm={surveyForm}
               setSurveyForm={setSurveyForm}
               bookingForm={bookingForm}
