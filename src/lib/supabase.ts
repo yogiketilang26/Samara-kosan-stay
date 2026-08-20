@@ -9,8 +9,9 @@ import {
   UserSystem, ActivityLog, Survey, AccountCOA, FinancialTransaction, 
   JournalEntry, SystemSettings, Coupon, PettyCashRequest, FixedAsset,
   Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, Facility,
-  MidtransClearingTransaction, BankReconciliationMatch
+  MidtransClearingTransaction, BankReconciliationMatch, NearbyAmenity
 } from '../types';
+import { INITIAL_NEARBY_AMENITIES } from '../data/nearbyAmenities';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
 let activeSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || (import.meta as any).env?.SUPABASE_URL || '';
@@ -647,6 +648,178 @@ export const database = {
     }
   },
 
+  // --- NEARBY AMENITIES & GPS COORDINATES ---
+  async fetchNearbyAmenities(propertyId?: number): Promise<NearbyAmenity[]> {
+    if (!isSupabaseConfigured) {
+      if (propertyId) {
+        return INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId);
+      }
+      return INITIAL_NEARBY_AMENITIES;
+    }
+    try {
+      let query = supabase
+        .from('nearby_amenities')
+        .select('*')
+        .order('distance_meters', { ascending: true });
+
+      if (propertyId) {
+        query = query.eq('property_id', propertyId);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.warn('[fetchNearbyAmenities] Query error or table not yet initialized, falling back to curated data:', error.message);
+        if (propertyId) {
+          return INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId);
+        }
+        return INITIAL_NEARBY_AMENITIES;
+      }
+
+      if (!data || data.length === 0) {
+        // If table exists but empty, return curated initial data
+        const fallback = propertyId 
+          ? INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId)
+          : INITIAL_NEARBY_AMENITIES;
+        return fallback;
+      }
+
+      return (data || []).map((row: any) => ({
+        id: String(row.id),
+        propertyId: Number(row.property_id),
+        name: String(row.name || ''),
+        category: row.category as any,
+        distanceMeters: Number(row.distance_meters || 0),
+        walkingTimeMinutes: Number(row.walking_time_minutes || 0),
+        drivingTimeMinutes: row.driving_time_minutes ? Number(row.driving_time_minutes) : undefined,
+        lat: Number(row.lat || 0),
+        lng: Number(row.lng || 0),
+        description: row.description || '',
+        address: row.address || '',
+        icon: row.icon || undefined
+      }));
+    } catch (err) {
+      console.warn('[fetchNearbyAmenities] Network/exception, returning default curated dataset:', err);
+      return propertyId 
+        ? INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId)
+        : INITIAL_NEARBY_AMENITIES;
+    }
+  },
+
+  async saveNearbyAmenity(amenity: Partial<NearbyAmenity>): Promise<NearbyAmenity> {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase belum terkonfigurasi. Pastikan VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY sudah terisi.');
+    }
+
+    const payload: any = {
+      property_id: amenity.propertyId,
+      name: amenity.name,
+      category: amenity.category,
+      distance_meters: amenity.distanceMeters ?? 0,
+      walking_time_minutes: amenity.walkingTimeMinutes ?? 0,
+      driving_time_minutes: amenity.drivingTimeMinutes ?? 0,
+      lat: Number(amenity.lat),
+      lng: Number(amenity.lng),
+      description: amenity.description || '',
+      address: amenity.address || '',
+      icon: amenity.icon || null,
+      updated_at: new Date().toISOString()
+    };
+
+    if (amenity.id && !amenity.id.startsWith('temp-') && !amenity.id.startsWith('new-')) {
+      payload.id = amenity.id;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('nearby_amenities')
+        .upsert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        logSupabaseError('saveNearbyAmenity', error);
+        throw new Error(`Gagal menyimpan titik fasilitas: ${error.message}`);
+      }
+
+      await this.logActivity(
+        "Admin",
+        amenity.id ? "UPDATE_AMENITY" : "CREATE_AMENITY",
+        `Fasilitas sekitar ${amenity.name} (${amenity.category}) berhasil disimpan.`
+      );
+
+      return {
+        id: String(data.id),
+        propertyId: Number(data.property_id),
+        name: String(data.name),
+        category: data.category,
+        distanceMeters: Number(data.distance_meters),
+        walkingTimeMinutes: Number(data.walking_time_minutes),
+        drivingTimeMinutes: data.driving_time_minutes ? Number(data.driving_time_minutes) : undefined,
+        lat: Number(data.lat),
+        lng: Number(data.lng),
+        description: data.description,
+        address: data.address,
+        icon: data.icon
+      };
+    } catch (err: any) {
+      console.error('[saveNearbyAmenity] Error:', err);
+      throw err;
+    }
+  },
+
+  async deleteNearbyAmenity(id: string): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const { error } = await supabase.from('nearby_amenities').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteNearbyAmenity', error);
+        throw new Error(`Gagal menghapus fasilitas: ${error.message}`);
+      }
+      await this.logActivity("Admin", "DELETE_AMENITY", `Menghapus fasilitas sekitar ID: ${id}`);
+      return true;
+    } catch (err: any) {
+      console.error('deleteNearbyAmenity failed:', err);
+      throw err;
+    }
+  },
+
+  async batchSeedNearbyAmenities(amenities: NearbyAmenity[]): Promise<number> {
+    if (!isSupabaseConfigured) return 0;
+    try {
+      const payloads = amenities.map(a => ({
+        id: a.id,
+        property_id: a.propertyId,
+        name: a.name,
+        category: a.category,
+        distance_meters: a.distanceMeters,
+        walking_time_minutes: a.walkingTimeMinutes,
+        driving_time_minutes: a.drivingTimeMinutes || 0,
+        lat: Number(a.lat),
+        lng: Number(a.lng),
+        description: a.description || '',
+        address: a.address || '',
+        icon: a.icon || null
+      }));
+
+      const { data, error } = await supabase
+        .from('nearby_amenities')
+        .upsert(payloads, { onConflict: 'id' })
+        .select();
+
+      if (error) {
+        logSupabaseError('batchSeedNearbyAmenities', error);
+        throw new Error(`Gagal seeding fasilitas ke database: ${error.message}`);
+      }
+
+      await this.logActivity("Admin", "SEED_AMENITIES", `Sinkronisasi ${payloads.length} titik fasilitas sekitar ke Supabase.`);
+      return data?.length || payloads.length;
+    } catch (err: any) {
+      console.error('batchSeedNearbyAmenities failed:', err);
+      throw err;
+    }
+  },
+
   // --- ROOMS ---
   async fetchRooms(options?: { limit?: number; offset?: number }): Promise<Room[]> {
     if (!isSupabaseConfigured) return [];
@@ -1237,6 +1410,62 @@ export const database = {
       debit_account_id: debitAccountId,
       credit_account_id: creditAccountId
     });
+  },
+
+  async checkCoaDiagnostics(options?: { repair?: boolean; force?: boolean }): Promise<{
+    success: boolean;
+    diagnostic?: {
+      healthy: boolean;
+      totalChecked: number;
+      existingCount: number;
+      missingCount: number;
+      missingAccounts: Array<{ id: number; name: string; type: string; category?: string }>;
+      repairedCount: number;
+      repairedAccounts: Array<{ id: number; name: string }>;
+      accountsStatus: Array<{ id: number; name: string; type: string; category?: string; exists: boolean; balance?: number }>;
+      timestamp: string;
+      error?: string;
+    };
+    error?: string;
+  }> {
+    try {
+      const headers = await getAuthHeaders();
+      const repairParam = options?.repair ? 'repair=true' : 'repair=false';
+      const forceParam = options?.force ? 'force=true' : 'force=false';
+      const res = await fetch(`/api/admin/accounting/diagnostic-coa?${repairParam}&${forceParam}`, {
+        method: 'GET',
+        headers
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        return { success: false, error: errBody.error || 'Gagal memeriksa diagnostik COA.' };
+      }
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Koneksi ke endpoint diagnostik gagal.' };
+    }
+  },
+
+  async repairCriticalCOA(): Promise<{
+    success: boolean;
+    repaired?: any;
+    error?: string;
+  }> {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/accounting/diagnostic-coa/repair', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({})
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        return { success: false, error: errBody.error || 'Gagal memperbaiki bagan akun.' };
+      }
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Koneksi perbaikan gagal.' };
+    }
   },
 
   // --- RULES SETTINGS ---
@@ -1885,6 +2114,69 @@ export const database = {
       }
     } catch (err) {
       console.error('Error syncing property room count in Supabase:', err);
+    }
+  },
+
+  // --- MAINTENANCE ---
+  async fetchMaintenance(options?: { limit?: number; offset?: number }): Promise<Maintenance[]> {
+    if (!isSupabaseConfigured) return [];
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    try {
+      const { data, error } = await supabase
+        .from('maintenances')
+        .select('*')
+        .range(offset, offset + limit - 1)
+        .order('id', { ascending: false });
+      if (error) {
+        logSupabaseError('fetchMaintenance', error);
+        return [];
+      }
+      return (data || []).map((m: any) => ({
+        id: m.id,
+        title: m.title || m.issue || 'Pemeliharaan Fasilitas',
+        property_id: m.property_id || 1,
+        room: m.room || m.room_number || 'Umum',
+        priority: m.priority || 'Normal',
+        cost: Number(m.cost || 0),
+        tech: m.tech || m.technician || 'Teknisi Samara',
+        desc_field: m.desc_field || m.description || '',
+        status: m.status || 'open',
+        date: m.date || m.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+        created_at: m.created_at
+      })) as Maintenance[];
+    } catch (err) {
+      logSupabaseError('fetchMaintenance', err, true);
+      return [];
+    }
+  },
+
+  async saveMaintenance(maint: Partial<Maintenance>): Promise<Maintenance> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const id = maint.id;
+      const payload = {
+        title: maint.title,
+        property_id: maint.property_id,
+        room: maint.room,
+        priority: maint.priority,
+        cost: maint.cost,
+        tech: maint.tech,
+        desc_field: maint.desc_field,
+        status: maint.status,
+        date: maint.date
+      };
+      const { data, error } = id
+        ? await supabase.from('maintenances').update(payload).eq('id', id).select().single()
+        : await supabase.from('maintenances').insert(payload).select().single();
+      if (error) {
+        logSupabaseError('saveMaintenance', error);
+        throw error;
+      }
+      return data as Maintenance;
+    } catch (err) {
+      logSupabaseError('saveMaintenance', err, true);
+      throw err;
     }
   },
 

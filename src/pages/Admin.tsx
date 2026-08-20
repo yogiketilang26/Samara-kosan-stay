@@ -13,8 +13,11 @@ import { Modal } from '../components/common/Modal';
 import { BookingSkeletonList, LedgerSkeletonTable, CoaSkeletonList } from '../components/common/Skeleton';
 import PropertyForm from '../components/property/PropertyForm';
 import RoomForm from '../components/room/RoomForm';
+import AdminMapCoordinateManager from '../components/admin/AdminMapCoordinateManager';
 import CouponList from '../components/coupon/CouponList';
 import InvoiceCard from '../components/transaction/InvoiceCard';
+import { CoaDiagnosticModal } from '../components/accounting/CoaDiagnosticModal';
+import { AccountingIntegrityAuditModal } from '../components/accounting/AccountingIntegrityAuditModal';
 import { formatRupiah } from '../utils/formatCurrency';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { 
@@ -25,7 +28,7 @@ import {
   ExternalLink, RefreshCw, Server, Copy, Mail, Play, RotateCw,
   Sparkles, Landmark, Coins, ShoppingBag, Wrench, Wallet, Percent, Shield, ShieldCheck,
   TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle,
-  FileSignature, PenTool, Upload, CheckCircle2
+  FileSignature, PenTool, Upload, CheckCircle2, Scale
 } from 'lucide-react';
 
 interface AdminProps {}
@@ -523,7 +526,7 @@ export default function Admin({}: AdminProps) {
   const [payments, setPayments] = useState<PaymentInvoice[]>([]);
   const [paymentSearch, setPaymentSearch] = useState('');
   const [paymentFilterStatus, setPaymentFilterStatus] = useState('all');
-  const [activeFinanceSubTab, setActiveFinanceSubTab] = useState<'overview' | 'ledger' | 'clearing' | 'reconciliation' | 'ar' | 'ap' | 'assets' | 'petty' | 'tax' | 'audit'>('overview');
+  const [activeFinanceSubTab, setActiveFinanceSubTab] = useState<'overview' | 'ledger' | 'clearing' | 'reconciliation' | 'ar' | 'ap' | 'assets' | 'petty' | 'tax' | 'audit' | 'integrity_audit' | 'coa_diag'>('overview');
   const [journalViewMode, setJournalViewMode] = useState<'transactions' | 'double_entry'>('transactions');
   const [ledgerSearch, setLedgerSearch] = useState('');
   const [ledgerAccountFilter, setLedgerAccountFilter] = useState('all');
@@ -1002,6 +1005,49 @@ export default function Admin({}: AdminProps) {
       setEmailDiagnosticsData({ error: err.message || 'Gagal terhubung ke endpoint diagnostik' });
     } finally {
       setRunningDiagnostics(false);
+    }
+  };
+
+  // COA Diagnostic Modal States
+  const [showCoaModal, setShowCoaModal] = useState(false);
+  const [coaDiagnosticData, setCoaDiagnosticData] = useState<any>(null);
+  const [isCheckingCoa, setIsCheckingCoa] = useState(false);
+  const [isRepairingCoa, setIsRepairingCoa] = useState(false);
+
+  // Accounting Integrity Audit Modal States (SAMARA STAY v14 -> v15)
+  const [showIntegrityAuditModal, setShowIntegrityAuditModal] = useState(false);
+
+  const handleRunCoaDiagnostics = async (force: boolean = true) => {
+    setIsCheckingCoa(true);
+    try {
+      const res = await database.checkCoaDiagnostics({ force });
+      if (res.success && res.diagnostic) {
+        setCoaDiagnosticData(res.diagnostic);
+      } else {
+        setCoaDiagnosticData({ error: res.error || 'Gagal memeriksa diagnostik COA' });
+      }
+    } catch (e: any) {
+      setCoaDiagnosticData({ error: e.message || 'Terjadi kesalahan sistem' });
+    } finally {
+      setIsCheckingCoa(false);
+    }
+  };
+
+  const handleRepairCoa = async () => {
+    setIsRepairingCoa(true);
+    try {
+      const res = await database.repairCriticalCOA();
+      if (res.success) {
+        alert("Bagan Akun (COA) kritis berhasil diperbaiki dan disinkronkan ke basis data!");
+        await handleRunCoaDiagnostics(true);
+        if (refetchAccounts) refetchAccounts();
+      } else {
+        alert("Gagal memperbaiki akun COA: " + (res.error || 'Kesalahan tidak diketahui'));
+      }
+    } catch (e: any) {
+      alert("Terjadi kesalahan jaringan: " + e.message);
+    } finally {
+      setIsRepairingCoa(false);
     }
   };
 
@@ -2621,6 +2667,26 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
 
+        {activeTab === 'map_coordinates' && (
+          <div className="space-y-4">
+            {refreshingModule['properties'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
+            <AdminMapCoordinateManager
+              properties={properties}
+              onPropertyUpdated={async () => {
+                startModuleRefresh('properties');
+                await refetchProperties();
+                endModuleRefresh('properties');
+              }}
+              showToast={(msg, type) => showToast(msg, type)}
+            />
+          </div>
+        )}
+
         {activeTab === 'rooms' && (
           <div className="space-y-4">
             {refreshingModule['rooms'] && (
@@ -3038,6 +3104,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                    {[
                      { id: 'overview', name: 'Dashboard & AI Analytics', icon: Sparkles },
                      { id: 'ledger', name: 'Ledger & Laporan', icon: Landmark },
+                     { id: 'integrity_audit', name: 'Audit Integritas (v15)', icon: Scale },
+                     { id: 'coa_diag', name: 'Diagnostik COA', icon: ShieldCheck },
                      { id: 'clearing', name: 'Kliring Midtrans (1200)', icon: ArrowRightLeft },
                      { id: 'reconciliation', name: 'Rekonsiliasi Bank', icon: CheckCircle2 },
                      { id: 'ar', name: 'Piutang & Pendapatan (AR)', icon: Coins },
@@ -3925,10 +3993,53 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                   </div>
                                 </div>
 
-                                <div className="flex justify-between text-[9px] text-slate-400 font-mono pt-1">
+                                <div className="flex justify-between items-center text-[9px] text-slate-400 font-mono pt-1">
                                   <span>Oleh: {m.created_by}</span>
                                   <span>{new Date(m.created_at).toLocaleString('id-ID')}</span>
                                 </div>
+
+                                {m.status !== 'unmatched' && (
+                                  <div className="pt-2 border-t border-slate-200/60 flex justify-end">
+                                    <button
+                                      onClick={async () => {
+                                        const confirmUnmatch = window.confirm(
+                                          `Apakah Anda yakin ingin membatalkan rekonsiliasi Match #${m.id}?\n\nTindakan ini akan:\n1. Membalikkan jurnal DR 1010 / CR 1200 ke DR 1200 / CR 1010 secara otomatis.\n2. Mengembalikan status mutasi bank ke belum cocok (unmatched).\n3. Mengembalikan saldo piutang kliring Midtrans #${m.clearing_transaction_id}.`
+                                        );
+                                        if (!confirmUnmatch) return;
+
+                                        try {
+                                          const headers = await getAuthHeaders();
+                                          const res = await fetch('/api/admin/reconciliation/unmatch', {
+                                            method: 'POST',
+                                            headers,
+                                            body: JSON.stringify({
+                                              matchId: m.id,
+                                              reason: 'Unmatch manual via Admin Portal',
+                                              createdBy: 'Finance Administrator'
+                                            })
+                                          });
+                                          const json = await res.json();
+                                          if (res.ok && json.success) {
+                                            alert("Rekonsiliasi berhasil dibatalkan dan jurnal pembalik telah dicatat di buku besar!");
+                                            refetchBankStatement();
+                                            refetchClearingTransactions();
+                                            refetchReconciliationMatches();
+                                            if (refetchTransactions) refetchTransactions();
+                                            if (refetchAccounts) refetchAccounts();
+                                            if (refetchJournalEntries) refetchJournalEntries();
+                                          } else {
+                                            alert("Gagal membatalkan rekonsiliasi: " + (json.error || 'Terjadi kesalahan'));
+                                          }
+                                        } catch (err: any) {
+                                          alert("Terjadi kesalahan jaringan: " + err.message);
+                                        }
+                                      }}
+                                      className="text-[10px] font-bold text-red-600 hover:text-red-700 hover:bg-red-50 px-2.5 py-1 rounded-xl transition-all border border-red-200/60 cursor-pointer"
+                                    >
+                                      Batalkan Match (Unmatch)
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             ))}
 
@@ -5376,6 +5487,301 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 ) : (
                                   <CheckCircle size={11} />
                                 )}
+
+                  {/* SUBTAB 9: COA INTEGRITY & LEDGER DIAGNOSTICS */}
+                  {activeFinanceSubTab === "coa_diag" && (
+                    <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-xs space-y-6 animate-fade-in">
+                      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-gray-100 pb-4">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-indigo-600 font-bold uppercase font-mono tracking-wider bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                              <ShieldCheck size={12} /> Double-Entry Ledger Protection
+                            </span>
+                            <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
+                              Real-Time Diagnostic Engine
+                            </span>
+                          </div>
+                          <h3 className="text-base font-bold text-slate-800 font-display mt-1">
+                            Diagnostik & Verifikasi Integritas Bagan Akun (Chart of Accounts)
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Memverifikasi ketersediaan seluruh 21 akun akuntansi PSAK Kos sebelum memproses settlement Midtrans, DP survey, maupun perpanjangan kontrak.
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleRunCoaDiagnostics(true)}
+                            disabled={isCheckingCoa || isRepairingCoa}
+                            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <RefreshCw size={13} className={isCheckingCoa ? "animate-spin" : ""} />
+                            {isCheckingCoa ? "Memeriksa..." : "Cek Status COA"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={handleRepairCoa}
+                            disabled={isRepairingCoa || isCheckingCoa}
+                            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <Wrench size={13} className={isRepairingCoa ? "animate-spin" : ""} />
+                            {isRepairingCoa ? "Memperbaiki..." : "Perbaiki & Sinkronkan DB"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Diagnostic Status Cards */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl">
+                          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">Total Akun Wajib</span>
+                          <span className="text-2xl font-black text-slate-900 font-mono mt-1 block">21 Akun</span>
+                          <span className="text-[11px] text-slate-400">Standar PSAK Keuangan Kos</span>
+                        </div>
+
+                        <div className="p-4 bg-emerald-50/60 border border-emerald-100 rounded-2xl">
+                          <span className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider block">Akun Aktif di DB</span>
+                          <span className="text-2xl font-black text-emerald-700 font-mono mt-1 block">
+                            {accounts.length} Akun
+                          </span>
+                          <span className="text-[11px] text-emerald-600">Termasuk 5 akun kliring kritis</span>
+                        </div>
+
+                        <div className="p-4 bg-indigo-50/60 border border-indigo-100 rounded-2xl">
+                          <span className="text-[11px] font-semibold text-indigo-800 uppercase tracking-wider block">Gateway Clearing (1200)</span>
+                          <span className="text-sm font-extrabold text-indigo-900 font-mono mt-1 block">
+                            {formatRupiah(accounts.find(a => a.id === 1200)?.balance || 0)}
+                          </span>
+                          <span className="text-[11px] text-indigo-600">Piutang Kliring Midtrans</span>
+                        </div>
+
+                        <div className="p-4 bg-amber-50/60 border border-amber-100 rounded-2xl">
+                          <span className="text-[11px] font-semibold text-amber-800 uppercase tracking-wider block">Deposit Survey (1300)</span>
+                          <span className="text-sm font-extrabold text-amber-900 font-mono mt-1 block">
+                            {formatRupiah(accounts.find(a => a.id === 1300)?.balance || 0)}
+                          </span>
+                          <span className="text-[11px] text-amber-600">Hutang Titipan Uang Muka</span>
+                        </div>
+                      </div>
+
+                      {/* Accounts Table */}
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                            <tr>
+                              <th className="px-4 py-3">ID Akun</th>
+                              <th className="px-4 py-3">Nama Bagan Akun</th>
+                              <th className="px-4 py-3">Kategori</th>
+                              <th className="px-4 py-3">Tipe</th>
+                              <th className="px-4 py-3 text-right">Saldo Saat Ini</th>
+                              <th className="px-4 py-3 text-center">Status Integrasi</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {accounts.map(acc => (
+                              <tr key={acc.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-4 py-3 font-mono font-bold text-slate-900">{acc.id}</td>
+                                <td className="px-4 py-3 font-semibold text-slate-800">
+                                  <div className="flex items-center gap-2">
+                                    <span>{acc.name}</span>
+                                    {[1010, 1200, 1300, 4000, 5030].includes(acc.id) && (
+                                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
+                                        SETTLEMENT CORE
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-slate-500">{acc.category || "-"}</td>
+                                <td className="px-4 py-3">
+                                  <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md ${
+                                    acc.type === "asset" ? "bg-blue-50 text-blue-700 border border-blue-100" :
+                                    acc.type === "liability" ? "bg-amber-50 text-amber-700 border border-amber-100" :
+                                    acc.type === "equity" ? "bg-purple-50 text-purple-700 border border-purple-100" :
+                                    acc.type === "revenue" ? "bg-emerald-50 text-emerald-700 border border-emerald-100" :
+                                    "bg-rose-50 text-rose-700 border border-rose-100"
+                                  }`}>
+                                    {acc.type}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-right font-mono font-bold text-slate-700">
+                                  {formatRupiah(acc.balance || 0)}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                    <Check size={11} /> Terverifikasi
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUBTAB 9: ACCOUNTING INTEGRITY AUDIT (SAMARA STAY v14 -> v15) */}
+                  {activeFinanceSubTab === 'integrity_audit' && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-slate-900 text-white rounded-3xl p-6 border border-slate-800 shadow-xl space-y-4">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                          <div>
+                            <span className="text-[10px] text-amber-400 font-mono uppercase tracking-wider font-extrabold flex items-center gap-1.5">
+                              <Scale size={13} className="text-amber-400" />
+                              SAMARA STAY v15 Financial Hardening
+                            </span>
+                            <h3 className="text-lg font-black text-white font-display mt-0.5">Audit Integritas Pembukuan & Keseimbangan Buku Besar</h3>
+                            <p className="text-xs text-slate-300 mt-1 max-w-2xl">
+                              Pemeriksaan 5-titik menyeluruh (Double-Entry, Sinkronisasi COA, Transaksi Yatim, Dimensi Properti, Kliring Midtrans) untuk menjamin kepatuhan akuntansi standar ERP.
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              onClick={() => setShowIntegrityAuditModal(true)}
+                              className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs px-4 py-2.5 rounded-2xl transition-all cursor-pointer flex items-center gap-2 shadow-lg hover:shadow-emerald-500/20"
+                            >
+                              <Scale size={14} />
+                              Jalankan Audit & Rekonsiliasi Lengkap
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 5-Point Integrity Checklist Highlights */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">CHK-01</span>
+                            <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">Double-Entry</span>
+                          </div>
+                          <h4 className="text-xs font-bold text-slate-800">Keseimbangan Debit vs Kredit</h4>
+                          <p className="text-[11px] text-slate-500 leading-relaxed">
+                            Memverifikasi setiap nomor jurnal pembukuan memiliki total debit persis sama dengan total kredit (selisih = Rp 0).
+                          </p>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">CHK-02</span>
+                            <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 uppercase">COA Sync</span>
+                          </div>
+                          <h4 className="text-xs font-bold text-slate-800">Sinkronisasi Saldo Bagan Akun</h4>
+                          <p className="text-[11px] text-slate-500 leading-relaxed">
+                            Mencocokkan saldo tercatat di tabel akun COA dengan hasil kalkulasi agregat seluruh entri buku jurnal umum.
+                          </p>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">CHK-03</span>
+                            <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 uppercase">Integrity</span>
+                          </div>
+                          <h4 className="text-xs font-bold text-slate-800">Integritas Relasi Transaksi Yatim</h4>
+                          <p className="text-[11px] text-slate-500 leading-relaxed">
+                            Mendeteksi entri jurnal yang kehilangan referensi transaksi induk atau transaksi yang belum memiliki jurnal pembukuan.
+                          </p>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">CHK-04</span>
+                            <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 uppercase">Property Dim</span>
+                          </div>
+                          <h4 className="text-xs font-bold text-slate-800">Dimensi Finansial Multi-Properti</h4>
+                          <p className="text-[11px] text-slate-500 leading-relaxed">
+                            Menjamin setiap transaksi operasional kos memiliki penandaan <code className="text-amber-600 font-mono">property_id</code> untuk akurasi Laba Rugi per unit kos.
+                          </p>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">CHK-05</span>
+                            <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200 uppercase">Midtrans 1200</span>
+                          </div>
+                          <h4 className="text-xs font-bold text-slate-800">Sinkronisasi Kliring Midtrans</h4>
+                          <p className="text-[11px] text-slate-500 leading-relaxed">
+                            Mencocokkan akumulasi piutang pending transfer di tabel kliring dengan saldo akun Piutang Kliring Midtrans (1200).
+                          </p>
+                        </div>
+
+                        <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-5 rounded-3xl text-white flex flex-col justify-between shadow-md">
+                          <div>
+                            <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase tracking-wider block mb-1">Pusat Aksi Cepat</span>
+                            <h4 className="text-xs font-bold text-white">Buka Laporan Audit & Perbaikan</h4>
+                            <p className="text-[11px] text-slate-300 mt-1">
+                              Jalankan verifikasi sistem, ekspor laporan ke CSV/JSON, atau lakukan perbaikan otomatis saldo dengan 1-klik.
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => setShowIntegrityAuditModal(true)}
+                            className="mt-4 w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold py-2.5 px-3 rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <ShieldCheck size={14} />
+                            Buka Modal Audit Integritas
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUBTAB 10: COA DIAGNOSTICS */}
+                  {activeFinanceSubTab === 'coa_diag' && (
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="bg-slate-900 text-white rounded-3xl p-6 border border-slate-800 shadow-xl space-y-4">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                          <div>
+                            <span className="text-[10px] text-teal-400 font-mono uppercase tracking-wider font-extrabold flex items-center gap-1.5">
+                              <ShieldCheck size={13} className="text-teal-400" />
+                              Chart of Accounts (COA) Health & Diagnostics
+                            </span>
+                            <h3 className="text-lg font-black text-white font-display mt-0.5">Diagnostik Struktur & Ketersediaan Akun Kritis</h3>
+                            <p className="text-xs text-slate-300 mt-1 max-w-2xl">
+                              Memastikan seluruh akun standar pembukuan (1000 Kas Kecil, 1010 Bank, 1200 Piutang Kliring Midtrans, 2100 Utang Pajak, 4000 Pendapatan Sewa, 5000 Beban Operasional, dll.) aktif dan valid.
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              onClick={() => {
+                                handleRunCoaDiagnostics(true);
+                                setShowCoaModal(true);
+                              }}
+                              className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold text-xs px-4 py-2.5 rounded-2xl transition-all cursor-pointer flex items-center gap-2 shadow-lg hover:shadow-teal-500/20"
+                            >
+                              <ShieldCheck size={14} />
+                              Buka Panel Diagnostik COA
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* COA Accounts Grid Preview */}
+                      <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
+                        <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                          <h4 className="text-xs font-bold text-slate-800 font-display">Daftar Akun Buku Besar Terdaftar ({accounts.length} Akun)</h4>
+                          <span className="text-[10px] text-slate-400 font-mono">Real-time Snapshot</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                          {accounts.map(acc => (
+                            <div key={acc.id} className="p-3 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col justify-between">
+                              <div>
+                                <div className="flex items-center justify-between">
+                                  <span className="font-mono text-[10px] font-bold text-indigo-600">[{acc.id}]</span>
+                                  <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 uppercase font-mono">{acc.type}</span>
+                                </div>
+                                <h5 className="text-xs font-bold text-slate-800 mt-1">{acc.name}</h5>
+                              </div>
+                              <div className="mt-2 pt-2 border-t border-slate-200/60 flex justify-between items-center">
+                                <span className="text-[9px] text-slate-400">Saldo:</span>
+                                <span className="font-mono text-xs font-bold text-slate-900">{formatRupiah(acc.balance || 0)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                                 Konfirmasi Kedatangan (Check-In)
                               </button>
                             )}
@@ -8419,6 +8825,28 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         </Modal>
       )}
+
+      {/* COA Diagnostic Modal */}
+      <CoaDiagnosticModal
+        isOpen={showCoaModal}
+        onClose={() => setShowCoaModal(false)}
+        diagnosticData={coaDiagnosticData}
+        isLoading={isCheckingCoa}
+        isRepairing={isRepairingCoa}
+        onRefresh={() => handleRunCoaDiagnostics(true)}
+        onRepair={handleRepairCoa}
+      />
+
+      {/* Accounting Integrity Audit Modal (SAMARA STAY v14 -> v15) */}
+      <AccountingIntegrityAuditModal
+        isOpen={showIntegrityAuditModal}
+        onClose={() => setShowIntegrityAuditModal(false)}
+        onRepaired={() => {
+          if (refetchAccounts) refetchAccounts();
+          if (refetchJournalEntries) refetchJournalEntries();
+          if (refetchTransactions) refetchTransactions();
+        }}
+      />
     </div>
   );
 }

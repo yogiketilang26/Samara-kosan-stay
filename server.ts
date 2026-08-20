@@ -51,9 +51,415 @@ function apiRateLimiter(windowMs: number, maxRequests: number) {
   };
 }
 
+// =========================================================================
+// CRITICAL CHART OF ACCOUNTS (COA) DEFINITIONS & DIAGNOSTIC ENGINE
+// =========================================================================
+export const CRITICAL_COA_ACCOUNTS = [
+  { id: 1000, name: 'Kas Tunai / Cash on Hand', type: 'asset', category: 'Kas & Bank' },
+  { id: 1010, name: 'Kas Utama Bank Mandiri (Operasional)', type: 'asset', category: 'Kas & Bank' },
+  { id: 1020, name: 'Bank Penampung Midtrans Escrow', type: 'asset', category: 'Kas & Bank' },
+  { id: 1200, name: 'Piutang Kliring Midtrans (Gateway Clearing)', type: 'asset', category: 'Piutang & Kliring' },
+  { id: 1300, name: 'Hutang Titipan Uang Muka / Deposit Survey', type: 'liability', category: 'Kewajiban Jangka Pendek' },
+  { id: 2000, name: 'Hutang Usaha / Vendor Payable', type: 'liability', category: 'Kewajiban Jangka Pendek' },
+  { id: 2100, name: 'Hutang Deposit Jaminan Sewa (Security Deposit)', type: 'liability', category: 'Kewajiban Jangka Pendek' },
+  { id: 3000, name: 'Modal Pemilik / Modal Disetor', type: 'equity', category: 'Ekuitas' },
+  { id: 3100, name: 'Laba Ditahan / Retained Earnings', type: 'equity', category: 'Ekuitas' },
+  { id: 4000, name: 'Pendapatan Sewa Kamar Kos', type: 'revenue', category: 'Pendapatan Utama' },
+  { id: 4100, name: 'Pendapatan Denda & Keterlambatan', type: 'revenue', category: 'Pendapatan Lain-lain' },
+  { id: 4200, name: 'Pendapatan DP Survey Hangus', type: 'revenue', category: 'Pendapatan Lain-lain' },
+  { id: 4300, name: 'Pendapatan Laundry & Layanan Tambahan', type: 'revenue', category: 'Pendapatan Lain-lain' },
+  { id: 5000, name: 'Beban Listrik, Air & Utilitas', type: 'expense', category: 'Beban Operasional' },
+  { id: 5010, name: 'Beban Internet & WiFi', type: 'expense', category: 'Beban Operasional' },
+  { id: 5020, name: 'Beban Kebersihan & Sampah', type: 'expense', category: 'Beban Operasional' },
+  { id: 5030, name: 'Biaya Layanan Midtrans / Payment Gateway', type: 'expense', category: 'Beban Operasional' },
+  { id: 5100, name: 'Beban Pemeliharaan & Perbaikan Gedung', type: 'expense', category: 'Beban Operasional' },
+  { id: 5200, name: 'Beban Gaji Karyawan & Penjaga Kos', type: 'expense', category: 'Beban Operasional' },
+  { id: 5300, name: 'Beban Pemasaran & Iklan Properti', type: 'expense', category: 'Beban Operasional' },
+  { id: 5400, name: 'Beban Perlengkapan & Operasional Kantor', type: 'expense', category: 'Beban Operasional' }
+];
+
+let lastCoaVerificationTime = 0;
+let lastCoaVerificationStatus: any = null;
+
+async function verifyAndEnsureCriticalCOA(
+  supabaseClient: any,
+  autoRepair: boolean = true,
+  forceCheck: boolean = false
+) {
+  const now = Date.now();
+  // Throttle non-forced checks if checked within last 60 seconds and verified healthy
+  if (!forceCheck && lastCoaVerificationStatus?.healthy && (now - lastCoaVerificationTime < 60000)) {
+    return lastCoaVerificationStatus;
+  }
+
+  try {
+    const { data: existingAccounts, error: fetchErr } = await supabaseClient
+      .from('accounts')
+      .select('id, name, type, category, balance');
+
+    if (fetchErr) {
+      console.warn('[COA DIAGNOSTIC] Error fetching accounts from database:', fetchErr.message);
+      return {
+        healthy: false,
+        error: fetchErr.message,
+        totalChecked: CRITICAL_COA_ACCOUNTS.length,
+        existingCount: 0,
+        missingCount: CRITICAL_COA_ACCOUNTS.length,
+        missingAccounts: CRITICAL_COA_ACCOUNTS,
+        repairedCount: 0,
+        repairedAccounts: [],
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const existingMap = new Map<number, any>();
+    (existingAccounts || []).forEach((acc: any) => existingMap.set(Number(acc.id), acc));
+
+    const missingAccounts: typeof CRITICAL_COA_ACCOUNTS = [];
+    const accountsStatus: Array<{
+      id: number;
+      name: string;
+      type: string;
+      category: string;
+      exists: boolean;
+      balance?: number;
+    }> = [];
+
+    for (const critical of CRITICAL_COA_ACCOUNTS) {
+      const existing = existingMap.get(critical.id);
+      if (!existing) {
+        missingAccounts.push(critical);
+        accountsStatus.push({
+          id: critical.id,
+          name: critical.name,
+          type: critical.type,
+          category: critical.category,
+          exists: false
+        });
+      } else {
+        accountsStatus.push({
+          id: critical.id,
+          name: existing.name || critical.name,
+          type: existing.type || critical.type,
+          category: existing.category || critical.category,
+          exists: true,
+          balance: Number(existing.balance) || 0
+        });
+      }
+    }
+
+    const repairedAccounts: any[] = [];
+    if (missingAccounts.length > 0 && autoRepair) {
+      console.log(`[COA DIAGNOSTIC] Missing ${missingAccounts.length} critical COA accounts. Auto-repairing...`);
+      for (const missing of missingAccounts) {
+        const payload = {
+          id: missing.id,
+          name: missing.name,
+          type: missing.type,
+          category: missing.category,
+          balance: 0
+        };
+        const { error: insertErr } = await supabaseClient
+          .from('accounts')
+          .upsert(payload, { onConflict: 'id' });
+
+        if (!insertErr) {
+          repairedAccounts.push(missing);
+          const target = accountsStatus.find(a => a.id === missing.id);
+          if (target) {
+            target.exists = true;
+            target.balance = 0;
+          }
+        } else {
+          console.error(`[COA DIAGNOSTIC] Failed to auto-repair account ${missing.id} (${missing.name}):`, insertErr.message);
+        }
+      }
+    }
+
+    const isHealthy = missingAccounts.length === 0 || (autoRepair && repairedAccounts.length === missingAccounts.length);
+    const result = {
+      healthy: isHealthy,
+      totalChecked: CRITICAL_COA_ACCOUNTS.length,
+      existingCount: existingMap.size + repairedAccounts.length,
+      missingCount: isHealthy ? 0 : (missingAccounts.length - repairedAccounts.length),
+      missingAccounts: isHealthy ? [] : missingAccounts.filter(m => !repairedAccounts.some(r => r.id === m.id)),
+      repairedCount: repairedAccounts.length,
+      repairedAccounts,
+      accountsStatus,
+      timestamp: new Date().toISOString()
+    };
+
+    lastCoaVerificationTime = now;
+    lastCoaVerificationStatus = result;
+    return result;
+  } catch (err: any) {
+    console.error('[COA DIAGNOSTIC] Exception during COA verification:', err);
+    return {
+      healthy: false,
+      error: err.message || 'Unknown exception in verifyAndEnsureCriticalCOA',
+      totalChecked: CRITICAL_COA_ACCOUNTS.length,
+      existingCount: 0,
+      missingCount: CRITICAL_COA_ACCOUNTS.length,
+      missingAccounts: CRITICAL_COA_ACCOUNTS,
+      repairedCount: 0,
+      repairedAccounts: [],
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+// Comprehensive Accounting Integrity Audit Engine
+async function runAccountingIntegrityAudit(supabaseClient: any): Promise<any> {
+  try {
+    // 1. Attempt running stored procedure first
+    const { data: rpcData, error: rpcErr } = await supabaseClient.rpc('audit_accounting_integrity');
+    if (!rpcErr && rpcData) {
+      console.log(`[ACCOUNTING INTEGRITY AUDIT] RPC executed successfully. Score: ${rpcData.integrityScore}/100`);
+      return rpcData;
+    }
+
+    if (rpcErr) {
+      console.warn('[ACCOUNTING INTEGRITY AUDIT] RPC fallback to Node.js calculation engine:', rpcErr.message);
+    }
+
+    // 2. Fallback in-process Node.js multi-check engine
+    const [accRes, ftRes, jeRes, clrRes] = await Promise.all([
+      supabaseClient.from('accounts').select('*'),
+      supabaseClient.from('financial_transactions').select('*'),
+      supabaseClient.from('journal_entries').select('*'),
+      supabaseClient.from('midtrans_clearing_transactions').select('*')
+    ]);
+
+    const accounts: any[] = accRes.data || [];
+    const transactions: any[] = ftRes.data || [];
+    const journals: any[] = jeRes.data || [];
+    const clearings: any[] = clrRes.data || [];
+
+    const totalAccounts = accounts.length;
+    const totalTransactions = transactions.length;
+    const totalJournals = journals.length;
+    const totalClearing = clearings.length;
+
+    let integrityScore = 100;
+
+    // CHECK 1: Double-Entry Balance Check
+    const journalGroups: { [key: string]: { debit: number; credit: number; journal_no: string; transaction_id: number } } = {};
+    for (const j of journals) {
+      const key = j.journal_no || `TRX-${j.transaction_id}`;
+      if (!journalGroups[key]) {
+        journalGroups[key] = { debit: 0, credit: 0, journal_no: j.journal_no, transaction_id: j.transaction_id };
+      }
+      journalGroups[key].debit += Number(j.debit || 0);
+      journalGroups[key].credit += Number(j.credit || 0);
+    }
+
+    const unbalancedJournals: any[] = [];
+    for (const [key, val] of Object.entries(journalGroups)) {
+      const diff = Math.abs(val.debit - val.credit);
+      if (diff > 0.01) {
+        unbalancedJournals.push({
+          journal_no: val.journal_no,
+          transaction_id: val.transaction_id,
+          total_debit: val.debit,
+          total_credit: val.credit,
+          diff
+        });
+      }
+    }
+
+    if (unbalancedJournals.length > 0) {
+      integrityScore -= unbalancedJournals.length * 15;
+    }
+
+    // CHECK 2: Account Balance vs Journal Mutasi
+    const accountCalculated: { [key: number]: { debit: number; credit: number } } = {};
+    for (const a of accounts) {
+      accountCalculated[a.id] = { debit: 0, credit: 0 };
+    }
+    for (const j of journals) {
+      if (accountCalculated[j.account_id]) {
+        accountCalculated[j.account_id].debit += Number(j.debit || 0);
+        accountCalculated[j.account_id].credit += Number(j.credit || 0);
+      }
+    }
+
+    const balanceVariances: any[] = [];
+    let totalVariance = 0;
+    for (const a of accounts) {
+      const mutasi = accountCalculated[a.id] || { debit: 0, credit: 0 };
+      const isNormalDebit = a.type === 'asset' || a.type === 'expense';
+      const computedBalance = isNormalDebit ? (mutasi.debit - mutasi.credit) : (mutasi.credit - mutasi.debit);
+      const storedBalance = Number(a.balance || 0);
+      const variance = storedBalance - computedBalance;
+      if (Math.abs(variance) > 0.01) {
+        balanceVariances.push({
+          account_id: a.id,
+          account_name: a.name,
+          type: a.type,
+          stored_balance: storedBalance,
+          computed_balance: computedBalance,
+          variance
+        });
+        totalVariance += Math.abs(variance);
+      }
+    }
+
+    if (balanceVariances.length > 0) {
+      integrityScore -= balanceVariances.length * 5;
+    }
+
+    // CHECK 3: Orphaned Records
+    const accountIdSet = new Set(accounts.map(a => a.id));
+    const orphanedJournals = journals.filter(j => !accountIdSet.has(j.account_id));
+    const trxIdWithJournals = new Set(journals.map(j => j.transaction_id));
+    const orphanedTransactions = transactions.filter(t => !trxIdWithJournals.has(t.id));
+
+    const totalOrphans = orphanedJournals.length + orphanedTransactions.length;
+    if (totalOrphans > 0) {
+      integrityScore -= totalOrphans * 10;
+    }
+
+    // CHECK 4: Property Dimensions
+    const missingPropertyTrx = transactions.filter(t => 
+      !t.property_id && ['Penerimaan Sewa', 'Beban Operasional Kos', 'DP Survey / Reservasi'].includes(t.category)
+    );
+
+    // CHECK 5: Clearing vs Account 1200
+    const totalClearingGross = clearings.reduce((sum, c) => sum + Number(c.gross_amount || 0), 0);
+    const totalClearingOutstanding = clearings.reduce((sum, c) => sum + Number(c.outstanding_amount || 0), 0);
+    const acc1200 = accounts.find(a => a.id === 1200);
+    const acc1200Balance = Number(acc1200?.balance || 0);
+    const clearingVariance = Math.abs(totalClearingOutstanding - acc1200Balance);
+
+    if (integrityScore < 0) integrityScore = 0;
+
+    let overallStatus: 'healthy' | 'warning' | 'critical' = 'healthy';
+    if (integrityScore === 100) overallStatus = 'healthy';
+    else if (integrityScore >= 70) overallStatus = 'warning';
+    else overallStatus = 'critical';
+
+    return {
+      overallStatus,
+      integrityScore,
+      auditTimestamp: new Date().toISOString(),
+      totalTransactionsChecked: totalTransactions,
+      totalJournalEntriesChecked: totalJournals,
+      totalAccountsChecked: totalAccounts,
+      totalClearingRecordsChecked: totalClearing,
+      checks: [
+        {
+          id: 'CHK-01-DOUBLE-ENTRY',
+          name: 'Keseimbangan Double-Entry (Debit == Credit)',
+          category: 'double_entry',
+          status: unbalancedJournals.length === 0 ? 'passed' : 'failed',
+          severity: 'critical',
+          details: unbalancedJournals.length === 0
+            ? `Seluruh ${totalJournals} baris jurnal umum seimbang sempurna (Debit = Kredit).`
+            : `Ditemukan ${unbalancedJournals.length} transaksi jurnal tidak seimbang.`,
+          recordsAnalyzed: totalJournals,
+          discrepancyCount: unbalancedJournals.length,
+          sampleDiscrepancies: unbalancedJournals,
+          autoRepairable: false
+        },
+        {
+          id: 'CHK-02-ACCOUNT-BALANCES',
+          name: 'Konsistensi Saldo Rekening COA vs Mutasi Jurnal',
+          category: 'account_balance',
+          status: balanceVariances.length === 0 ? 'passed' : 'warning',
+          severity: 'high',
+          details: balanceVariances.length === 0
+            ? `Semua saldo tersimpan pada ${totalAccounts} rekening COA sinkron 100% dengan akumulasi mutasi jurnal.`
+            : `Ditemukan selisih saldo pada ${balanceVariances.length} rekening COA sebesar Rp ${totalVariance.toLocaleString('id-ID')}.`,
+          recordsAnalyzed: totalAccounts,
+          discrepancyCount: balanceVariances.length,
+          sampleDiscrepancies: balanceVariances,
+          autoRepairable: true
+        },
+        {
+          id: 'CHK-03-ORPHANED-RECORDS',
+          name: 'Integritas Relasi Buku Besar (Orphaned Record Scanner)',
+          category: 'orphan_records',
+          status: totalOrphans === 0 ? 'passed' : 'failed',
+          severity: 'high',
+          details: totalOrphans === 0
+            ? 'Tidak ada entri jurnal atau transaksi tanpa induk / rekening COA valid.'
+            : `Ditemukan ${orphanedJournals.length} jurnal tanpa COA dan ${orphanedTransactions.length} transaksi tanpa jurnal.`,
+          recordsAnalyzed: totalTransactions + totalJournals,
+          discrepancyCount: totalOrphans,
+          autoRepairable: true
+        },
+        {
+          id: 'CHK-04-PROPERTY-DIMENSION',
+          name: 'Kelengkapan Dimensi Finansial Properti (Multi-Unit)',
+          category: 'property_dimension',
+          status: missingPropertyTrx.length === 0 ? 'passed' : 'warning',
+          severity: 'medium',
+          details: missingPropertyTrx.length === 0
+            ? 'Semua transaksi operasional kos memiliki penanda property_id yang valid.'
+            : `Terdapat ${missingPropertyTrx.length} transaksi operasional tanpa asosiasi properti.`,
+          recordsAnalyzed: totalTransactions,
+          discrepancyCount: missingPropertyTrx.length,
+          autoRepairable: true
+        },
+        {
+          id: 'CHK-05-CLEARING-SYNC',
+          name: 'Sinkronisasi Kliring Midtrans (Akun 1200 vs Outstanding Clearing)',
+          category: 'clearing_sync',
+          status: clearingVariance < 1 ? 'passed' : 'warning',
+          severity: 'medium',
+          details: `Total Outstanding Kliring: Rp ${totalClearingOutstanding.toLocaleString('id-ID')} | Saldo Akun 1200: Rp ${acc1200Balance.toLocaleString('id-ID')}`,
+          recordsAnalyzed: totalClearing,
+          discrepancyCount: clearingVariance < 1 ? 0 : 1,
+          autoRepairable: true
+        }
+      ],
+      summary: {
+        passedChecks: (unbalancedJournals.length === 0 ? 1 : 0) +
+                      (balanceVariances.length === 0 ? 1 : 0) +
+                      (totalOrphans === 0 ? 1 : 0) +
+                      (missingPropertyTrx.length === 0 ? 1 : 0) +
+                      (clearingVariance < 1 ? 1 : 0),
+        warningChecks: (balanceVariances.length > 0 ? 1 : 0) +
+                       (missingPropertyTrx.length > 0 ? 1 : 0) +
+                       (clearingVariance >= 1 ? 1 : 0),
+        failedChecks: (unbalancedJournals.length > 0 ? 1 : 0) +
+                      (totalOrphans > 0 ? 1 : 0),
+        totalDiscrepancies: unbalancedJournals.length + balanceVariances.length + totalOrphans + missingPropertyTrx.length,
+        debitCreditImbalance: unbalancedJournals.length,
+        balanceVarianceTotal: totalVariance,
+        orphanedRecordsCount: totalOrphans
+      },
+      recommendations: integrityScore === 100
+        ? ['Integritas pembukuan dalam kondisi optimal. Siap untuk proses penutupan periode (Period Closing) dan pelaporan keuangan.']
+        : [
+            'Jalankan prosedur perbaikan otomatis untuk menyinkronkan saldo akun COA dengan riwayat jurnal.',
+            'Periksa kembali pencatatan jurnal manual yang memiliki selisih debit/kredit.'
+          ]
+    };
+  } catch (err: any) {
+    console.error('[ACCOUNTING INTEGRITY AUDIT] Calculation error:', err);
+    throw err;
+  }
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json());
+
+  // Proactively verify & ensure all critical COA accounts exist on startup
+  (async () => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (supabaseUrl && serviceKey) {
+        const client = createClient(supabaseUrl, serviceKey);
+        const res = await verifyAndEnsureCriticalCOA(client, true, true);
+        console.log(`[STARTUP COA AUDIT] Status: ${res.healthy ? 'HEALTHY' : 'WARNING'}, Accounts Checked: ${res.totalChecked}, Existing: ${res.existingCount}, Auto-Repaired: ${res.repairedCount}`);
+      }
+    } catch (e: any) {
+      console.warn('[STARTUP COA AUDIT] Non-blocking startup audit notice:', e?.message || e);
+    }
+  })();
 
   const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
@@ -193,6 +599,9 @@ async function startServer() {
       }
       const supabaseAdmin = createClient(supabaseUrl, serviceKey);
 
+      // Verify COA accounts before settlement
+      await verifyAndEnsureCriticalCOA(supabaseAdmin, true);
+
       const orderId = midtransOrderId || `EXT-${tenantId}-${Date.now()}`;
       const trxId = transactionId || `mid-tr-ext-${Math.floor(100000 + Math.random() * 900000)}`;
 
@@ -263,6 +672,9 @@ async function startServer() {
         return res.status(500).json({ error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
       }
       const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Verify and ensure all critical COA accounts exist before double-entry posting
+      await verifyAndEnsureCriticalCOA(supabaseAdmin, true);
 
       const trxDate = new Date().toISOString().split('T')[0];
       const trxNo = `TRX-${trxDate.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
@@ -1059,6 +1471,7 @@ async function startServer() {
 
               // 6. Post double-entry financial accounting transaction (DR 1200 Midtrans Clearing, CR 4000 Revenue)
               try {
+                await verifyAndEnsureCriticalCOA(supabase, true);
                 const trxDate = new Date().toISOString().split('T')[0];
                 const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
                 const { error: rpcErr } = await supabase.rpc('post_financial_transaction', {
@@ -1318,6 +1731,7 @@ async function startServer() {
 
               // 5. Post double-entry financial accounting transaction for survey DP (DR 1200 Midtrans Clearing, CR 1300 Deposit)
               try {
+                await verifyAndEnsureCriticalCOA(supabase, true);
                 const trxDate = new Date().toISOString().split('T')[0];
                 const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
                 const { error: rpcErr } = await supabase.rpc('post_financial_transaction', {
@@ -2387,6 +2801,230 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('[Admin API] bank-statement/import failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 4. Unmatch / Unreconcile Endpoint (Reversal)
+  app.post('/api/admin/reconciliation/unmatch', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { matchId, reason, createdBy } = req.body;
+      if (!matchId) {
+        return res.status(400).json({ error: 'matchId wajib diisi.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('unreconcile_bank_statement_entry', {
+        p_match_id: matchId,
+        p_created_by: createdBy || 'Finance Administrator',
+        p_reason: reason || 'Pembatalan Manual Rekonsiliasi'
+      });
+
+      if (rpcErr) {
+        console.error('[Admin API] unreconcile_bank_statement_entry RPC error:', rpcErr);
+        return res.status(500).json({ error: rpcErr.message || 'Gagal membatalkan rekonsiliasi.' });
+      }
+
+      return res.status(200).json({ success: true, data: rpcRes });
+    } catch (err: any) {
+      console.error('[Admin API] reconciliation/unmatch failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 5. Clearing Transaction Adjustment Endpoint
+  app.post('/api/admin/reconciliation/adjust', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { clearingId, adjustmentAmount, adjustmentAccountId, category, notes, createdBy } = req.body;
+      if (!clearingId || adjustmentAmount === undefined) {
+        return res.status(400).json({ error: 'clearingId dan adjustmentAmount wajib diisi.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('adjust_clearing_transaction', {
+        p_clearing_id: clearingId,
+        p_adjustment_amount: Number(adjustmentAmount),
+        p_adjustment_account_id: Number(adjustmentAccountId || 5030),
+        p_category: category || 'Adjustment Midtrans',
+        p_notes: notes || null,
+        p_created_by: createdBy || 'Finance Administrator'
+      });
+
+      if (rpcErr) {
+        console.error('[Admin API] adjust_clearing_transaction RPC error:', rpcErr);
+        return res.status(500).json({ error: rpcErr.message || 'Gagal melakukan penyesuaian kliring.' });
+      }
+
+      return res.status(200).json({ success: true, data: rpcRes });
+    } catch (err: any) {
+      console.error('[Admin API] reconciliation/adjust failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 6. COA Diagnostic & Integrity Verification Endpoint
+  app.get('/api/admin/accounting/diagnostic-coa', requireAdminAuth, async (req, res) => {
+    try {
+      const autoRepair = req.query.repair === 'true';
+      const forceCheck = req.query.force === 'true';
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const diagnosticResult = await verifyAndEnsureCriticalCOA(supabaseAdmin, autoRepair, forceCheck);
+      return res.status(200).json({
+        success: true,
+        diagnostic: diagnosticResult
+      });
+    } catch (err: any) {
+      console.error('[Admin API] diagnostic-coa failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 7. COA Auto-Repair / Seeding Endpoint
+  app.post('/api/admin/accounting/diagnostic-coa/repair', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const repairResult = await verifyAndEnsureCriticalCOA(supabaseAdmin, true, true);
+      return res.status(200).json({
+        success: true,
+        repaired: repairResult
+      });
+    } catch (err: any) {
+      console.error('[Admin API] diagnostic-coa/repair failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 8. Accounting Integrity Audit Endpoint
+  app.get('/api/admin/accounting/integrity-audit', requireAdminAuth, async (req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Verify COA accounts first to ensure base foundation
+      await verifyAndEnsureCriticalCOA(supabaseAdmin, true);
+
+      const auditReport = await runAccountingIntegrityAudit(supabaseAdmin);
+      return res.status(200).json({
+        success: true,
+        report: auditReport
+      });
+    } catch (err: any) {
+      console.error('[Admin API] accounting/integrity-audit failed:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // 9. Accounting Integrity Auto-Repair Endpoint
+  app.post('/api/admin/accounting/integrity-audit/repair', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { repairTypes } = req.body;
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // 1. First ensure critical COA accounts
+      await verifyAndEnsureCriticalCOA(supabaseAdmin, true, true);
+
+      // 2. Try stored procedure repair
+      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('repair_accounting_integrity', {
+        p_repair_types: Array.isArray(repairTypes) && repairTypes.length > 0 ? repairTypes : ['recalc_balances', 'fix_properties']
+      });
+
+      if (!rpcErr && rpcRes) {
+        return res.status(200).json({
+          success: true,
+          result: rpcRes
+        });
+      }
+
+      if (rpcErr) {
+        console.warn('[Admin API] repair_accounting_integrity RPC fallback to Node calculation:', rpcErr.message);
+      }
+
+      // Fallback manual repair in Node.js
+      const [accRes, ftRes, jeRes] = await Promise.all([
+        supabaseAdmin.from('accounts').select('*'),
+        supabaseAdmin.from('financial_transactions').select('*'),
+        supabaseAdmin.from('journal_entries').select('*')
+      ]);
+
+      const accounts: any[] = accRes.data || [];
+      const transactions: any[] = ftRes.data || [];
+      const journals: any[] = jeRes.data || [];
+
+      // A. Recompute balances
+      let recalculatedCount = 0;
+      for (const a of accounts) {
+        const accJournals = journals.filter(j => j.account_id === a.id);
+        const totalDebit = accJournals.reduce((sum, j) => sum + Number(j.debit || 0), 0);
+        const totalCredit = accJournals.reduce((sum, j) => sum + Number(j.credit || 0), 0);
+        const isNormalDebit = a.type === 'asset' || a.type === 'expense';
+        const computedBalance = isNormalDebit ? (totalDebit - totalCredit) : (totalCredit - totalDebit);
+
+        if (Math.abs(Number(a.balance || 0) - computedBalance) > 0.01) {
+          await supabaseAdmin.from('accounts').update({ balance: computedBalance }).eq('id', a.id);
+          recalculatedCount++;
+        }
+      }
+
+      // B. Fix missing property IDs where possible
+      let repairedProperties = 0;
+      for (const t of transactions) {
+        if (!t.property_id && t.reference_type === 'payment' && t.reference_id) {
+          const { data: pay } = await supabaseAdmin.from('payments').select('property_id').eq('id', t.reference_id).maybeSingle();
+          if (pay?.property_id) {
+            await supabaseAdmin.from('financial_transactions').update({ property_id: pay.property_id }).eq('id', t.id);
+            repairedProperties++;
+          }
+        }
+      }
+
+      // Fresh audit report
+      const freshReport = await runAccountingIntegrityAudit(supabaseAdmin);
+
+      return res.status(200).json({
+        success: true,
+        result: {
+          success: true,
+          recalculatedAccounts: recalculatedCount,
+          repairedProperties,
+          auditReport: freshReport
+        }
+      });
+    } catch (err: any) {
+      console.error('[Admin API] integrity-audit/repair failed:', err);
       return res.status(500).json({ error: err.message || 'Internal server error.' });
     }
   });

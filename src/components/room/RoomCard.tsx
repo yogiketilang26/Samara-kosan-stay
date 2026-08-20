@@ -13,7 +13,8 @@ interface RoomCardProps {
 export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect, onViewDetail }) => {
   const totalPhotos = [room.image_url, ...(room.images || [])].filter(Boolean).length;
 
-  const isAvailable = room.status === 'available' || room.status === 'reserved' || !room.status;
+  const isAvailable = room.status === 'available' || !room.status;
+  const isOccupiedOrReserved = room.status === 'occupied' || room.status === 'reserved';
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-4 hover:border-slate-700 transition-all shadow-lg font-sans overflow-hidden">

@@ -12,6 +12,23 @@ export interface Facility {
   created_at?: string;
 }
 
+export type AmenityCategory = 'transit' | 'education' | 'healthcare' | 'shopping' | 'dining' | 'lifestyle' | 'worship';
+
+export interface NearbyAmenity {
+  id: string;
+  propertyId: number;
+  name: string;
+  category: AmenityCategory;
+  distanceMeters: number;
+  walkingTimeMinutes: number;
+  drivingTimeMinutes?: number;
+  lat: number;
+  lng: number;
+  description?: string;
+  address?: string;
+  icon?: string;
+}
+
 export interface Property {
   id: number;
   name: string;
@@ -417,5 +434,39 @@ export interface ReconciliationSummary {
   unreconciledCount: number;
   matchedCount: number;
   reconciliationRate: number;
+}
+
+export interface IntegrityAuditCheckItem {
+  id: string;
+  name: string;
+  category: 'double_entry' | 'account_balance' | 'orphan_records' | 'property_dimension' | 'clearing_sync';
+  status: 'passed' | 'warning' | 'failed';
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  details: string;
+  recordsAnalyzed: number;
+  discrepancyCount: number;
+  sampleDiscrepancies?: any[];
+  autoRepairable: boolean;
+}
+
+export interface AccountingIntegrityAuditReport {
+  overallStatus: 'healthy' | 'warning' | 'critical';
+  integrityScore: number;
+  auditTimestamp: string;
+  totalTransactionsChecked: number;
+  totalJournalEntriesChecked: number;
+  totalAccountsChecked: number;
+  totalClearingRecordsChecked: number;
+  checks: IntegrityAuditCheckItem[];
+  summary: {
+    passedChecks: number;
+    warningChecks: number;
+    failedChecks: number;
+    totalDiscrepancies: number;
+    debitCreditImbalance: number;
+    balanceVarianceTotal: number;
+    orphanedRecordsCount: number;
+  };
+  recommendations: string[];
 }
 

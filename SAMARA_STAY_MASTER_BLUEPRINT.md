@@ -281,15 +281,18 @@ Samara Stay is a full-stack, enterprise-grade Property Management System (PMS) a
    * **Interactive Room Detail Modal (`selectedRoomForDetail`):** Displays HD cover photos, multi-photo swipeable gallery (`RoomGallery`), facilities list, floor level, dimensions ($m^2$), pricing breakdowns (Monthly & Daily Transit), rules, and terms.
    * **Full-Screen Image Lightbox (`selectedRoomImage`):** Clicking any gallery photo opens a high-resolution, full-screen lightbox viewer with zoom controls.
    * **Modal Integration in Checkout Flow:** Clicking the active room summary box inside the `BookingForm` modal automatically opens the room photo gallery without losing user progress in the checkout flow.
-3. **Room Booking:**
+3. **Room Booking & Strict Availability Guard:**
+   * **Strict Availability Definition:** A room is only selectable (`isAvailable`) if its status is `'available'` (or null). Rooms with `'occupied'`, `'reserved'`, or `'maintenance'` have action buttons locked (`disabled`) with explicit badges.
+   * **Pre-Payment Double Check:** `handleProceedToPayment` executes a real-time check against Supabase rooms to ensure the unit was not booked by another user during form entry.
    * User selects duration (monthly/daily), applies active coupon.
    * Fills tenant profile (Full Name, Phone, Email, Identity No/KTP).
    * Draws digital signature via `SignaturePad.tsx`.
    * Submits booking -> Creates `pending` record in `bookings` table.
    * Triggers `/api/midtrans/charge` -> Server requests Snap token from Midtrans -> Opens Midtrans Snap modal in browser.
-   * Upon successful payment, Midtrans Webhook automatically approves booking, marks room as `occupied`, inserts tenant record, generates payment invoice, posts financial accounting entry, and emails receipt.
-4. **Survey Scheduling:** Allows user to schedule property visits (Free or IDR 500k DP reservation).
+   * Upon successful payment, Midtrans Webhook (or Sandbox Simulator) automatically approves booking, atomically updates room status to `occupied`, inserts tenant record, generates payment invoice, posts financial accounting entry, and emails receipt.
+4. **Survey Scheduling:** Allows user to schedule property visits (Free visit or IDR 500k DP commitment reservation which immediately sets room status to `reserved`).
 5. **Maintenance Reporting:** Public form allowing tenants to submit maintenance tickets for broken items.
+6. **Post-Payment Reset & Auto-Redirect:** Closing the payment invoice / receipt card via `handleCloseReceiptAndReset` triggers a clean teardown of all booking/survey modals and forms, redirects the view to the top of the homepage (`home`), and re-fetches the latest Supabase records to immediately reflect the occupied room state to all users.
 
 ---
 
@@ -339,8 +342,8 @@ Samara Stay is a full-stack, enterprise-grade Property Management System (PMS) a
 
 ## 9. SUPABASE DATABASE TABLE SCHEMAS
 
-The database consists of 25 core tables:
-1. `properties` (id, name, address, city, description, total_rooms, available_rooms, images, policies, terms, regulations)
+The database consists of 27 core tables:
+1. `properties` (id, name, address, city, description, total_rooms, available_rooms, images, lat, lng, policies, terms, regulations)
 2. `rooms` (id, property_id, room_number, room_type, price, daily_price, status, floor, images)
 3. `tenants` (id, full_name, phone, email, property_id, room_number, start_date, duration_months, payment_status)
 4. `bookings` (id, property_id, room_id, tenant_name, phone, email, check_in_date, booking_type, duration_months, duration_days, total_price, status, midtrans_order_id, signature_url)
@@ -366,6 +369,7 @@ The database consists of 25 core tables:
 24. `room_facilities` (room_id, facility_id)
 25. `sent_emails` (id, recipient, subject, status, error_message, sent_at)
 26. `webhook_events` (id, provider, event_id, order_id, transaction_id, status, payload, processed_at)
+27. `nearby_amenities` (id, property_id, name, category, distance_meters, walking_minutes, driving_minutes, lat, lng, address, icon_name, description, is_active, created_at, updated_at)
 
 ---
 
@@ -374,6 +378,7 @@ The database consists of 25 core tables:
 | Module | Table | Create | Read | Update | Delete | RLS Policy | Realtime Channel | API Gateway |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | Properties | `properties` | Auth | Public | Auth | Auth | Admin All / Public Select | Yes | Direct Supabase |
+| Map & POI | `nearby_amenities` | Auth | Public | Auth | Auth | Admin All / Public Select | Yes | Direct Supabase |
 | Rooms | `rooms` | Auth | Public | Auth | Auth | Admin All / Public Select | Yes | Direct Supabase |
 | Bookings | `bookings` | Public | Public | Auth | Auth | Public Insert / Admin All | Yes | Webhook / Direct |
 | Surveys | `surveys` | Public | Public | Auth | Auth | Public Insert / Admin All | Yes | Webhook / Direct |

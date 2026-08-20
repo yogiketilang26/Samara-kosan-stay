@@ -1,10 +1,10 @@
 import React from 'react';
-import { Home, Shield, RefreshCw, Database } from 'lucide-react';
+import { Home, Shield, RefreshCw, Database, Building2 } from 'lucide-react';
 import { isSupabaseConfigured, database } from '../../lib/supabase';
 
 interface NavbarProps {
-  currentView: 'user' | 'admin';
-  setView: (view: 'user' | 'admin') => void;
+  currentView: 'user' | 'admin' | 'owner';
+  setView: (view: 'user' | 'admin' | 'owner') => void;
   onRefresh: () => void;
 }
 
@@ -43,6 +43,15 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
           {/* Quick Menu Links (User View Only) */}
           {currentView === 'user' && (
             <div className="flex items-center gap-4 md:gap-5 text-xs font-bold text-slate-200 uppercase tracking-wider pl-1 md:pl-2">
+              <button 
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('samara-navigate', { detail: { page: 'map' } }));
+                }}
+                className="hover:text-emerald-400 transition-colors cursor-pointer flex items-center gap-1 text-emerald-300"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                Peta & Lokasi
+              </button>
               <button 
                 onClick={() => {
                   const el = document.getElementById('cabang-samara-stay-section');
@@ -125,7 +134,7 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
         <div className="bg-white/5 p-1 rounded-xl flex items-center border border-white/10">
           <button
             onClick={() => setView('user')}
-            className={`px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+            className={`px-3 sm:px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
               currentView === 'user' 
                 ? 'bg-[#2E6F40] text-white shadow-lg' 
                 : 'text-slate-200 hover:text-white hover:bg-white/5'
@@ -136,7 +145,7 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
           </button>
           <button
             onClick={() => setView('admin')}
-            className={`px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+            className={`px-3 sm:px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
               currentView === 'admin' 
                 ? 'bg-[#2E6F40] text-white shadow-lg' 
                 : 'text-slate-200 hover:text-white hover:bg-white/5'
@@ -144,6 +153,17 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
           >
             <Shield size={14} />
             Admin Panel
+          </button>
+          <button
+            onClick={() => setView('owner')}
+            className={`px-3 sm:px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+              currentView === 'owner' 
+                ? 'bg-amber-600 text-white shadow-lg shadow-amber-900/40' 
+                : 'text-amber-300 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Building2 size={14} className="text-amber-400" />
+            Owner Portal
           </button>
         </div>
 

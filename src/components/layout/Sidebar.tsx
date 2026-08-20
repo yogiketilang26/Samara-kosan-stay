@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, Building2, BedDouble, GraduationCap, 
   Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail, Sparkles,
-  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature
+  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   const menuItems = [
     { id: 'dashboard', name: 'Dashboard', icon: LayoutDashboard },
     { id: 'properties', name: 'Properti Kos', icon: Building2 },
+    { id: 'map_coordinates', name: 'Peta & Titik GPS', icon: Compass },
     { id: 'rooms', name: 'Kamar Hunian', icon: BedDouble },
     { id: 'facilities', name: 'Master Fasilitas', icon: Sparkles },
     { id: 'surveys', name: 'Antrian Survey', icon: GraduationCap },

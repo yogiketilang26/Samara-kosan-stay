@@ -21,11 +21,12 @@ import {
 } from 'lucide-react';
 import PremiumSearchFilter from '../components/premium/PremiumSearchFilter';
 import PremiumRoomGrid from '../components/premium/PremiumRoomGrid';
+import PropertyMapView from '../components/map/PropertyMapView';
 
 interface HomeProps {}
 
 // Interactive Detail Map Component for selected property cabang
-const PropertyDetailMap: React.FC<{ property: Property }> = ({ property }) => {
+const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => void }> = ({ property, onOpenFullMap }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
 
@@ -108,14 +109,26 @@ const PropertyDetailMap: React.FC<{ property: Property }> = ({ property }) => {
           </h4>
           <p className="text-[10px] text-[#64748B] font-mono mt-0.5">LAT: {property.lat || -6.368} | LNG: {property.lng || 106.83}</p>
         </div>
-        <a
-          href={`https://www.google.com/maps/search/?api=1&query=${property.lat || -6.368},${property.lng || 106.83}`}
-          target="_blank"
-          rel="noreferrer"
-          className="text-[10px] font-bold text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#d8ebd8] px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
-        >
-          Buka GMaps ↗
-        </a>
+        <div className="flex items-center gap-2">
+          {onOpenFullMap && (
+            <button
+              type="button"
+              onClick={onOpenFullMap}
+              className="text-[10px] font-extrabold text-white bg-[#2E6F40] hover:bg-[#235531] px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
+            >
+              <Compass size={11} />
+              Peta & Sekitar ↗
+            </button>
+          )}
+          <a
+            href={`https://www.google.com/maps/search/?api=1&query=${property.lat || -6.368},${property.lng || 106.83}`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[10px] font-bold text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#d8ebd8] px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
+          >
+            Buka GMaps ↗
+          </a>
+        </div>
       </div>
 
       <div className="w-full h-44 rounded-xl overflow-hidden relative border border-[#E2E8F0] z-10 bg-slate-100">
@@ -164,7 +177,7 @@ export default function Home({}: HomeProps) {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Core Page Navigation State
-  const [userPage, setUserPage] = useState<'home' | 'search' | 'detail'>('home');
+  const [userPage, setUserPage] = useState<'home' | 'search' | 'detail' | 'map'>('home');
 
   // Homepage Search Form States
   const [searchLocation, setSearchLocation] = useState<string>('');
@@ -352,6 +365,24 @@ export default function Home({}: HomeProps) {
     }
   }, [hooksLoading]);
 
+  // Listener for custom navigation events (e.g. from Navbar)
+  useEffect(() => {
+    const handleCustomNav = (e: any) => {
+      if (e?.detail?.page === 'map') {
+        setUserPage('map');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (e?.detail?.page === 'search') {
+        setUserPage('search');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (e?.detail?.page === 'home') {
+        setUserPage('home');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    };
+    window.addEventListener('samara-navigate', handleCustomNav);
+    return () => window.removeEventListener('samara-navigate', handleCustomNav);
+  }, []);
+
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [activeTestimonialIdx, setActiveTestimonialIdx] = useState<number>(0);
 
@@ -509,16 +540,90 @@ export default function Home({}: HomeProps) {
   };
 
   const handleSelectRoom = (room: Room, flowType: 'monthly' | 'daily' | 'survey') => {
+    if (room.status === 'occupied' || room.status === 'reserved' || room.status === 'maintenance') {
+      alert(`Kamar ${room.room_number} saat ini sudah ${room.status === 'occupied' ? 'terisi oleh penyewa' : 'dipesan (reserved)'} dan tidak dapat dibooking.`);
+      return;
+    }
     setActiveRoom(room);
     setCheckoutFlow(flowType);
     setIsAgreed(false);
     setSignatureUrl('');
   };
 
+  const handleCloseReceiptAndReset = async () => {
+    setShowReceipt(false);
+    setReceiptData(null);
+    setActiveRoom(null);
+    setSelectedRoomForDetail(null);
+    setIsCatalogOpen(false);
+    setCheckoutFlow('none');
+    setSnapOpen(false);
+    setSnapPaymentContext(null);
+    snapPaymentContextRef.current = null;
+    setIsAgreed(false);
+    setSignatureUrl('');
+    
+    // Reset forms
+    setBookingForm({
+      fullName: '',
+      phone: '',
+      email: '',
+      nik: '',
+      isForOther: false,
+      occupantName: '',
+      occupantPhone: '',
+      occupantEmail: '',
+      occupantNik: ''
+    });
+    setSurveyForm(prev => ({
+      ...prev,
+      moveInDate: '',
+      isWithoutDp: false
+    }));
+
+    // Redirect to home page view & smooth scroll to top
+    setUserPage('home');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // Refresh fresh data directly from Supabase to guarantee UI consistency
+    try {
+      const [freshRooms, freshProps, freshSurveys, freshTenants] = await Promise.all([
+        database.fetchRooms(),
+        database.fetchProperties(),
+        database.fetchSurveys(),
+        database.fetchTenants()
+      ]);
+      if (freshRooms && freshRooms.length > 0) setRooms(freshRooms);
+      if (freshProps && freshProps.length > 0) setProperties(freshProps);
+      if (freshSurveys) setSurveys(freshSurveys);
+      if (freshTenants) setTenants(freshTenants);
+    } catch (e) {
+      console.warn('Silent data reload after checkout:', e);
+    }
+  };
+
   const handleProceedToPayment = async (calculatedTotal: number) => {
     if (checkoutFlow !== 'survey' && !bookingCheckInDate) {
       alert("Mohon tentukan tanggal mulai huni / check-in terlebih dahulu.");
       return;
+    }
+
+    // Double check room availability before initiating payment
+    if (activeRoom) {
+      try {
+        const latestRooms = await database.fetchRooms();
+        const currentRoom = latestRooms.find(r => r.id === activeRoom.id);
+        if (currentRoom && (currentRoom.status === 'occupied' || currentRoom.status === 'reserved')) {
+          setLoading(false);
+          alert(`Maaf, Kamar ${activeRoom.room_number} baru saja ${currentRoom.status === 'occupied' ? 'disewa' : 'dipesan'} oleh calon penyewa lain.`);
+          setActiveRoom(null);
+          setCheckoutFlow('none');
+          setRooms(latestRooms);
+          return;
+        }
+      } catch (e) {
+        console.warn('Pre-payment check fallback:', e);
+      }
     }
 
     if (checkoutFlow === 'survey' && surveyForm.isWithoutDp) {
@@ -1578,6 +1683,15 @@ export default function Home({}: HomeProps) {
           >
             {lang === 'id' ? 'Cari dan Sewa Kos' : 'Search & Rent Rooms'}
           </button>
+          <button 
+            onClick={() => {
+              setUserPage('map');
+            }} 
+            className={`font-semibold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${userPage === 'map' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-350 hover:text-white'}`}
+          >
+            <MapPin size={12} className={userPage === 'map' ? 'text-brand-primary' : 'text-emerald-400'} />
+            <span>{lang === 'id' ? 'Peta & Sekitar' : 'Map & Amenities'}</span>
+          </button>
           {activeProperty && (
             <div className="flex items-center gap-2 text-[#64748B]">
               <ChevronRight size={12} />
@@ -1910,6 +2024,46 @@ export default function Home({}: HomeProps) {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Interactive Leaflet Map Showcase Banner */}
+          <div className="max-w-6xl mx-auto px-4">
+            <div className="bg-gradient-to-r from-brand-primary via-[#112d22] to-brand-primary border border-brand-steel/30 rounded-3xl p-6 md:p-8 text-[#F8F9FA] shadow-xl relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6 text-left">
+              <div className="space-y-2 max-w-xl z-10">
+                <div className="inline-flex items-center gap-1.5 bg-brand-beige/20 border border-brand-beige/40 px-3 py-1 rounded-full text-brand-beige text-[11px] font-bold font-mono tracking-wider">
+                  <Compass size={12} className="text-brand-beige animate-spin" style={{ animationDuration: '8s' }} />
+                  {lang === 'id' ? 'PETA INTERAKTIF & FASILITAS SEKITAR' : 'INTERACTIVE MAP & NEARBY AMENITIES'}
+                </div>
+                <h3 className="text-xl md:text-2xl font-black text-white tracking-tight font-display">
+                  {lang === 'id' 
+                    ? 'Eksplorasi Lokasi Cabang & Fasilitas Publik Terdekat' 
+                    : 'Explore Property Locations & Nearby Public Amenities'}
+                </h3>
+                <p className="text-xs text-slate-350 leading-relaxed font-light">
+                  {lang === 'id'
+                    ? 'Cek kemudahan akses transportasi (KRL/MRT), universitas ternama (UI & RSCM), pusat kuliner, kafe, minimarket, dan fasilitas kesehatan di sekitar cabang Samara Stay.'
+                    : 'Check easy access to transit (KRL/MRT), top universities, food courts, cafes, convenience stores, and healthcare around Samara Stay branches.'}
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 shrink-0 z-10 w-full md:w-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserPage('map');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  className="w-full sm:w-auto bg-brand-beige hover:bg-[#e4cfb2] text-brand-primary px-6 py-3.5 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg shadow-black/20 cursor-pointer"
+                >
+                  <MapPin size={14} className="text-brand-primary" />
+                  <span>{lang === 'id' ? 'Buka Peta Interaktif' : 'Open Interactive Map'}</span>
+                  <ArrowRight size={14} />
+                </button>
+              </div>
+
+              {/* Decorative background accents */}
+              <div className="absolute right-0 top-0 bottom-0 w-1/2 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-brand-beige via-transparent to-transparent pointer-events-none" />
             </div>
           </div>
 
@@ -2946,7 +3100,13 @@ export default function Home({}: HomeProps) {
                   </div>
 
                   {/* Live Interactive Leaflet Map for Active Property */}
-                  <PropertyDetailMap property={activeProperty} />
+                  <PropertyDetailMap 
+                    property={activeProperty} 
+                    onOpenFullMap={() => {
+                      setUserPage('map');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                  />
                 </div>
               </div>
 
@@ -3107,7 +3267,31 @@ export default function Home({}: HomeProps) {
       )}
 
       {/* ========================================================== */}
-      {/* MODAL WORKFLOWS (SURVEYS & DIRECT BOOKINGS) */}
+      {/* VIEW 4: INTERACTIVE LEAFLET PROPERTY MAP & AMENITIES VIEW */}
+      {/* ========================================================== */}
+      {userPage === 'map' && (
+        <div className="max-w-7xl mx-auto px-4 md:px-8 mt-6 space-y-6 animate-fade-in text-brand-primary">
+          <PropertyMapView
+            properties={properties}
+            rooms={rooms}
+            selectedPropertyId={activeProperty?.id || null}
+            onSelectProperty={(prop) => {
+              setActiveProperty(prop);
+              setIsCatalogOpen(true);
+            }}
+            onScheduleSurvey={(prop) => {
+              setActiveProperty(prop);
+              const propRooms = rooms.filter(r => r.property_id === prop.id);
+              if (propRooms.length > 0) {
+                handleSelectRoom(propRooms[0], 'survey');
+              } else {
+                setIsCatalogOpen(true);
+              }
+            }}
+            lang={lang}
+          />
+        </div>
+      )}
       {/* ========================================================== */}
 
       {/* KATALOG KAMAR POPUP MODAL */}
@@ -3127,13 +3311,13 @@ export default function Home({}: HomeProps) {
                 <p className="text-[11px] text-[#64748B] font-medium mt-0.5">Pilih kamar terbaik yang sesuai dengan budget dan kenyamanan Anda</p>
               </div>
               <span className="text-[11px] font-extrabold font-mono text-[#0D9488] bg-[#0D9488]/10 px-2.5 py-1 rounded-lg">
-                {rooms.filter(r => r.property_id === activeProperty.id && (r.status === 'available' || r.status === 'reserved' || !r.status)).length} UNIT KOSONG
+                {rooms.filter(r => r.property_id === activeProperty.id && (r.status === 'available' || !r.status)).length} UNIT KOSONG
               </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {rooms.filter(r => r.property_id === activeProperty.id).map(r => {
-                const isAvailable = r.status === 'available' || r.status === 'reserved' || !r.status;
+                const isAvailable = r.status === 'available' || !r.status;
                 const isSelected = activeRoom?.id === r.id;
                 return (
                   <div
@@ -3369,13 +3553,13 @@ export default function Home({}: HomeProps) {
       {/* Printable Receipt Invoice Popup modal (PRESERVING EXISTING FLOW) */}
       <Modal
         isOpen={showReceipt}
-        onClose={() => setShowReceipt(false)}
+        onClose={handleCloseReceiptAndReset}
         title="BUKTI TRANSAKSI SETELMEN"
       >
         {receiptData && (
           <InvoiceCard 
             receipt={receiptData}
-            onClose={() => setShowReceipt(false)}
+            onClose={handleCloseReceiptAndReset}
           />
         )}
       </Modal>
@@ -3670,47 +3854,73 @@ export default function Home({}: HomeProps) {
             </div>
 
             {/* Status Information */}
-            <div className="bg-emerald-50 border border-emerald-200/50 p-4 rounded-xl flex items-start gap-3">
-              <CheckCircle className="text-[#2E6F40] mt-0.5 shrink-0" size={16} />
-              <div className="space-y-0.5">
-                <h5 className="font-black text-slate-800 text-xs">STATUS UNIT: TERSEDIA (AVAILABLE)</h5>
-                <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Unit kamar ini dalam kondisi siap huni, bersih, dan seluruh fasilitas penunjang (listrik, air, AC, sanitary) telah diinspeksi oleh tim housekeeping super-admin kami.</p>
+            {selectedRoomForDetail.status === 'occupied' || selectedRoomForDetail.status === 'reserved' || selectedRoomForDetail.status === 'maintenance' ? (
+              <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start gap-3">
+                <AlertCircle className="text-amber-600 mt-0.5 shrink-0" size={16} />
+                <div className="space-y-0.5">
+                  <h5 className="font-black text-amber-900 text-xs uppercase">
+                    STATUS UNIT: {selectedRoomForDetail.status === 'occupied' ? 'SUDAH TERISI (OCCUPIED)' : selectedRoomForDetail.status === 'reserved' ? 'SEDANG DIPESAN (RESERVED)' : 'SEDANG PERAWATAN (MAINTENANCE)'}
+                  </h5>
+                  <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                    Kamar ini saat ini tidak dapat dipesan atau disurvey karena telah memiliki penyewa aktif atau reservasi yang sah terdaftar di sistem.
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-200/50 p-4 rounded-xl flex items-start gap-3">
+                <CheckCircle className="text-[#2E6F40] mt-0.5 shrink-0" size={16} />
+                <div className="space-y-0.5">
+                  <h5 className="font-black text-slate-800 text-xs">STATUS UNIT: TERSEDIA (AVAILABLE)</h5>
+                  <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Unit kamar ini dalam kondisi siap huni, bersih, dan seluruh fasilitas penunjang (listrik, air, AC, sanitary) telah diinspeksi oleh tim housekeeping super-admin kami.</p>
+                </div>
+              </div>
+            )}
 
             {/* CTAs */}
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedRoomForDetail(null);
-                  const p = properties.find(prop => prop.id === selectedRoomForDetail.property_id);
-                  if (p) {
-                    setActiveProperty(p);
-                    setActiveRoom(selectedRoomForDetail);
-                    setCheckoutFlow('survey');
-                  }
-                }}
-                className="w-full bg-white border border-[#E2E8F0] hover:bg-[#F8F9FA] text-[#3A444D] py-3 rounded-xl text-xs font-extrabold uppercase transition-all tracking-wider cursor-pointer text-center"
-              >
-                Jadwalkan Survey
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedRoomForDetail(null);
-                  const p = properties.find(prop => prop.id === selectedRoomForDetail.property_id);
-                  if (p) {
-                    setActiveProperty(p);
-                    setActiveRoom(selectedRoomForDetail);
-                    setCheckoutFlow('monthly');
-                  }
-                }}
-                className="w-full bg-[#2E6F40] hover:bg-[#1f4b2b] text-white py-3 rounded-xl text-xs font-extrabold uppercase transition-all tracking-wider cursor-pointer shadow-md text-center"
-              >
-                Pesan Sekarang
-              </button>
-            </div>
+            {selectedRoomForDetail.status === 'occupied' || selectedRoomForDetail.status === 'reserved' || selectedRoomForDetail.status === 'maintenance' ? (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  disabled
+                  className="w-full bg-slate-100 border border-slate-200 text-slate-400 py-3 rounded-xl text-xs font-extrabold uppercase tracking-wider cursor-not-allowed text-center"
+                >
+                  Unit Kamar Tidak Tersedia
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedRoomForDetail(null);
+                    const p = properties.find(prop => prop.id === selectedRoomForDetail.property_id);
+                    if (p) {
+                      setActiveProperty(p);
+                      setActiveRoom(selectedRoomForDetail);
+                      setCheckoutFlow('survey');
+                    }
+                  }}
+                  className="w-full bg-white border border-[#E2E8F0] hover:bg-[#F8F9FA] text-[#3A444D] py-3 rounded-xl text-xs font-extrabold uppercase transition-all tracking-wider cursor-pointer text-center"
+                >
+                  Jadwalkan Survey
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedRoomForDetail(null);
+                    const p = properties.find(prop => prop.id === selectedRoomForDetail.property_id);
+                    if (p) {
+                      setActiveProperty(p);
+                      setActiveRoom(selectedRoomForDetail);
+                      setCheckoutFlow('monthly');
+                    }
+                  }}
+                  className="w-full bg-[#2E6F40] hover:bg-[#1f4b2b] text-white py-3 rounded-xl text-xs font-extrabold uppercase transition-all tracking-wider cursor-pointer shadow-md text-center"
+                >
+                  Pesan Sekarang
+                </button>
+              </div>
+            )}
           </div>
         )}
       </Modal>

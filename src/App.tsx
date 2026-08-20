@@ -13,7 +13,7 @@ import { CartProvider } from './context/CartContext';
 import { NotificationProvider } from './context/NotificationContext';
 
 export default function App() {
-  const [viewState, setViewState] = useState<'user' | 'admin'>('user');
+  const [viewState, setViewState] = useState<'user' | 'admin' | 'owner'>('user');
   
 
   const handleRefreshData = useCallback(() => {

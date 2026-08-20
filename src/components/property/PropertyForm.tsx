@@ -3,9 +3,11 @@ import { Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
 import { uploadToSupabaseStorage } from '../../utils/storageUploader';
 import { Button } from '../common/Button';
-import { UploadCloud, Trash2, Image, RotateCw, Loader2 } from 'lucide-react';
+import { UploadCloud, Trash2, Image, RotateCw, Loader2, MapPin, Navigation, Search } from 'lucide-react';
 import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 const renderIcon = (iconName: string) => {
   const IconComponent = (LucideIcons as any)[iconName] || LucideIcons.HelpCircle;
@@ -86,6 +88,143 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
 
   const [isUploadingMain, setIsUploadingMain] = useState(false);
   const [isUploadingGallery, setIsUploadingGallery] = useState(false);
+
+  // Map Picker State
+  const miniMapContainerRef = useRef<HTMLDivElement>(null);
+  const miniMapRef = useRef<L.Map | null>(null);
+  const miniMarkerRef = useRef<L.Marker | null>(null);
+  const [searchLocationQuery, setSearchLocationQuery] = useState('');
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+
+  // Initialize / Sync mini map
+  useEffect(() => {
+    if (!miniMapContainerRef.current) return;
+
+    const lat = formData.lat || -6.195621;
+    const lng = formData.lng || 106.848815;
+
+    if (!miniMapRef.current) {
+      const map = L.map(miniMapContainerRef.current, {
+        center: [lat, lng],
+        zoom: 16,
+        zoomControl: false,
+        attributionControl: false
+      });
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19
+      }).addTo(map);
+
+      map.on('click', (e: L.LeafletMouseEvent) => {
+        const newLat = parseFloat(e.latlng.lat.toFixed(6));
+        const newLng = parseFloat(e.latlng.lng.toFixed(6));
+        setFormData(prev => ({ ...prev, lat: newLat, lng: newLng }));
+      });
+
+      miniMapRef.current = map;
+    }
+
+    return () => {
+      // Keep instance alive
+    };
+  }, []);
+
+  // Update Mini Map Marker when formData.lat/lng changes
+  useEffect(() => {
+    if (!miniMapRef.current) return;
+
+    const lat = formData.lat || -6.195621;
+    const lng = formData.lng || 106.848815;
+
+    if (miniMarkerRef.current) {
+      miniMarkerRef.current.remove();
+    }
+
+    const propIcon = L.divIcon({
+      className: 'custom-property-form-marker',
+      html: `
+        <div style="display:flex; flex-direction:column; align-items:center; cursor:grab;">
+          <div style="background:#2E6F40; color:white; font-size:10px; font-weight:800; padding:3px 6px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.3); border:1.5px solid #E4B363; white-space:nowrap;">
+            📍 Titik Kos
+          </div>
+          <div style="width:0; height:0; border-left:5px solid transparent; border-right:5px solid transparent; border-top:7px solid #2E6F40;"></div>
+        </div>
+      `,
+      iconSize: [80, 36],
+      iconAnchor: [40, 36]
+    });
+
+    const marker = L.marker([lat, lng], {
+      icon: propIcon,
+      draggable: true
+    }).addTo(miniMapRef.current);
+
+    marker.on('dragend', (e: any) => {
+      const pos = e.target.getLatLng();
+      const newLat = parseFloat(pos.lat.toFixed(6));
+      const newLng = parseFloat(pos.lng.toFixed(6));
+      setFormData(prev => ({ ...prev, lat: newLat, lng: newLng }));
+    });
+
+    miniMarkerRef.current = marker;
+    miniMapRef.current.panTo([lat, lng]);
+  }, [formData.lat, formData.lng]);
+
+  const handleSearchAddressOnMiniMap = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchLocationQuery.trim()) return;
+
+    setIsSearchingLocation(true);
+    try {
+      const endpoint = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+        searchLocationQuery + ', Indonesia'
+      )}&limit=1`;
+      const res = await fetch(endpoint, {
+        headers: { 'Accept-Language': 'id,en', 'User-Agent': 'SamaraStay-PropertyForm/1.0' }
+      });
+      const data = await res.json();
+      if (data && data.length > 0) {
+        const lat = parseFloat(parseFloat(data[0].lat).toFixed(6));
+        const lng = parseFloat(parseFloat(data[0].lon).toFixed(6));
+        setFormData(prev => ({
+          ...prev,
+          lat,
+          lng,
+          address: prev.address || data[0].display_name
+        }));
+        if (miniMapRef.current) {
+          miniMapRef.current.flyTo([lat, lng], 17);
+        }
+      } else {
+        alert('Lokasi tidak ditemukan. Coba ketik nama jalan atau gedung yang lebih spesifik.');
+      }
+    } catch (err) {
+      console.error('Nominatim search error in PropertyForm:', err);
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  };
+
+  const handleGetDeviceGPSInForm = () => {
+    if (!navigator.geolocation) {
+      alert('Browser tidak mendukung geolokasi GPS.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = parseFloat(pos.coords.latitude.toFixed(6));
+        const lng = parseFloat(pos.coords.longitude.toFixed(6));
+        setFormData(prev => ({ ...prev, lat, lng }));
+        if (miniMapRef.current) {
+          miniMapRef.current.flyTo([lat, lng], 17);
+        }
+      },
+      (err) => {
+        alert('Gagal mengambil GPS: ' + err.message);
+      },
+      { enableHighAccuracy: true }
+    );
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -457,27 +596,77 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Latitude GPS Map</label>
-          <input 
-            type="number" 
-            step="any"
-            value={formData.lat}
-            onChange={(e) => setFormData({ ...formData, lat: Number(e.target.value) })}
-            className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
-          />
+      {/* Interactive Map Coordinate Pinpoint Picker */}
+      <div className="space-y-2 border border-slate-800 bg-slate-950/60 p-3.5 rounded-2xl">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-1.5">
+            <MapPin size={14} className="text-amber-500" />
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-300 font-mono">
+              Titik Koordinat GPS & Peta Properti
+            </label>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleGetDeviceGPSInForm}
+              className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-amber-400 rounded-lg text-[9px] font-mono font-bold flex items-center gap-1 transition border border-slate-700 cursor-pointer"
+            >
+              <Navigation size={10} />
+              <span>GPS Saya</span>
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-1">
-          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">Longitude GPS Map</label>
-          <input 
-            type="number" 
-            step="any"
-            value={formData.lng}
-            onChange={(e) => setFormData({ ...formData, lng: Number(e.target.value) })}
-            className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono"
+        {/* Quick Search on Mini Map */}
+        <div className="flex gap-1.5">
+          <input
+            type="text"
+            value={searchLocationQuery}
+            onChange={(e) => setSearchLocationQuery(e.target.value)}
+            placeholder="Cari jalan / gedung di peta..."
+            className="flex-1 bg-slate-900 border border-slate-800 px-2.5 py-1.5 rounded-xl text-[10px] text-slate-200 outline-none focus:border-amber-500"
           />
+          <button
+            type="button"
+            onClick={handleSearchAddressOnMiniMap}
+            disabled={isSearchingLocation}
+            className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-[10px] font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+          >
+            {isSearchingLocation ? <RotateCw size={10} className="animate-spin" /> : <Search size={10} />}
+            <span>Cari</span>
+          </button>
+        </div>
+
+        {/* Mini Map Container */}
+        <div className="w-full h-44 rounded-xl overflow-hidden border border-slate-800 relative shadow-inner">
+          <div ref={miniMapContainerRef} className="w-full h-full" />
+          <div className="absolute bottom-2 left-2 z-[400] bg-black/80 backdrop-blur-xs border border-white/10 px-2 py-1 rounded-lg text-[9px] text-slate-300 font-mono">
+            💡 Geser pin atau klik peta untuk memindahkan titik
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 pt-1">
+          <div className="space-y-1">
+            <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">Latitude GPS</label>
+            <input 
+              type="number" 
+              step="any"
+              value={formData.lat}
+              onChange={(e) => setFormData({ ...formData, lat: parseFloat(e.target.value) || 0 })}
+              className="w-full bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono text-[11px] font-bold"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">Longitude GPS</label>
+            <input 
+              type="number" 
+              step="any"
+              value={formData.lng}
+              onChange={(e) => setFormData({ ...formData, lng: parseFloat(e.target.value) || 0 })}
+              className="w-full bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono text-[11px] font-bold"
+            />
+          </div>
         </div>
       </div>
 
