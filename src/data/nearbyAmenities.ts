@@ -2,6 +2,14 @@
  * Nearby Amenities dataset and utilities for Samara Stay Properties
  */
 import { NearbyAmenity, AmenityCategory, Property } from '../types';
+import { 
+  calculateDistanceMeters, 
+  sanitizePropertyCoordinates, 
+  sanitizeAmenityCoordinates 
+} from '../utils/mapCoordinates';
+import { fetchNearbyAmenitiesFromOSM, clearFacilityCache } from '../services/overpassService';
+
+export { calculateDistanceMeters, fetchNearbyAmenitiesFromOSM, clearFacilityCache };
 
 export interface AmenityCategoryConfig {
   id: AmenityCategory;
@@ -477,24 +485,6 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
 ];
 
 /**
- * Calculates distance between two coordinates in meters using Haversine formula
- */
-export function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371e3; // Earth radius in meters
-  const phi1 = (lat1 * Math.PI) / 180;
-  const phi2 = (lat2 * Math.PI) / 180;
-  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
-  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
-
-  const a =
-    Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return Math.round(R * c);
-}
-
-/**
  * Get amenities for a specific property with accurate distance calculations
  */
 export function getAmenitiesForProperty(
@@ -511,17 +501,19 @@ export function getAmenitiesForProperty(
   }
 
   // If no direct propertyId matches (e.g. newly created property), calculate dynamic distance
-  const propLat = property.lat || -6.368;
-  const propLng = property.lng || 106.83;
+  const propCoords = sanitizePropertyCoordinates(property);
 
   return pool
     .map(amenity => {
-      const dist = calculateDistanceMeters(propLat, propLng, amenity.lat, amenity.lng);
+      const amenCoords = sanitizeAmenityCoordinates(amenity, propCoords.lat, propCoords.lng);
+      const dist = calculateDistanceMeters(propCoords.lat, propCoords.lng, amenCoords.lat, amenCoords.lng);
       const walkTime = Math.max(1, Math.round(dist / 80)); // approx 80m per minute walking
       const driveTime = Math.max(1, Math.round(dist / 350)); // approx 350m per min city speed
       return {
         ...amenity,
         propertyId: property.id,
+        lat: amenCoords.lat,
+        lng: amenCoords.lng,
         distanceMeters: dist,
         walkingTimeMinutes: walkTime,
         drivingTimeMinutes: driveTime

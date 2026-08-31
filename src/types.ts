@@ -148,6 +148,11 @@ export interface Booking {
   is_occupant_verified?: boolean;
   occupant_arrival_status?: 'pending' | 'checked_in';
   signature_url?: string;
+  hold_expires_at?: string;
+  owner_signature_url?: string;
+  owner_signed_at?: string;
+  owner_signer_name?: string;
+  owner_notes?: string;
   created_at?: string;
 }
 
@@ -179,6 +184,14 @@ export interface Maintenance {
   created_at?: string;
 }
 
+export interface Profile {
+  id: string; // uuid
+  full_name?: string | null;
+  whatsapp?: string | null;
+  role: 'user' | 'admin' | 'super_admin' | 'owner' | 'finance' | 'staff';
+  created_at?: string;
+}
+
 export interface UserSystem {
   id: string;
   full_name: string;
@@ -188,6 +201,7 @@ export interface UserSystem {
   access: string;
   last_login?: string;
   active: boolean;
+  property_id?: number | null;
   created_at?: string;
 }
 

@@ -15,25 +15,31 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 -- Seed Master Chart of Accounts (COA)
 INSERT INTO accounts (id, name, type, category, balance) VALUES
-(1000, 'Kas Kecil (Petty Cash)', 'asset', 'Kas & Bank', 5000000),
-(1010, 'Kas & Bank (BCA / Mandiri Operasional)', 'asset', 'Kas & Bank', 25000000),
+(1000, 'Kas Tunai / Cash on Hand', 'asset', 'Kas & Bank', 5000000),
+(1010, 'Kas Utama Bank Mandiri (Operasional)', 'asset', 'Kas & Bank', 25000000),
 (1020, 'Bank Penampung Midtrans Escrow', 'asset', 'Kas & Bank', 0),
-(1200, 'Piutang Kliring Midtrans', 'asset', 'Piutang & Kliring', 0),
-(1300, 'Titipan Uang Muka / Deposit Survey', 'liability', 'Kewajiban Jangka Pendek', 0),
-(2000, 'Deposit Jaminan Sewa Kamar', 'liability', 'Kewajiban Jangka Pendek', 15000000),
-(2100, 'Hutang Vendor & Operasional', 'liability', 'Kewajiban Jangka Pendek', 0),
-(3000, 'Modal Pemilik (Owner Equity)', 'equity', 'Ekuitas', 50000000),
-(4000, 'Pendapatan Sewa Kamar', 'revenue', 'Pendapatan Utama', 0),
+(1200, 'Piutang Kliring Midtrans (Gateway Clearing)', 'asset', 'Piutang & Kliring', 0),
+(1300, 'Hutang Titipan Uang Muka / Deposit Survey', 'liability', 'Kewajiban Jangka Pendek', 0),
+(2000, 'Hutang Usaha / Vendor Payable', 'liability', 'Kewajiban Jangka Pendek', 0),
+(2100, 'Hutang Deposit Jaminan Sewa (Security Deposit)', 'liability', 'Kewajiban Jangka Pendek', 15000000),
+(3000, 'Modal Pemilik / Modal Disetor', 'equity', 'Ekuitas', 50000000),
+(3100, 'Laba Ditahan / Retained Earnings', 'equity', 'Ekuitas', 0),
+(4000, 'Pendapatan Sewa Kamar Kos', 'revenue', 'Pendapatan Utama', 0),
 (4100, 'Pendapatan Denda & Keterlambatan', 'revenue', 'Pendapatan Lain-lain', 0),
 (4200, 'Pendapatan DP Survey Hangus', 'revenue', 'Pendapatan Lain-lain', 0),
-(5000, 'Beban Listrik, Air, & Utilitas', 'expense', 'Beban Operasional', 0),
-(5010, 'Beban Kebersihan & Perawatan Kamar', 'expense', 'Beban Operasional', 0),
-(5020, 'Beban Keamanan & Lingkungan', 'expense', 'Beban Operasional', 0),
-(5030, 'Beban MDR / Transaksi Payment Gateway Midtrans', 'expense', 'Beban Operasional', 0),
-(5100, 'Beban Operasional Umum & Petty Cash', 'expense', 'Beban Operasional', 0),
+(4300, 'Pendapatan Laundry & Layanan Tambahan', 'revenue', 'Pendapatan Lain-lain', 0),
+(5000, 'Beban Listrik, Air & Utilitas', 'expense', 'Beban Operasional', 0),
+(5010, 'Beban Internet & WiFi', 'expense', 'Beban Operasional', 0),
+(5020, 'Beban Kebersihan & Sampah', 'expense', 'Beban Operasional', 0),
+(5030, 'Biaya Layanan Midtrans / Payment Gateway', 'expense', 'Beban Operasional', 0),
+(5100, 'Beban Pemeliharaan & Perbaikan Gedung', 'expense', 'Beban Operasional', 0),
 (5200, 'Beban Gaji Karyawan & Penjaga Kos', 'expense', 'Beban Operasional', 0),
-(5300, 'Beban Internet & WiFi Kos', 'expense', 'Beban Operasional', 0)
-ON CONFLICT (id) DO NOTHING;
+(5300, 'Beban Pemasaran & Iklan Properti', 'expense', 'Beban Operasional', 0),
+(5400, 'Beban Perlengkapan & Operasional Kantor', 'expense', 'Beban Operasional', 0)
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  type = EXCLUDED.type,
+  category = EXCLUDED.category;
 
 -- 2. Create financial_transactions Table (Parent Transaction Header)
 CREATE TABLE IF NOT EXISTS financial_transactions (
@@ -288,10 +294,49 @@ DROP POLICY IF EXISTS "Admin All Access for Maintenance" ON maintenance;
 CREATE POLICY "Admin All Access for Maintenance" ON maintenance
   FOR ALL TO authenticated USING (true);
 
--- 9. users table policies
+-- 9. users table policies (Hardened in Migration 031)
 DROP POLICY IF EXISTS "Admin All Access for Users" ON users;
-CREATE POLICY "Admin All Access for Users" ON users
-  FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Users Select Policy" ON users;
+DROP POLICY IF EXISTS "Admins Insert Users Policy" ON users;
+DROP POLICY IF EXISTS "Admins Update All Users Policy" ON users;
+DROP POLICY IF EXISTS "Admins Delete Users Policy" ON users;
+
+CREATE POLICY "Users Select Policy" ON users
+  FOR SELECT TO authenticated
+  USING (
+    id = auth.uid()::text
+    OR email = auth.jwt()->>'email'
+    OR public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin', 'finance')
+  );
+
+CREATE POLICY "Admins Insert Users Policy" ON users
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin')
+  );
+
+CREATE POLICY "Admins Update All Users Policy" ON users
+  FOR UPDATE TO authenticated
+  USING (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin')
+    OR (
+      id = auth.uid()::text
+    )
+  )
+  WITH CHECK (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin')
+    OR (
+      id = auth.uid()::text 
+      AND role = (SELECT u.role FROM public.users u WHERE u.id = auth.uid()::text LIMIT 1)
+      AND role_id = (SELECT u.role_id FROM public.users u WHERE u.id = auth.uid()::text LIMIT 1)
+    )
+  );
+
+CREATE POLICY "Admins Delete Users Policy" ON users
+  FOR DELETE TO authenticated
+  USING (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin')
+  );
 
 -- 10. activity_logs table policies
 DROP POLICY IF EXISTS "Enable insert for activity logging" ON activity_logs;
@@ -302,18 +347,10 @@ DROP POLICY IF EXISTS "Admin All Access for Activity Logs" ON activity_logs;
 CREATE POLICY "Admin All Access for Activity Logs" ON activity_logs
   FOR ALL TO authenticated USING (true);
 
--- 11. accounting & bookkeeping (accounts, financial_transactions, journal_entries)
-DROP POLICY IF EXISTS "Admin All Access for Accounts" ON accounts;
-CREATE POLICY "Admin All Access for Accounts" ON accounts
-  FOR ALL TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Admin All Access for Transactions" ON financial_transactions;
-CREATE POLICY "Admin All Access for Transactions" ON financial_transactions
-  FOR ALL TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Admin All Access for Journal Entries" ON journal_entries;
-CREATE POLICY "Admin All Access for Journal Entries" ON journal_entries
-  FOR ALL TO authenticated USING (true);
+-- 11. accounting & bookkeeping policies
+-- NOTE: Hardened scoped access policies for accounts, financial_transactions,
+-- journal_entries, payments, and budgets are maintained and enforced via
+-- migrations 020, 022, 027, 028, 029, and 030 utilizing get_auth_user_role() & get_auth_user_property_id().
 
 -- 12. system settings policies
 DROP POLICY IF EXISTS "Public Read Access for Settings" ON settings;
@@ -630,7 +667,12 @@ $$;
 
 -- Add digital signature columns to bookings and surveys tables
 ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS signature_url TEXT;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS owner_signature_url TEXT;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS owner_signed_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS owner_signer_name TEXT;
+ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS owner_notes TEXT;
 ALTER TABLE IF EXISTS surveys ADD COLUMN IF NOT EXISTS signature_url TEXT;
+ALTER TABLE IF EXISTS settings ADD COLUMN IF NOT EXISTS owner_signature_url TEXT;
 
 -- Table for Email Delivery Logs and Tracking
 CREATE TABLE IF NOT EXISTS public.sent_emails (
@@ -724,6 +766,72 @@ ALTER TABLE public.bank_reconciliation_matches ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Authenticated All for bank_reconciliation_matches" ON public.bank_reconciliation_matches;
 CREATE POLICY "Authenticated All for bank_reconciliation_matches" ON public.bank_reconciliation_matches
   FOR ALL USING (true) WITH CHECK (true);
+
+-- Table for Nearby Amenities (GPS POIs)
+CREATE TABLE IF NOT EXISTS public.nearby_amenities (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  property_id BIGINT REFERENCES public.properties(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL CHECK (category IN ('transit', 'education', 'healthcare', 'shopping', 'dining', 'lifestyle', 'worship')),
+  distance_meters INTEGER NOT NULL DEFAULT 0,
+  walking_time_minutes INTEGER NOT NULL DEFAULT 0,
+  driving_time_minutes INTEGER DEFAULT 0,
+  lat DOUBLE PRECISION NOT NULL,
+  lng DOUBLE PRECISION NOT NULL,
+  description TEXT,
+  address TEXT,
+  icon TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.nearby_amenities ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public select for nearby_amenities" ON public.nearby_amenities;
+CREATE POLICY "Public select for nearby_amenities" ON public.nearby_amenities
+  FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Admin write for nearby_amenities" ON public.nearby_amenities;
+CREATE POLICY "Admin write for nearby_amenities" ON public.nearby_amenities
+  FOR ALL TO authenticated
+  USING (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin', 'finance')
+  )
+  WITH CHECK (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin', 'finance')
+  );
+
+-- Table for Failed Ledger Postings (Double-entry auto-repair audit)
+CREATE TABLE IF NOT EXISTS public.failed_ledger_postings (
+  id BIGSERIAL PRIMARY KEY,
+  transaction_no VARCHAR(100),
+  reference_type VARCHAR(50) NOT NULL,
+  reference_id VARCHAR(100) NOT NULL,
+  amount NUMERIC(15, 2) NOT NULL DEFAULT 0,
+  debit_account_id INT NOT NULL,
+  credit_account_id INT NOT NULL,
+  property_id BIGINT REFERENCES public.properties(id) ON DELETE SET NULL,
+  created_by VARCHAR(100) DEFAULT 'System',
+  error_message TEXT,
+  status VARCHAR(30) DEFAULT 'pending',
+  resolved_at TIMESTAMPTZ,
+  resolved_by VARCHAR(100),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.failed_ledger_postings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admin full access for failed_ledger_postings" ON public.failed_ledger_postings;
+CREATE POLICY "Admin full access for failed_ledger_postings" ON public.failed_ledger_postings
+  FOR ALL TO authenticated
+  USING (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin', 'finance')
+  )
+  WITH CHECK (
+    public.get_auth_user_role() IN ('super', 'super_admin', 'owner', 'admin', 'finance')
+  );
 
 
 

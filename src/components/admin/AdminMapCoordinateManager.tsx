@@ -1,15 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Property, NearbyAmenity, AmenityCategory } from '../../types';
 import { database } from '../../lib/supabase';
-import { AMENITY_CATEGORIES, AmenityCategoryConfig, INITIAL_NEARBY_AMENITIES } from '../../data/nearbyAmenities';
+import { 
+  AMENITY_CATEGORIES, 
+  AmenityCategoryConfig, 
+  INITIAL_NEARBY_AMENITIES,
+  fetchNearbyAmenitiesFromOSM,
+  clearFacilityCache
+} from '../../data/nearbyAmenities';
 import { 
   MapPin, Compass, Search, Navigation, CheckCircle, 
   Trash2, Plus, Edit2, RotateCw, Sparkles, Building2, 
-  ExternalLink, Layers, Info, Check, X, AlertCircle, ArrowUpRight
+  ExternalLink, Layers, Info, Check, X, AlertCircle, ArrowUpRight,
+  Clipboard, ClipboardPaste, Copy, ClipboardCheck, ArrowRight, HelpCircle,
+  Globe, DownloadCloud, RefreshCw
 } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { 
+  createOsmStandardTileLayer, 
+  createSatelliteTileLayer, 
+  OSM_ATTRIBUTION,
+  ESRI_SATELLITE_ATTRIBUTION
+} from '../../utils/mapTiles';
 
 interface AdminMapCoordinateManagerProps {
   properties: Property[];
@@ -33,6 +47,64 @@ function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   return Math.round(R * c);
 }
 
+// Robust Google Maps Coordinate Parser
+export function parseGoogleMapsCoordinates(input: string): { lat: number; lng: number } | null {
+  if (!input || !input.trim()) return null;
+  const str = input.trim();
+
+  // Pattern 1: URL with @lat,lng
+  const urlAtMatch = str.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
+  if (urlAtMatch) {
+    const lat = parseFloat(urlAtMatch[1]);
+    const lng = parseFloat(urlAtMatch[2]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+    }
+  }
+
+  // Pattern 2: URL with query param ?q=lat,lng or ?query=lat,lng or ?ll=lat,lng or /search/lat,lng
+  const urlQueryMatch = str.match(/[?&/](?:q|query|ll|search)(?:=|\/)?(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)/i);
+  if (urlQueryMatch) {
+    const lat = parseFloat(urlQueryMatch[1]);
+    const lng = parseFloat(urlQueryMatch[2]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+    }
+  }
+
+  // Pattern 3: Embed !3dlat!4dlng
+  const embedMatch = str.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if (embedMatch) {
+    const lat = parseFloat(embedMatch[1]);
+    const lng = parseFloat(embedMatch[2]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+    }
+  }
+
+  // Pattern 4: Plain coordinate pair e.g. "-6.195621, 106.848815"
+  const plainMatch = str.match(/(-?\d{1,2}\.\d+)[,\s\t]+(-?\d{1,3}\.\d+)/);
+  if (plainMatch) {
+    const lat = parseFloat(plainMatch[1]);
+    const lng = parseFloat(plainMatch[2]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+    }
+  }
+
+  // Pattern 5: DMS notation e.g. 6°11'44.2"S 106°50'55.7"E
+  const dmsMatch = str.match(/(\d+)°(\d+)'([\d.]+)"?([NS])[,\s]+(\d+)°(\d+)'([\d.]+)"?([EW])/i);
+  if (dmsMatch) {
+    let lat = parseInt(dmsMatch[1], 10) + parseInt(dmsMatch[2], 10) / 60 + parseFloat(dmsMatch[3]) / 3600;
+    if (dmsMatch[4].toUpperCase() === 'S') lat = -lat;
+    let lng = parseInt(dmsMatch[5], 10) + parseInt(dmsMatch[6], 10) / 60 + parseFloat(dmsMatch[7]) / 3600;
+    if (dmsMatch[8].toUpperCase() === 'W') lng = -lng;
+    return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+  }
+
+  return null;
+}
+
 export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps> = ({
   properties,
   onPropertyUpdated,
@@ -47,6 +119,16 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const [propAddress, setPropAddress] = useState<string>('');
   const [isSavingProperty, setIsSavingProperty] = useState(false);
 
+  // Google Maps Direct Smart Paste State
+  const [gmapsPropInput, setGmapsPropInput] = useState('');
+  const [propParseStatus, setPropParseStatus] = useState<{ status: 'idle' | 'success' | 'error'; message?: string }>({ status: 'idle' });
+  const [copiedType, setCopiedType] = useState<string | null>(null);
+  const [showGmapsGuide, setShowGmapsGuide] = useState(false);
+
+  // Amenity Google Maps Smart Paste State
+  const [gmapsAmenityInput, setGmapsAmenityInput] = useState('');
+  const [amenityParseStatus, setAmenityParseStatus] = useState<{ status: 'idle' | 'success' | 'error'; message?: string }>({ status: 'idle' });
+
   // Amenities Data & State
   const [amenities, setAmenities] = useState<NearbyAmenity[]>([]);
   const [isLoadingAmenities, setIsLoadingAmenities] = useState(false);
@@ -55,6 +137,13 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const [editingAmenity, setEditingAmenity] = useState<NearbyAmenity | null>(null);
   const [isSavingAmenity, setIsSavingAmenity] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
+
+  // Overpass OpenStreetMap Scanner State for Admin
+  const [isScanningOsm, setIsScanningOsm] = useState(false);
+  const [osmScanResults, setOsmScanResults] = useState<NearbyAmenity[]>([]);
+  const [selectedOsmIds, setSelectedOsmIds] = useState<Set<string>>(new Set());
+  const [showOsmScanModal, setShowOsmScanModal] = useState(false);
+  const [isImportingOsm, setIsImportingOsm] = useState(false);
 
   // Search Address / Landmark
   const [searchQuery, setSearchQuery] = useState('');
@@ -79,9 +168,13 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const propertyMarkerRef = useRef<L.Marker | null>(null);
+  const propertyLayerRef = useRef<L.LayerGroup | null>(null);
+  const amenityLayerRef = useRef<L.LayerGroup | null>(null);
+  const tempMarkerLayerRef = useRef<L.LayerGroup | null>(null);
+  const baseLayersRef = useRef<{ osm: L.TileLayer | null; satellite: L.TileLayer | null }>({ osm: null, satellite: null });
   const amenityMarkersRef = useRef<{ [id: string]: L.Marker }>({});
-  const activeTileLayerRef = useRef<L.TileLayer | null>(null);
-  const [activeTileType, setActiveTileType] = useState<'streets' | 'satellite' | 'positron'>('positron');
+  const [activeTileType, setActiveTileType] = useState<'osm' | 'satellite'>('osm');
+  const [mapTileError, setMapTileError] = useState<string | null>(null);
 
   // Update active property when selected ID changes or properties list updates
   useEffect(() => {
@@ -91,18 +184,27 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
       setPropLat(found.lat || -6.195621);
       setPropLng(found.lng || 106.848815);
       setPropAddress(found.address || '');
+      setGmapsPropInput('');
+      setPropParseStatus({ status: 'idle' });
     }
   }, [selectedPropertyId, properties]);
 
-  // Fetch amenities from Supabase for current property
+  // Load amenities for selected property
   const loadAmenities = async (propId: number) => {
     setIsLoadingAmenities(true);
     try {
       const data = await database.fetchNearbyAmenities(propId);
-      setAmenities(data);
+      if (data && data.length > 0) {
+        setAmenities(data);
+      } else {
+        // Fallback to initial nearby amenities for this property
+        const fallback = INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propId);
+        setAmenities(fallback);
+      }
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Load amenities error:', err);
-      if (showToast) showToast('Gagal memuat titik fasilitas sekitar.', 'error');
+      const fallback = INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propId);
+      setAmenities(fallback);
     } finally {
       setIsLoadingAmenities(false);
     }
@@ -114,7 +216,73 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     }
   }, [selectedPropertyId]);
 
-  // Initialize Map
+  // Handle Google Maps Smart Paste for Property
+  const handleGmapsPropPaste = (value: string) => {
+    setGmapsPropInput(value);
+    if (!value.trim()) {
+      setPropParseStatus({ status: 'idle' });
+      return;
+    }
+
+    const parsed = parseGoogleMapsCoordinates(value);
+    if (parsed) {
+      setPropLat(parsed.lat);
+      setPropLng(parsed.lng);
+      setPropParseStatus({
+        status: 'success',
+        message: `Koordinat terdeteksi: Lat ${parsed.lat}, Lng ${parsed.lng}`
+      });
+
+      // Fly map to new coordinates
+      centerMapOn(parsed.lat, parsed.lng, 17);
+    } else {
+      setPropParseStatus({
+        status: 'error',
+        message: 'Format tidak dikenali. Paste link Google Maps (misal https://maps.app.goo.gl/... atau @-6.19,106.84) atau teks koordinat "-6.1956, 106.8488".'
+      });
+    }
+  };
+
+  // Handle Google Maps Smart Paste for Amenity Form
+  const handleGmapsAmenityPaste = (value: string) => {
+    setGmapsAmenityInput(value);
+    if (!value.trim()) {
+      setAmenityParseStatus({ status: 'idle' });
+      return;
+    }
+
+    const parsed = parseGoogleMapsCoordinates(value);
+    if (parsed) {
+      const dist = calculateDistanceMeters(propLat, propLng, parsed.lat, parsed.lng);
+      const walk = Math.max(1, Math.round(dist / 80)); // 80m / min
+      const drive = Math.max(1, Math.round(dist / 350)); // 350m / min
+
+      setAmenityForm(prev => ({
+        ...prev,
+        lat: parsed.lat,
+        lng: parsed.lng,
+        distanceMeters: dist,
+        walkingTimeMinutes: walk,
+        drivingTimeMinutes: drive
+      }));
+
+      setAmenityParseStatus({
+        status: 'success',
+        message: `Koordinat terdeteksi: Lat ${parsed.lat}, Lng ${parsed.lng} (Jarak: ${dist} m)`
+      });
+
+      centerMapOn(parsed.lat, parsed.lng, 17);
+    } else {
+      setAmenityParseStatus({
+        status: 'error',
+        message: 'Format link / koordinat tidak valid.'
+      });
+    }
+  };
+
+  // -------------------------------------------------------------
+  // LEAFLET MAP INITIALIZATION & TILE LAYER (PURE OSM / ESRI)
+  // -------------------------------------------------------------
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
@@ -126,13 +294,54 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         attributionControl: false
       });
 
-      // Default light tile layer
-      const tile = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19
-      }).addTo(map);
+      L.control.attribution({ position: 'bottomleft', prefix: false })
+        .addAttribution(OSM_ATTRIBUTION)
+        .addTo(map);
 
-      activeTileLayerRef.current = tile;
+      // Create base layers
+      const osm = createOsmStandardTileLayer(
+        {},
+        (hasError, msg) => setMapTileError(hasError ? (msg || 'Peta gagal dimuat. Periksa koneksi.') : null)
+      );
+
+      const satellite = createSatelliteTileLayer(
+        {},
+        (hasError, msg) => setMapTileError(hasError ? (msg || 'Peta satelit gagal dimuat.') : null)
+      );
+
+      baseLayersRef.current = { osm, satellite };
+
+      if (activeTileType === 'satellite') {
+        satellite.addTo(map);
+      } else {
+        osm.addTo(map);
+      }
+
+      // Initialize LayerGroups in order
+      const propertyLayer = L.layerGroup().addTo(map);
+      const amenityLayer = L.layerGroup().addTo(map);
+      const tempMarkerLayer = L.layerGroup().addTo(map);
+
+      propertyLayerRef.current = propertyLayer;
+      amenityLayerRef.current = amenityLayer;
+      tempMarkerLayerRef.current = tempMarkerLayer;
       mapRef.current = map;
+
+      // Handle ResizeObserver for admin layout changes
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => {
+          try {
+            map.invalidateSize();
+          } catch (e) {}
+        });
+        ro.observe(mapContainerRef.current);
+      }
+
+      setTimeout(() => {
+        try {
+          map.invalidateSize();
+        } catch (e) {}
+      }, 150);
 
       // Click on map to update position
       map.on('click', (e: L.LeafletMouseEvent) => {
@@ -144,7 +353,7 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
           setAmenityForm(prev => {
             const dist = calculateDistanceMeters(propLat, propLng, lat, lng);
             const walk = Math.max(1, Math.round(dist / 80));
-            const drive = Math.max(1, Math.round(dist / 400));
+            const drive = Math.max(1, Math.round(dist / 350));
             return {
               ...prev,
               lat,
@@ -163,36 +372,44 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     }
 
     return () => {
-      // Don't destroy on every state, preserve instance
+      // Keep instance alive or clean on unmount
+      if (mapRef.current) {
+        try {
+          mapRef.current.remove();
+        } catch (e) {}
+        mapRef.current = null;
+        propertyLayerRef.current = null;
+        amenityLayerRef.current = null;
+        tempMarkerLayerRef.current = null;
+        baseLayersRef.current = { osm: null, satellite: null };
+      }
     };
   }, []);
 
-  // Update Tile Layer
+  // Update Tile Layer when layer switch changed
   useEffect(() => {
-    if (!mapRef.current) return;
-    if (activeTileLayerRef.current) {
-      mapRef.current.removeLayer(activeTileLayerRef.current);
-    }
+    const map = mapRef.current;
+    if (!map) return;
 
-    let url = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+    const { osm, satellite } = baseLayersRef.current;
+    if (!osm || !satellite) return;
+
     if (activeTileType === 'satellite') {
-      url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-    } else if (activeTileType === 'streets') {
-      url = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      if (map.hasLayer(osm)) map.removeLayer(osm);
+      if (!map.hasLayer(satellite)) satellite.addTo(map);
+    } else {
+      if (map.hasLayer(satellite)) map.removeLayer(satellite);
+      if (!map.hasLayer(osm)) osm.addTo(map);
     }
-
-    const tile = L.tileLayer(url, { maxZoom: 19 }).addTo(mapRef.current);
-    activeTileLayerRef.current = tile;
   }, [activeTileType]);
 
   // Update Property Marker
   useEffect(() => {
-    if (!mapRef.current) return;
+    const propertyLayer = propertyLayerRef.current;
+    if (!propertyLayer) return;
 
-    if (propertyMarkerRef.current) {
-      propertyMarkerRef.current.remove();
-      propertyMarkerRef.current = null;
-    }
+    propertyLayer.clearLayers();
+    propertyMarkerRef.current = null;
 
     const propIcon = L.divIcon({
       className: 'custom-property-admin-marker',
@@ -214,241 +431,316 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
       icon: propIcon,
       draggable: true,
       zIndexOffset: 1000
-    }).addTo(mapRef.current);
+    }).addTo(propertyLayer);
 
-    marker.on('dragend', (e: any) => {
-      const pos = e.target.getLatLng();
-      const lat = parseFloat(pos.lat.toFixed(6));
-      const lng = parseFloat(pos.lng.toFixed(6));
+    marker.on('dragend', (e) => {
+      const position = e.target.getLatLng();
+      const lat = parseFloat(position.lat.toFixed(6));
+      const lng = parseFloat(position.lng.toFixed(6));
       setPropLat(lat);
       setPropLng(lng);
     });
-
-    marker.bindPopup(`
-      <div style="font-family:sans-serif; font-size:11px; padding:4px;">
-        <strong style="color:#2E6F40; font-size:12px; display:block;">${activeProperty?.name}</strong>
-        <p style="margin:4px 0 0 0; color:#64748B;">Geser (drag) pin ini untuk mengubah titik koordinat secara akurat.</p>
-        <div style="margin-top:6px; font-family:monospace; font-size:10px; background:#F1F5F9; padding:3px 6px; border-radius:4px;">
-          LAT: ${propLat}<br/>LNG: ${propLng}
-        </div>
-      </div>
-    `);
 
     propertyMarkerRef.current = marker;
   }, [propLat, propLng, activeProperty]);
 
   // Update Amenity Markers on Map
   useEffect(() => {
-    if (!mapRef.current) return;
+    const amenityLayer = amenityLayerRef.current;
+    const tempMarkerLayer = tempMarkerLayerRef.current;
+    if (!amenityLayer || !tempMarkerLayer) return;
 
-    // Clear old amenity markers
-    (Object.values(amenityMarkersRef.current) as L.Marker[]).forEach(m => m.remove());
+    // Clear old markers
+    amenityLayer.clearLayers();
+    tempMarkerLayer.clearLayers();
     amenityMarkersRef.current = {};
 
-    const filtered = selectedCategory === 'all' 
-      ? amenities 
-      : amenities.filter(a => a.category === selectedCategory);
-
-    filtered.forEach(amenity => {
+    amenities.forEach(amenity => {
       const catConfig = AMENITY_CATEGORIES.find(c => c.id === amenity.category) || AMENITY_CATEGORIES[0];
-      const isBeingEdited = editingAmenity?.id === amenity.id;
-
-      const markerHtml = `
-        <div style="display:flex; flex-direction:column; align-items:center; cursor:${isBeingEdited ? 'grab' : 'pointer'};">
-          <div style="background:${isBeingEdited ? '#F59E0B' : catConfig.color}; color:white; font-size:9px; font-weight:800; padding:2px 6px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.25); border:1.5px solid white; white-space:nowrap;">
-            ${amenity.name} (${amenity.distanceMeters}m)
-          </div>
-          <div style="width:0; height:0; border-left:4px solid transparent; border-right:4px solid transparent; border-top:6px solid ${isBeingEdited ? '#F59E0B' : catConfig.color};"></div>
-        </div>
-      `;
+      const isSelected = editingAmenity?.id === amenity.id;
 
       const amenityIcon = L.divIcon({
-        className: 'custom-amenity-marker',
-        html: markerHtml,
-        iconSize: [100, 36],
-        iconAnchor: [50, 36]
+        className: 'custom-amenity-admin-marker',
+        html: `
+          <div style="display:flex; flex-direction:column; align-items:center; cursor:pointer; transform:${isSelected ? 'scale(1.2)' : 'scale(1)'}; transition:transform 0.2s;">
+            <div style="background:${catConfig.bgColor}; color:${catConfig.color}; border:1.5px solid ${catConfig.borderColor}; font-size:9px; font-weight:800; padding:2px 6px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.15); white-space:nowrap;">
+              ${amenity.name} (${amenity.distanceMeters}m)
+            </div>
+            <div style="width:6px; height:6px; background:${catConfig.color}; border-radius:50%; border:1.5px solid white; margin-top:2px;"></div>
+          </div>
+        `,
+        iconSize: [140, 36],
+        iconAnchor: [70, 36]
       });
 
-      const marker = L.marker([amenity.lat, amenity.lng], {
-        icon: amenityIcon,
-        draggable: isBeingEdited
-      }).addTo(mapRef.current!);
-
-      if (isBeingEdited) {
-        marker.on('dragend', (e: any) => {
-          const pos = e.target.getLatLng();
-          const lat = parseFloat(pos.lat.toFixed(6));
-          const lng = parseFloat(pos.lng.toFixed(6));
-          const dist = calculateDistanceMeters(propLat, propLng, lat, lng);
-          const walk = Math.max(1, Math.round(dist / 80));
-          const drive = Math.max(1, Math.round(dist / 400));
-          setAmenityForm(prev => ({
-            ...prev,
-            lat,
-            lng,
-            distanceMeters: dist,
-            walkingTimeMinutes: walk,
-            drivingTimeMinutes: drive
-          }));
+      const m = L.marker([amenity.lat, amenity.lng], { icon: amenityIcon })
+        .addTo(amenityLayer)
+        .on('click', () => {
+          handleEditAmenity(amenity);
         });
-      }
 
-      marker.on('click', () => {
-        if (!isAddingAmenity && !editingAmenity) {
-          handleStartEditAmenity(amenity);
-        }
+      amenityMarkersRef.current[amenity.id] = m;
+    });
+
+    // If adding a new amenity or editing, show an active temporary pointer in tempMarkerLayer
+    if (isAddingAmenity || editingAmenity) {
+      const tempIcon = L.divIcon({
+        className: 'custom-temp-amenity-marker',
+        html: `
+          <div style="display:flex; flex-direction:column; align-items:center; animation:bounce 1s infinite;">
+            <div style="background:#EF4444; color:white; font-size:9px; font-weight:900; padding:3px 6px; border-radius:6px; border:2px solid white; box-shadow:0 0 10px rgba(239,68,68,0.8); white-space:nowrap;">
+              🎯 Titik Baru (${amenityForm.distanceMeters}m)
+            </div>
+            <div style="width:0; height:0; border-left:5px solid transparent; border-right:5px solid transparent; border-top:6px solid #EF4444;"></div>
+          </div>
+        `,
+        iconSize: [120, 30],
+        iconAnchor: [60, 30]
       });
 
-      amenityMarkersRef.current[amenity.id] = marker;
-    });
-  }, [amenities, selectedCategory, editingAmenity, isAddingAmenity, propLat, propLng]);
+      const tempMarker = L.marker([amenityForm.lat, amenityForm.lng], {
+        icon: tempIcon,
+        draggable: true,
+        zIndexOffset: 1200
+      }).addTo(tempMarkerLayer);
 
-  // Center map on coordinates
+      tempMarker.on('dragend', (e) => {
+        const position = e.target.getLatLng();
+        const lat = parseFloat(position.lat.toFixed(6));
+        const lng = parseFloat(position.lng.toFixed(6));
+        const dist = calculateDistanceMeters(propLat, propLng, lat, lng);
+        const walk = Math.max(1, Math.round(dist / 80));
+        const drive = Math.max(1, Math.round(dist / 350));
+
+        setAmenityForm(prev => ({
+          ...prev,
+          lat,
+          lng,
+          distanceMeters: dist,
+          walkingTimeMinutes: walk,
+          drivingTimeMinutes: drive
+        }));
+      });
+
+      amenityMarkersRef.current['__temp__'] = tempMarker;
+    }
+  }, [amenities, isAddingAmenity, editingAmenity, amenityForm.lat, amenityForm.lng, propLat, propLng]);
+
+  // Center Map Utility
   const centerMapOn = (lat: number, lng: number, zoom = 16) => {
     if (mapRef.current) {
-      mapRef.current.flyTo([lat, lng], zoom, { duration: 1.2 });
+      mapRef.current.flyTo([lat, lng], zoom, { duration: 1 });
     }
   };
 
-  // Search Address or Landmarks via OpenStreetMap Nominatim
-  const handleSearchLocation = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Reverse Geocoding with Nominatim OpenStreetMap
+  const handleReverseGeocode = async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=id,en`,
+        { headers: { 'User-Agent': 'SamaraStay-AdminManager/1.0' } }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.display_name) {
+        setPropAddress(data.display_name);
+        if (showToast) showToast('Alamat otomatis diperbarui dari OpenStreetMap.');
+      }
+    } catch (err) {
+      console.warn('Reverse geocoding notice:', err);
+    }
+  };
+
+  // Search Address or Landmark via Nominatim OpenStreetMap
+  const handleSearchAddress = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!searchQuery.trim()) return;
 
     setIsSearching(true);
     try {
-      const endpoint = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-        searchQuery + ', Indonesia'
-      )}&limit=5`;
-      const res = await fetch(endpoint, {
-        headers: {
-          'Accept-Language': 'id,en',
-          'User-Agent': 'SamaraStay-AdminMapManager/1.0'
-        }
-      });
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&countrycodes=id&limit=5&accept-language=id,en`,
+        { headers: { 'User-Agent': 'SamaraStay-AdminManager/1.0' } }
+      );
       const data = await res.json();
       setSearchResults(data || []);
     } catch (err) {
-      console.error('Nominatim search error:', err);
+      console.error('Search address error:', err);
     } finally {
       setIsSearching(false);
     }
   };
 
-  const handleApplySearchResult = (result: any) => {
+  const handleSelectSearchResult = (result: any) => {
     const lat = parseFloat(parseFloat(result.lat).toFixed(6));
     const lng = parseFloat(parseFloat(result.lon).toFixed(6));
-
-    if (isAddingAmenity || editingAmenity) {
-      const dist = calculateDistanceMeters(propLat, propLng, lat, lng);
-      setAmenityForm(prev => ({
-        ...prev,
-        name: prev.name || result.display_name.split(',')[0],
-        address: result.display_name,
-        lat,
-        lng,
-        distanceMeters: dist,
-        walkingTimeMinutes: Math.max(1, Math.round(dist / 80)),
-        drivingTimeMinutes: Math.max(1, Math.round(dist / 400))
-      }));
-    } else {
-      setPropLat(lat);
-      setPropLng(lng);
-      if (!propAddress) {
-        setPropAddress(result.display_name);
-      }
-    }
-
-    centerMapOn(lat, lng, 17);
+    setPropLat(lat);
+    setPropLng(lng);
+    setPropAddress(result.display_name);
     setSearchResults([]);
     setSearchQuery('');
-    if (showToast) showToast('Lokasi berhasil ditemukan & diposisikan pada peta.');
+    centerMapOn(lat, lng, 17);
   };
 
-  // Device Geolocation
-  const handleGetCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      alert('Browser tidak mendukung geolokasi GPS.');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = parseFloat(pos.coords.latitude.toFixed(6));
-        const lng = parseFloat(pos.coords.longitude.toFixed(6));
-        if (isAddingAmenity || editingAmenity) {
-          const dist = calculateDistanceMeters(propLat, propLng, lat, lng);
-          setAmenityForm(prev => ({
-            ...prev,
-            lat,
-            lng,
-            distanceMeters: dist,
-            walkingTimeMinutes: Math.max(1, Math.round(dist / 80)),
-            drivingTimeMinutes: Math.max(1, Math.round(dist / 400))
-          }));
-        } else {
-          setPropLat(lat);
-          setPropLng(lng);
-        }
-        centerMapOn(lat, lng, 17);
-        if (showToast) showToast('Koordinat GPS perangkat berhasil diambil.');
-      },
-      (err) => {
-        console.warn('Geolocation error:', err);
-        alert('Gagal mengambil lokasi GPS perangkat: ' + err.message);
-      },
-      { enableHighAccuracy: true }
-    );
-  };
-
-  // Save Property Accurate Coordinates
+  // Save Property Coordinates & Address
   const handleSavePropertyCoordinates = async () => {
     if (!activeProperty) return;
     setIsSavingProperty(true);
+
     try {
       const updated = await database.saveProperty({
-        ...activeProperty,
+        id: activeProperty.id,
+        name: activeProperty.name,
+        address: propAddress || activeProperty.address,
         lat: propLat,
-        lng: propLng,
-        address: propAddress || activeProperty.address
+        lng: propLng
       });
+
+      // Clear Overpass cache for this property
+      clearFacilityCache(activeProperty.id);
 
       if (onPropertyUpdated) {
         onPropertyUpdated(updated);
       }
-      if (showToast) showToast(`Titik koordinat ${activeProperty.name} berhasil disimpan ke Supabase!`);
+
+      if (showToast) {
+        showToast(`Koordinat GPS untuk ${activeProperty.name} berhasil disimpan!`);
+      }
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Save property coord error:', err);
-      if (showToast) showToast(err.message || 'Gagal menyimpan koordinat properti.', 'error');
+      if (showToast) {
+        showToast(err.message || 'Gagal menyimpan koordinat properti.', 'error');
+      }
     } finally {
       setIsSavingProperty(false);
     }
   };
 
-  // Start Adding Amenity
-  const handleStartAddAmenity = () => {
-    const defaultLat = parseFloat((propLat + 0.0015).toFixed(6));
-    const defaultLng = parseFloat((propLng + 0.0015).toFixed(6));
-    const dist = calculateDistanceMeters(propLat, propLng, defaultLat, defaultLng);
+  // -------------------------------------------------------------
+  // OPENSTREETMAP OVERPASS LIVE POI SCANNER & IMPORTER
+  // -------------------------------------------------------------
+  const handleScanOsmFacilities = async () => {
+    setIsScanningOsm(true);
+    setShowOsmScanModal(true);
+    try {
+      const results = await fetchNearbyAmenitiesFromOSM(
+        selectedPropertyId,
+        propLat,
+        propLng,
+        3000,
+        true // Force fresh fetch
+      );
+
+      setOsmScanResults(results || []);
+      // Select all by default
+      const allIds = new Set((results || []).map(r => r.id));
+      setSelectedOsmIds(allIds);
+
+      if (results && results.length > 0 && showToast) {
+        showToast(`Ditemukan ${results.length} fasilitas publik di sekitar properti dari OpenStreetMap!`);
+      }
+    } catch (err: any) {
+      console.error('Scan OSM facilities error:', err);
+      if (showToast) showToast('Gagal memindai data OpenStreetMap.', 'error');
+    } finally {
+      setIsScanningOsm(false);
+    }
+  };
+
+  const handleToggleOsmItem = (id: string) => {
+    setSelectedOsmIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAllOsm = () => {
+    if (selectedOsmIds.size === osmScanResults.length) {
+      setSelectedOsmIds(new Set());
+    } else {
+      setSelectedOsmIds(new Set(osmScanResults.map(r => r.id)));
+    }
+  };
+
+  const handleImportSelectedOsmAmenities = async () => {
+    const toImport = osmScanResults.filter(r => selectedOsmIds.has(r.id));
+    if (toImport.length === 0) {
+      alert('Pilih minimal satu fasilitas untuk diimpor.');
+      return;
+    }
+
+    setIsImportingOsm(true);
+    try {
+      // Map to proper Supabase payload
+      const cleanedItems: NearbyAmenity[] = toImport.map((item, index) => ({
+        id: `osm-${selectedPropertyId}-${Date.now()}-${index}`,
+        propertyId: selectedPropertyId,
+        name: item.name,
+        category: item.category,
+        distanceMeters: item.distanceMeters,
+        walkingTimeMinutes: item.walkingTimeMinutes,
+        drivingTimeMinutes: item.drivingTimeMinutes,
+        lat: item.lat,
+        lng: item.lng,
+        description: item.description || '',
+        address: item.address || '',
+        icon: item.icon || 'MapPin'
+      }));
+
+      await database.batchSeedNearbyAmenities(cleanedItems);
+      await loadAmenities(selectedPropertyId);
+      clearFacilityCache(selectedPropertyId);
+
+      setShowOsmScanModal(false);
+      if (showToast) {
+        showToast(`Berhasil mengimpor ${cleanedItems.length} fasilitas dari OpenStreetMap ke database!`);
+      }
+    } catch (err: any) {
+      console.error('Import OSM facilities error:', err);
+      if (showToast) showToast(err.message || 'Gagal mengimpor fasilitas.', 'error');
+    } finally {
+      setIsImportingOsm(false);
+    }
+  };
+
+  // -------------------------------------------------------------
+  // AMENITY CRUD HANDLERS
+  // -------------------------------------------------------------
+  const handleAddNewAmenity = () => {
+    setIsAddingAmenity(true);
+    setEditingAmenity(null);
+    setGmapsAmenityInput('');
+    setAmenityParseStatus({ status: 'idle' });
+
+    // Place new amenity 200m offset from property
+    const offsetLat = parseFloat((propLat + 0.0015).toFixed(6));
+    const offsetLng = parseFloat((propLng + 0.0015).toFixed(6));
+    const dist = calculateDistanceMeters(propLat, propLng, offsetLat, offsetLng);
 
     setAmenityForm({
-      id: `amenity-${Date.now()}`,
+      id: '',
       name: '',
       category: 'transit',
-      lat: defaultLat,
-      lng: defaultLng,
+      lat: offsetLat,
+      lng: offsetLng,
       distanceMeters: dist,
       walkingTimeMinutes: Math.max(1, Math.round(dist / 80)),
-      drivingTimeMinutes: Math.max(1, Math.round(dist / 400)),
+      drivingTimeMinutes: Math.max(1, Math.round(dist / 350)),
       description: '',
       address: ''
     });
-    setEditingAmenity(null);
-    setIsAddingAmenity(true);
-    centerMapOn(defaultLat, defaultLng, 16);
+
+    centerMapOn(offsetLat, offsetLng, 17);
   };
 
-  // Start Editing Amenity
-  const handleStartEditAmenity = (amenity: NearbyAmenity) => {
+  const handleEditAmenity = (amenity: NearbyAmenity) => {
+    setEditingAmenity(amenity);
+    setIsAddingAmenity(false);
+    setGmapsAmenityInput('');
+    setAmenityParseStatus({ status: 'idle' });
+
     setAmenityForm({
       id: amenity.id,
       name: amenity.name,
@@ -457,16 +749,19 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
       lng: amenity.lng,
       distanceMeters: amenity.distanceMeters,
       walkingTimeMinutes: amenity.walkingTimeMinutes,
-      drivingTimeMinutes: amenity.drivingTimeMinutes || Math.max(1, Math.round(amenity.distanceMeters / 400)),
+      drivingTimeMinutes: amenity.drivingTimeMinutes || Math.max(1, Math.round(amenity.distanceMeters / 350)),
       description: amenity.description || '',
       address: amenity.address || ''
     });
-    setEditingAmenity(amenity);
-    setIsAddingAmenity(false);
+
     centerMapOn(amenity.lat, amenity.lng, 17);
   };
 
-  // Save Amenity to Supabase
+  const handleCancelAmenityForm = () => {
+    setIsAddingAmenity(false);
+    setEditingAmenity(null);
+  };
+
   const handleSaveAmenity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amenityForm.name.trim()) {
@@ -476,47 +771,48 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
 
     setIsSavingAmenity(true);
     try {
-      const payload: Partial<NearbyAmenity> = {
-        ...(editingAmenity ? { id: editingAmenity.id } : {}),
+      const payload: NearbyAmenity = {
+        id: editingAmenity ? editingAmenity.id : `amenity-${Date.now()}`,
         propertyId: selectedPropertyId,
-        name: amenityForm.name,
+        name: amenityForm.name.trim(),
         category: amenityForm.category,
-        distanceMeters: Number(amenityForm.distanceMeters),
-        walkingTimeMinutes: Number(amenityForm.walkingTimeMinutes),
-        drivingTimeMinutes: Number(amenityForm.drivingTimeMinutes || 0),
-        lat: Number(amenityForm.lat),
-        lng: Number(amenityForm.lng),
-        description: amenityForm.description,
-        address: amenityForm.address
+        lat: amenityForm.lat,
+        lng: amenityForm.lng,
+        distanceMeters: amenityForm.distanceMeters,
+        walkingTimeMinutes: amenityForm.walkingTimeMinutes,
+        drivingTimeMinutes: amenityForm.drivingTimeMinutes,
+        description: amenityForm.description.trim(),
+        address: amenityForm.address.trim(),
+        icon: amenityForm.category === 'transit' ? 'Train' : 'MapPin'
       };
 
-      const saved = await database.saveNearbyAmenity(payload);
-      
-      // Update local state
-      if (editingAmenity) {
-        setAmenities(prev => prev.map(a => a.id === saved.id ? saved : a));
-      } else {
-        setAmenities(prev => [...prev, saved]);
-      }
+      await database.saveNearbyAmenity(payload);
 
+      await loadAmenities(selectedPropertyId);
+      clearFacilityCache(selectedPropertyId);
       setIsAddingAmenity(false);
       setEditingAmenity(null);
-      if (showToast) showToast(`Titik fasilitas ${saved.name} berhasil disimpan ke Supabase!`);
+
+      if (showToast) {
+        showToast(`Fasilitas "${payload.name}" berhasil disimpan.`);
+      }
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Save amenity error:', err);
-      if (showToast) showToast(err.message || 'Gagal menyimpan fasilitas.', 'error');
+      if (showToast) {
+        showToast(err.message || 'Gagal menyimpan fasilitas.', 'error');
+      }
     } finally {
       setIsSavingAmenity(false);
     }
   };
 
-  // Delete Amenity
   const handleDeleteAmenity = async (amenity: NearbyAmenity) => {
     if (!confirm(`Apakah Anda yakin ingin menghapus fasilitas "${amenity.name}"?`)) return;
 
     try {
       await database.deleteNearbyAmenity(amenity.id);
       setAmenities(prev => prev.filter(a => a.id !== amenity.id));
+      clearFacilityCache(selectedPropertyId);
       if (editingAmenity?.id === amenity.id) {
         setEditingAmenity(null);
       }
@@ -537,12 +833,13 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     try {
       const defaultForProp = INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === selectedPropertyId);
       if (defaultForProp.length === 0) {
-        alert('Tidak ada template data default untuk properti ini.');
+        alert('Tidak ada template data default untuk properti ini. Gunakan fitur "Tarik dari OpenStreetMap" untuk memindai otomatis.');
         return;
       }
 
       await database.batchSeedNearbyAmenities(defaultForProp);
       await loadAmenities(selectedPropertyId);
+      clearFacilityCache(selectedPropertyId);
       if (showToast) showToast(`Berhasil menyinkronkan ${defaultForProp.length} titik fasilitas ke Supabase!`);
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Seed error:', err);
@@ -563,11 +860,14 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
               <Compass size={18} />
             </div>
             <div>
-              <h2 className="text-xl font-black font-display text-slate-900 uppercase tracking-tight">
-                Peta & Manajemen Titik Koordinat GPS
+              <h2 className="text-xl font-black font-display text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                <span>Peta & Manajemen Titik Koordinat GPS</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-mono">
+                  OpenStreetMap + Leaflet
+                </span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Konfigurasi titik akurat Latitude / Longitude cabang kos dan fasilitas publik terdekat (transit, kampus, RS, kuliner) langsung ke Supabase.
+                Atur koordinat latitude/longitude kos, tarik fasilitas publik otomatis dari OpenStreetMap (Overpass API), atau salin link Google Maps.
               </p>
             </div>
           </div>
@@ -597,102 +897,87 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         </div>
       </div>
 
-      {/* Main Grid: Left Map + Right Settings */}
+      {/* Main Grid: Interactive Map (Left) + Coordinate Control Panel (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* LEFT: Live Interactive Leaflet Map Box (7 Cols) */}
+        {/* ==================================================== */}
+        {/* LEFT COLUMN: INTERACTIVE LEAFLET MAP */}
+        {/* ==================================================== */}
         <div className="lg:col-span-7 space-y-3">
           
-          {/* Map Top Bar: Search & Layer Toggle */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-xs space-y-2">
+          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs space-y-3">
             
-            {/* Search Landmark or Address Form */}
-            <form onSubmit={handleSearchLocation} className="flex gap-2">
+            {/* Map Search Bar */}
+            <form onSubmit={handleSearchAddress} className="flex gap-2">
               <div className="relative flex-1">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Cari gedung, jalan, stasiun, atau kampus di peta..."
-                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-[#2E6F40]"
+                  placeholder="Cari lokasi/alamat via OpenStreetMap Nominatim..."
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40] transition"
                 />
               </div>
               <button
                 type="submit"
                 disabled={isSearching}
-                className="px-4 py-2 bg-[#2E6F40] hover:bg-[#235531] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="px-4 py-2 bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 shrink-0 disabled:opacity-50"
               >
-                {isSearching ? <RotateCw size={12} className="animate-spin" /> : <Search size={12} />}
+                {isSearching ? <RotateCw size={13} className="animate-spin" /> : <Search size={13} />}
                 <span>Cari</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleGetCurrentLocation}
-                title="Gunakan GPS Perangkat Saat Ini"
-                className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition cursor-pointer flex items-center justify-center border border-slate-200"
-              >
-                <Navigation size={14} className="text-[#2E6F40]" />
               </button>
             </form>
 
-            {/* Search Autocomplete Results Dropdown */}
+            {/* Search Results Dropdown */}
             {searchResults.length > 0 && (
-              <div className="bg-white border border-slate-200 rounded-xl p-2 max-h-48 overflow-y-auto space-y-1 z-30">
-                <div className="text-[10px] font-bold text-slate-400 px-2 py-1 uppercase font-mono">
+              <div className="p-2 bg-slate-50 rounded-xl border border-slate-200 space-y-1 max-h-48 overflow-y-auto">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1">
                   Hasil Pencarian Lokasi:
                 </div>
-                {searchResults.map((res, i) => (
+                {searchResults.map((res, idx) => (
                   <button
-                    key={i}
+                    key={idx}
                     type="button"
-                    onClick={() => handleApplySearchResult(res)}
-                    className="w-full text-left px-3 py-1.5 hover:bg-emerald-50 rounded-lg text-xs text-slate-700 flex items-start gap-2 transition"
+                    onClick={() => handleSelectSearchResult(res)}
+                    className="w-full text-left p-2 hover:bg-emerald-50 rounded-lg text-xs transition flex items-start gap-2 cursor-pointer"
                   >
-                    <MapPin size={12} className="text-[#2E6F40] shrink-0 mt-0.5" />
-                    <span className="truncate">{res.display_name}</span>
+                    <MapPin size={14} className="text-[#2E6F40] shrink-0 mt-0.5" />
+                    <div className="flex-1 truncate">
+                      <span className="font-bold text-slate-800 block truncate">{res.display_name}</span>
+                      <span className="text-[10px] font-mono text-slate-500">{res.lat}, {res.lon}</span>
+                    </div>
                   </button>
                 ))}
               </div>
             )}
 
-            {/* Quick Layer Switcher and Info */}
+            {/* Quick Layer Switcher */}
             <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-slate-100 text-xs">
               <div className="flex items-center gap-1.5">
                 <Layers size={13} className="text-slate-500" />
                 <span className="text-[11px] font-bold text-slate-500">Tampilan Peta:</span>
                 <button
                   type="button"
-                  onClick={() => setActiveTileType('positron')}
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition ${
-                    activeTileType === 'positron' 
+                  onClick={() => setActiveTileType('osm')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                    activeTileType === 'osm' 
                       ? 'bg-[#2E6F40] text-white shadow-xs' 
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Light Clean
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTileType('streets')}
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition ${
-                    activeTileType === 'streets' 
-                      ? 'bg-[#2E6F40] text-white shadow-xs' 
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  OSM Jalan
+                  OpenStreetMap (Standar)
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTileType('satellite')}
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition ${
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
                     activeTileType === 'satellite' 
                       ? 'bg-[#2E6F40] text-white shadow-xs' 
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Satelit
+                  Citra Satelit Esri
                 </button>
               </div>
 
@@ -700,426 +985,612 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                 <button
                   type="button"
                   onClick={() => centerMapOn(propLat, propLng, 17)}
-                  className="text-[10px] font-bold text-[#2E6F40] hover:underline flex items-center gap-1"
+                  className="text-[10px] font-bold text-[#2E6F40] hover:underline flex items-center gap-1 cursor-pointer"
                 >
                   <Building2 size={11} />
-                  Fokus Cabang
+                  <span>Fokus Properti</span>
                 </button>
-                <a
-                  href={`https://www.google.com/maps/search/?api=1&query=${propLat},${propLng}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[10px] font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1"
-                >
-                  <span>Google Maps</span>
-                  <ArrowUpRight size={11} />
-                </a>
-              </div>
-            </div>
-          </div>
-
-          {/* Leaflet Map Canvas Container */}
-          <div className="w-full h-[460px] rounded-2xl overflow-hidden border border-slate-300 relative shadow-sm z-10 bg-slate-100">
-            <div ref={mapContainerRef} className="w-full h-full" />
-            
-            {/* Guide overlay bottom left */}
-            <div className="absolute bottom-3 left-3 z-[400] bg-white/90 backdrop-blur-xs border border-slate-300/80 px-3 py-1.5 rounded-xl shadow-md text-[10px] text-slate-700 font-medium flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>
-                {isAddingAmenity || editingAmenity 
-                  ? 'Klik peta / drag pin untuk memposisikan titik fasilitas.' 
-                  : 'Geser (drag) pin hijau atau klik peta untuk menggeser lokasi properti.'}
-              </span>
-            </div>
-          </div>
-
-          {/* Live Coordinates Readout Banner */}
-          <div className="bg-slate-900 text-white rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
-            <div className="space-y-0.5 text-center sm:text-left">
-              <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider block">
-                Koordinat GPS Terpilih ({activeProperty?.name || 'Cabang'}):
-              </span>
-              <div className="font-mono text-xs sm:text-sm font-bold text-amber-400 flex items-center justify-center sm:justify-start gap-3">
-                <span>LAT: {propLat}</span>
-                <span>•</span>
-                <span>LNG: {propLng}</span>
               </div>
             </div>
 
-            <button
-              type="button"
-              disabled={isSavingProperty}
-              onClick={handleSavePropertyCoordinates}
-              className="w-full sm:w-auto px-5 py-2.5 bg-[#2E6F40] hover:bg-[#235531] text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-lg flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
-            >
-              {isSavingProperty ? (
-                <>
-                  <RotateCw size={14} className="animate-spin" />
-                  <span>Menyimpan ke Supabase...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle size={14} />
-                  <span>Simpan Titik Properti</span>
-                </>
+            {/* Leaflet Map DOM Container */}
+            <div className="relative w-full h-[460px] rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+              <div ref={mapContainerRef} className="w-full h-full z-10" />
+
+              {/* Error Banner */}
+              {mapTileError && (
+                <div className="absolute top-3 left-3 right-3 z-[500] bg-rose-600/90 text-white text-xs p-2.5 rounded-xl shadow-lg flex items-center gap-2">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span className="flex-1">{mapTileError}</span>
+                  <button onClick={() => setMapTileError(null)} className="text-white font-bold">✕</button>
+                </div>
               )}
-            </button>
+
+              {/* Interactive Helper Overlay */}
+              <div className="absolute bottom-3 right-3 z-[400] bg-slate-900/85 text-white px-3 py-1.5 rounded-xl text-[10px] font-mono shadow-md backdrop-blur-xs flex items-center gap-2">
+                <span>Lat: {propLat.toFixed(6)}, Lng: {propLng.toFixed(6)}</span>
+              </div>
+            </div>
+
+            {/* Map Instruction Help Note */}
+            <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-start gap-2">
+              <Info size={15} className="text-[#2E6F40] shrink-0 mt-0.5" />
+              <div className="text-[11px] leading-relaxed">
+                <strong>Tips Navigasi Peta:</strong> Klik di peta atau geser (drag) penanda gedung 🏢 untuk memindahkan posisi properti secara realtime. Saat menambah/mengedit fasilitas publik, klik di peta untuk menaruh pin fasilitas tersebut.
+              </div>
+            </div>
+
           </div>
+
         </div>
 
-        {/* RIGHT: Detail Forms & Nearby Amenities Management (5 Cols) */}
-        <div className="lg:col-span-5 space-y-4">
+        {/* ==================================================== */}
+        {/* RIGHT COLUMN: PROPERTY & AMENITY CONTROLS */}
+        {/* ==================================================== */}
+        <div className="lg:col-span-5 space-y-5">
           
-          {/* TAB 1: Property Location Details Card */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 font-mono flex items-center gap-1.5">
-                <Building2 size={13} className="text-[#2E6F40]" />
-                Data Koordinat Gedung Cabang
-              </h3>
-              <span className="text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md border border-emerald-200">
-                ID: {selectedPropertyId}
-              </span>
+          {/* Card 1: Property Location Coordinates */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="text-[10px] font-black font-mono text-[#2E6F40] uppercase tracking-wider block">
+                  TITIK KOORDINAT PROPERTI
+                </span>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  {activeProperty?.name || 'Cabang Kos'}
+                </h3>
+              </div>
+              
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${propLat},${propLng}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] font-bold text-[#2E6F40] hover:underline flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded-lg"
+              >
+                <span>Buka Google Maps</span>
+                <ExternalLink size={10} />
+              </a>
             </div>
 
-            <div className="space-y-2.5">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-500 uppercase font-mono">Alamat Fisik Cabang</label>
-                <textarea
-                  rows={2}
-                  value={propAddress}
-                  onChange={(e) => setPropAddress(e.target.value)}
-                  placeholder="Contoh: Jl. Salemba Raya No. 4, Jakarta Pusat"
-                  className="w-full bg-slate-50 border border-slate-200 p-2 rounded-xl text-xs text-slate-800 outline-none focus:border-[#2E6F40] resize-none font-medium"
+            {/* Google Maps Smart Paste Input */}
+            <div className="space-y-1.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <ClipboardPaste size={13} className="text-[#2E6F40]" />
+                  <span>Smart Paste (Link / Koordinat Google Maps)</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowGmapsGuide(!showGmapsGuide)}
+                  className="text-[10px] text-[#2E6F40] font-bold hover:underline flex items-center gap-0.5 cursor-pointer"
+                >
+                  <HelpCircle size={10} />
+                  <span>Panduan</span>
+                </button>
+              </div>
+
+              <input
+                type="text"
+                value={gmapsPropInput}
+                onChange={(e) => handleGmapsPropPaste(e.target.value)}
+                placeholder="Paste link https://maps.app.goo.gl/... atau koordinat -6.1956, 106.8488"
+                className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 outline-none focus:border-[#2E6F40]"
+              />
+
+              {propParseStatus.status === 'success' && (
+                <div className="text-[11px] text-emerald-700 font-bold flex items-center gap-1 pt-0.5">
+                  <CheckCircle size={12} className="text-emerald-600 shrink-0" />
+                  <span>{propParseStatus.message}</span>
+                </div>
+              )}
+              {propParseStatus.status === 'error' && (
+                <div className="text-[11px] text-rose-600 font-medium flex items-center gap-1 pt-0.5">
+                  <AlertCircle size={12} className="text-rose-500 shrink-0" />
+                  <span>{propParseStatus.message}</span>
+                </div>
+              )}
+
+              {showGmapsGuide && (
+                <div className="p-2.5 bg-white border border-slate-200 rounded-lg text-[10px] text-slate-600 space-y-1 leading-relaxed mt-2 animate-fade-in">
+                  <p className="font-bold text-slate-800">Cara cepat ambil koordinat dari Google Maps:</p>
+                  <ol className="list-decimal pl-4 space-y-0.5">
+                    <li>Buka Google Maps di browser / HP, cari lokasi kos.</li>
+                    <li>Klik kanan pada titik lokasi, klik angka koordinat paling atas untuk copy.</li>
+                    <li>Atau salin (copy) link URL Google Maps dari address bar.</li>
+                    <li>Tempel (paste) ke kotak di atas & koordinat akan otomatis terisi!</li>
+                  </ol>
+                </div>
+              )}
+            </div>
+
+            {/* Latitude & Longitude Numeric Inputs */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase font-mono block mb-1">
+                  Latitude:
+                </label>
+                <input
+                  type="number"
+                  step="0.000001"
+                  value={propLat}
+                  onChange={(e) => setPropLat(parseFloat(e.target.value) || 0)}
+                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40]"
                 />
               </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase font-mono">Latitude (Derajat)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={propLat}
-                    onChange={(e) => setPropLat(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-slate-50 border border-slate-200 p-2 rounded-xl text-xs font-mono font-bold text-slate-900"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase font-mono">Longitude (Derajat)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={propLng}
-                    onChange={(e) => setPropLng(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-slate-50 border border-slate-200 p-2 rounded-xl text-xs font-mono font-bold text-slate-900"
-                  />
-                </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase font-mono block mb-1">
+                  Longitude:
+                </label>
+                <input
+                  type="number"
+                  step="0.000001"
+                  value={propLng}
+                  onChange={(e) => setPropLng(parseFloat(e.target.value) || 0)}
+                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40]"
+                />
               </div>
             </div>
+
+            {/* Address Input */}
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[11px] font-bold text-slate-600 uppercase font-mono">
+                  Alamat Lengkap:
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleReverseGeocode(propLat, propLng)}
+                  className="text-[10px] text-[#2E6F40] font-bold hover:underline cursor-pointer"
+                >
+                  ⚡ Deteksi Alamat Otomatis
+                </button>
+              </div>
+              <textarea
+                rows={2}
+                value={propAddress}
+                onChange={(e) => setPropAddress(e.target.value)}
+                placeholder="Alamat fisik properti..."
+                className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40]"
+              />
+            </div>
+
+            {/* Save Coordinates Button */}
+            <button
+              type="button"
+              onClick={handleSavePropertyCoordinates}
+              disabled={isSavingProperty}
+              className="w-full py-2.5 bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-extrabold uppercase tracking-wider rounded-xl transition shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              {isSavingProperty ? <RotateCw size={14} className="animate-spin" /> : <Check size={14} />}
+              <span>{isSavingProperty ? 'Menyimpan ke Supabase...' : 'Simpan Titik Koordinat'}</span>
+            </button>
+
           </div>
 
-          {/* TAB 2: Nearby Amenities (Fasilitas Sekitar) Manager */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 flex-wrap gap-2">
+          {/* Card 2: Nearby Amenities & OpenStreetMap Auto-Scan Engine */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            
+            <div className="flex justify-between items-center flex-wrap gap-2">
               <div>
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 font-mono flex items-center gap-1.5">
-                  <Sparkles size={13} className="text-amber-500" />
-                  Fasilitas & Akses Sekitar ({amenities.length})
-                </h3>
-                <p className="text-[10px] text-slate-500">Halte, KRL, Kampus, RS, Minimarket, Kuliner.</p>
+                <span className="text-[10px] font-black font-mono text-[#2E6F40] uppercase tracking-wider block">
+                  FASILITAS UMUM SEKITAR
+                </span>
+                <h4 className="text-sm font-extrabold text-slate-900">
+                  Daftar POI Terdekat ({amenities.length})
+                </h4>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {/* Auto Scan from OSM Overpass Button */}
                 <button
                   type="button"
-                  disabled={isSeeding}
-                  onClick={handleSeedDefaultAmenities}
-                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-bold transition flex items-center gap-1 cursor-pointer border border-slate-200"
-                  title="Sinkronkan data kurasi awal fasilitas ke Supabase"
+                  onClick={handleScanOsmFacilities}
+                  disabled={isScanningOsm}
+                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-extrabold transition flex items-center gap-1 cursor-pointer shadow-xs disabled:opacity-50"
+                  title="Pindai POI publik sekitar kos dari OpenStreetMap"
                 >
-                  <RotateCw size={10} className={isSeeding ? 'animate-spin' : ''} />
-                  <span>Sync Default</span>
+                  <Globe size={12} className={isScanningOsm ? 'animate-spin' : ''} />
+                  <span>{isScanningOsm ? 'Memindai...' : 'Tarik dari OSM'}</span>
                 </button>
+
                 <button
                   type="button"
-                  onClick={handleStartAddAmenity}
-                  className="px-3 py-1.5 bg-[#2E6F40] hover:bg-[#235531] text-white rounded-xl text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-xs"
+                  onClick={handleAddNewAmenity}
+                  className="px-2.5 py-1.5 bg-[#3A444D] hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                 >
-                  <Plus size={11} />
-                  <span>Tambah Titik</span>
+                  <Plus size={12} />
+                  <span>Manual</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSeedDefaultAmenities}
+                  disabled={isSeeding}
+                  className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-bold transition flex items-center gap-1 cursor-pointer"
+                  title="Sinkronkan data template awal ke Supabase"
+                >
+                  <Sparkles size={11} className="text-amber-500" />
+                  <span>Template</span>
                 </button>
               </div>
             </div>
 
-            {/* ADD / EDIT AMENITY FORM */}
+            {/* Amenity Add/Edit Form Modal/Section */}
             {(isAddingAmenity || editingAmenity) && (
-              <form onSubmit={handleSaveAmenity} className="bg-emerald-50/60 border border-emerald-200 rounded-2xl p-4 space-y-3 animate-fade-in text-left">
-                <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
-                  <h4 className="text-[11px] font-black uppercase text-emerald-900 font-mono flex items-center gap-1.5">
-                    {editingAmenity ? <Edit2 size={12} /> : <Plus size={12} />}
-                    {editingAmenity ? 'Edit Titik Fasilitas' : 'Tambah Titik Fasilitas Baru'}
-                  </h4>
+              <form onSubmit={handleSaveAmenity} className="p-4 bg-emerald-50/50 border border-emerald-200 rounded-2xl space-y-3 animate-fade-in">
+                <div className="flex justify-between items-center border-b border-emerald-200/60 pb-2">
+                  <span className="text-xs font-black text-[#2E6F40] uppercase tracking-wide flex items-center gap-1.5">
+                    <Edit2 size={12} />
+                    {editingAmenity ? `Edit Fasilitas: ${editingAmenity.name}` : 'Tambah Titik Fasilitas Baru'}
+                  </span>
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsAddingAmenity(false);
-                      setEditingAmenity(null);
-                    }}
-                    className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                    onClick={handleCancelAmenityForm}
+                    className="text-slate-400 hover:text-slate-600 font-bold text-xs"
                   >
-                    <X size={14} />
+                    ✕
                   </button>
                 </div>
 
+                {/* Smart Paste for Amenity */}
                 <div className="space-y-1">
-                  <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Nama Tempat / Fasilitas</label>
                   <input
                     type="text"
-                    required
-                    value={amenityForm.name}
-                    onChange={(e) => setAmenityForm({ ...amenityForm, name: e.target.value })}
-                    placeholder="Contoh: Halte Transjakarta Salemba UI"
-                    className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs font-semibold text-slate-900 outline-none focus:border-[#2E6F40]"
+                    value={gmapsAmenityInput}
+                    onChange={(e) => handleGmapsAmenityPaste(e.target.value)}
+                    placeholder="Smart Paste Google Maps fasilitas..."
+                    className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 outline-none focus:border-[#2E6F40]"
                   />
+                  {amenityParseStatus.status === 'success' && (
+                    <div className="text-[10px] text-emerald-700 font-bold flex items-center gap-1">
+                      <CheckCircle size={10} className="shrink-0" />
+                      <span>{amenityParseStatus.message}</span>
+                    </div>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Kategori Fasilitas</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">Nama Fasilitas:</label>
+                    <input
+                      type="text"
+                      required
+                      value={amenityForm.name}
+                      onChange={(e) => setAmenityForm(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="Contoh: Stasiun Salemba / UI Depok"
+                      className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#2E6F40]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">Kategori:</label>
                     <select
                       value={amenityForm.category}
-                      onChange={(e) => setAmenityForm({ ...amenityForm, category: e.target.value as any })}
-                      className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                      onChange={(e) => setAmenityForm(prev => ({ ...prev, category: e.target.value as AmenityCategory }))}
+                      className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#2E6F40] cursor-pointer"
                     >
-                      {AMENITY_CATEGORIES.map(cat => (
-                        <option key={cat.id} value={cat.id}>
-                          {cat.labelId}
-                        </option>
+                      {AMENITY_CATEGORIES.map(c => (
+                        <option key={c.id} value={c.id}>{c.labelId}</option>
                       ))}
                     </select>
                   </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Jarak dari Kos (Meter)</label>
-                    <input
-                      type="number"
-                      required
-                      value={amenityForm.distanceMeters}
-                      onChange={(e) => {
-                        const dist = Number(e.target.value);
-                        setAmenityForm({
-                          ...amenityForm,
-                          distanceMeters: dist,
-                          walkingTimeMinutes: Math.max(1, Math.round(dist / 80)),
-                          drivingTimeMinutes: Math.max(1, Math.round(dist / 400))
-                        });
-                      }}
-                      className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs font-mono font-bold text-slate-900"
-                    />
-                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Estimasi Jalan Kaki (Menit)</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">Jarak (Meter):</label>
+                    <input
+                      type="number"
+                      value={amenityForm.distanceMeters}
+                      onChange={(e) => setAmenityForm(prev => ({ ...prev, distanceMeters: Number(e.target.value) }))}
+                      className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">Jalan Kaki (Mnt):</label>
                     <input
                       type="number"
                       value={amenityForm.walkingTimeMinutes}
-                      onChange={(e) => setAmenityForm({ ...amenityForm, walkingTimeMinutes: Number(e.target.value) })}
-                      className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs font-mono text-slate-900"
+                      onChange={(e) => setAmenityForm(prev => ({ ...prev, walkingTimeMinutes: Number(e.target.value) }))}
+                      className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-800"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Estimasi Kendaraan (Menit)</label>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">Motor (Mnt):</label>
                     <input
                       type="number"
                       value={amenityForm.drivingTimeMinutes}
-                      onChange={(e) => setAmenityForm({ ...amenityForm, drivingTimeMinutes: Number(e.target.value) })}
-                      className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs font-mono text-slate-900"
+                      onChange={(e) => setAmenityForm(prev => ({ ...prev, drivingTimeMinutes: Number(e.target.value) }))}
+                      className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-800"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Latitude GPS</label>
-                    <input
-                      type="number"
-                      step="any"
-                      required
-                      value={amenityForm.lat}
-                      onChange={(e) => setAmenityForm({ ...amenityForm, lat: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs font-mono text-slate-900"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Longitude GPS</label>
-                    <input
-                      type="number"
-                      step="any"
-                      required
-                      value={amenityForm.lng}
-                      onChange={(e) => setAmenityForm({ ...amenityForm, lng: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs font-mono text-slate-900"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[9px] font-bold uppercase text-slate-500 font-mono">Deskripsi Singkat / Akses</label>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 block mb-1">Deskripsi Singkat:</label>
                   <input
                     type="text"
                     value={amenityForm.description}
-                    onChange={(e) => setAmenityForm({ ...amenityForm, description: e.target.value })}
-                    placeholder="Contoh: Terintegrasi dengan koridor Transjakarta 5 & 5C"
-                    className="w-full bg-white border border-slate-300 p-2 rounded-xl text-xs text-slate-800 outline-none focus:border-[#2E6F40]"
+                    onChange={(e) => setAmenityForm(prev => ({ ...prev, description: e.target.value }))}
+                    placeholder="Contoh: Akses KRL Commuter Line & TransJakarta..."
+                    className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 outline-none focus:border-[#2E6F40]"
                   />
                 </div>
 
                 <div className="flex gap-2 pt-1">
                   <button
-                    type="button"
-                    onClick={() => {
-                      setIsAddingAmenity(false);
-                      setEditingAmenity(null);
-                    }}
-                    className="flex-1 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer transition"
-                  >
-                    Batal
-                  </button>
-                  <button
                     type="submit"
                     disabled={isSavingAmenity}
-                    className="flex-1 py-2 bg-[#2E6F40] hover:bg-[#235531] text-white rounded-xl text-xs font-bold cursor-pointer transition flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-50"
+                    className="flex-1 py-2 bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-extrabold uppercase rounded-lg transition cursor-pointer disabled:opacity-50"
                   >
-                    {isSavingAmenity ? (
-                      <RotateCw size={12} className="animate-spin" />
-                    ) : (
-                      <Check size={12} />
-                    )}
-                    <span>Simpan Fasilitas</span>
+                    {isSavingAmenity ? 'Menyimpan...' : 'Simpan Fasilitas'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelAmenityForm}
+                    className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer"
+                  >
+                    Batal
                   </button>
                 </div>
               </form>
             )}
 
-            {/* Category Filter Pills */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+            {/* Amenity List Filter Pills */}
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-1">
               <button
                 type="button"
                 onClick={() => setSelectedCategory('all')}
-                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition whitespace-nowrap ${
-                  selectedCategory === 'all'
-                    ? 'bg-[#2E6F40] text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 ${
+                  selectedCategory === 'all' ? 'bg-[#3A444D] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
                 Semua ({amenities.length})
               </button>
-              {AMENITY_CATEGORIES.map(cat => {
-                const count = amenities.filter(a => a.category === cat.id).length;
+              {AMENITY_CATEGORIES.map(c => {
+                const count = amenities.filter(a => a.category === c.id).length;
                 return (
                   <button
-                    key={cat.id}
+                    key={c.id}
                     type="button"
-                    onClick={() => setSelectedCategory(cat.id)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition whitespace-nowrap ${
-                      selectedCategory === cat.id
-                        ? 'bg-[#2E6F40] text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    onClick={() => setSelectedCategory(c.id)}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 ${
+                      selectedCategory === c.id ? 'shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
+                    style={{
+                      backgroundColor: selectedCategory === c.id ? c.bgColor : undefined,
+                      color: selectedCategory === c.id ? c.color : undefined
+                    }}
                   >
-                    {cat.labelId} ({count})
+                    {c.labelId} ({count})
                   </button>
                 );
               })}
             </div>
 
-            {/* Amenity List Rows */}
-            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-              {isLoadingAmenities ? (
-                <div className="p-6 text-center text-xs text-slate-400">
-                  <RotateCw size={16} className="animate-spin mx-auto mb-2 text-[#2E6F40]" />
-                  Memuat data titik fasilitas dari Supabase...
-                </div>
-              ) : amenities.length === 0 ? (
-                <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200 text-center space-y-2">
-                  <p className="text-xs text-slate-500 font-medium">Belum ada titik fasilitas yang terdaftar untuk cabang ini.</p>
-                  <button
-                    type="button"
-                    onClick={handleSeedDefaultAmenities}
-                    className="text-xs font-bold text-[#2E6F40] hover:underline"
-                  >
-                    Klik di sini untuk sinkronisasi template fasilitas awal
-                  </button>
-                </div>
-              ) : (
-                (selectedCategory === 'all' 
-                  ? amenities 
-                  : amenities.filter(a => a.category === selectedCategory)
-                ).map((item) => {
-                  const catConfig = AMENITY_CATEGORIES.find(c => c.id === item.category) || AMENITY_CATEGORIES[0];
-                  const isSelected = editingAmenity?.id === item.id;
-
+            {/* Amenity Items List */}
+            <div className="space-y-2 max-h-72 overflow-y-auto divide-y divide-slate-100 pr-1">
+              {amenities
+                .filter(a => selectedCategory === 'all' || a.category === selectedCategory)
+                .map(amenity => {
+                  const catConfig = AMENITY_CATEGORIES.find(c => c.id === amenity.category) || AMENITY_CATEGORIES[0];
                   return (
                     <div
-                      key={item.id}
-                      className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${
-                        isSelected 
-                          ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-300' 
-                          : 'bg-white border-slate-200 hover:border-slate-300'
-                      }`}
+                      key={amenity.id}
+                      className="pt-2 pb-1 flex justify-between items-start gap-2 hover:bg-slate-50 p-2 rounded-xl transition"
                     >
-                      <div 
-                        className="flex-1 cursor-pointer"
-                        onClick={() => {
-                          centerMapOn(item.lat, item.lng, 17);
-                        }}
-                      >
-                        <div className="flex items-center gap-2">
+                      <div className="space-y-0.5 flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span
-                            className="px-2 py-0.5 rounded-md text-[9px] font-bold"
+                            className="text-[9px] font-bold px-1.5 py-0.2 rounded"
                             style={{ backgroundColor: catConfig.bgColor, color: catConfig.color }}
                           >
                             {catConfig.labelId}
                           </span>
-                          <h5 className="text-xs font-bold text-slate-900 truncate max-w-[200px]">
-                            {item.name}
-                          </h5>
+                          <span className="text-xs font-bold text-slate-900 truncate">
+                            {amenity.name}
+                          </span>
                         </div>
-                        <p className="text-[10px] text-slate-500 mt-1 font-mono">
-                          {item.distanceMeters}m • ~{item.walkingTimeMinutes} mnt jalan kaki • ({item.lat}, {item.lng})
+                        <p className="text-[11px] text-slate-500 truncate">
+                          {amenity.description || amenity.address || '-'}
                         </p>
+                        <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                          <span>📍 {amenity.distanceMeters}m</span>
+                          <span>🚶‍♂️ {amenity.walkingTimeMinutes} mnt</span>
+                          <span>🛵 {amenity.drivingTimeMinutes || 2} mnt</span>
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
                           type="button"
-                          onClick={() => handleStartEditAmenity(item)}
-                          className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition"
-                          title="Edit Titik"
+                          onClick={() => handleEditAmenity(amenity)}
+                          className="p-1.5 hover:bg-slate-200 text-slate-600 rounded-lg transition"
+                          title="Edit Fasilitas"
                         >
                           <Edit2 size={12} />
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteAmenity(item)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition"
-                          title="Hapus Titik"
+                          onClick={() => handleDeleteAmenity(amenity)}
+                          className="p-1.5 hover:bg-rose-100 text-rose-600 rounded-lg transition"
+                          title="Hapus Fasilitas"
                         >
                           <Trash2 size={12} />
                         </button>
                       </div>
                     </div>
                   );
-                })
+                })}
+
+              {amenities.length === 0 && !isLoadingAmenities && (
+                <div className="p-6 text-center text-slate-400 text-xs">
+                  Belum ada data fasilitas tersimpan. Klik "Tarik dari OSM" untuk memindai otomatis via OpenStreetMap.
+                </div>
               )}
             </div>
+
           </div>
 
         </div>
+
       </div>
+
+      {/* ==================================================== */}
+      {/* OPENSTREETMAP SCAN & IMPORT MODAL */}
+      {/* ==================================================== */}
+      {showOsmScanModal && (
+        <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[85vh] shadow-2xl flex flex-col overflow-hidden border border-slate-200 animate-scale-up">
+            
+            {/* Modal Header */}
+            <div className="p-5 bg-[#3A444D] text-white flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-500/20 rounded-xl text-emerald-400 border border-emerald-400/30">
+                  <Globe size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold">
+                    Tarik Fasilitas dari OpenStreetMap (Overpass API)
+                  </h3>
+                  <p className="text-xs text-slate-300">
+                    Radius 3 km di sekitar {activeProperty?.name} (Lat: {propLat.toFixed(4)}, Lng: {propLng.toFixed(4)})
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowOsmScanModal(false)}
+                className="text-white/80 hover:text-white font-black text-sm p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 flex-1 overflow-y-auto space-y-4">
+              
+              {isScanningOsm && (
+                <div className="py-12 text-center space-y-3">
+                  <RotateCw size={32} className="mx-auto text-emerald-600 animate-spin" />
+                  <p className="text-xs font-bold text-slate-700">
+                    Menghubungi server OpenStreetMap Overpass API...
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    Memindai stasiun, kampus, rumah sakit, minimarket, dan kuliner di sekitar koordinat kos.
+                  </p>
+                </div>
+              )}
+
+              {!isScanningOsm && osmScanResults.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-100 text-xs">
+                    <span className="font-bold text-slate-700">
+                      Ditemukan {osmScanResults.length} titik fasilitas. Pilih yang ingin disimpan ke database:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSelectAllOsm}
+                      className="text-[11px] font-extrabold text-[#2E6F40] hover:underline cursor-pointer"
+                    >
+                      {selectedOsmIds.size === osmScanResults.length ? 'Batal Pilih Semua' : 'Pilih Semua'}
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                    {osmScanResults.map(item => {
+                      const isSelected = selectedOsmIds.has(item.id);
+                      const catConfig = AMENITY_CATEGORIES.find(c => c.id === item.category) || AMENITY_CATEGORIES[0];
+
+                      return (
+                        <div
+                          key={item.id}
+                          onClick={() => handleToggleOsmItem(item.id)}
+                          className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center gap-3 ${
+                            isSelected
+                              ? 'bg-emerald-50/70 border-emerald-400 shadow-xs'
+                              : 'bg-white border-slate-200 hover:border-slate-300 opacity-70'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleOsmItem(item.id)}
+                            className="w-4 h-4 rounded text-[#2E6F40] focus:ring-[#2E6F40] cursor-pointer"
+                          />
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className="text-[9px] font-bold px-1.5 py-0.2 rounded"
+                                style={{ backgroundColor: catConfig.bgColor, color: catConfig.color }}
+                              >
+                                {catConfig.labelId}
+                              </span>
+                              <span className="text-xs font-black text-slate-900 truncate">
+                                {item.name}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                              {item.description || item.address}
+                            </p>
+                          </div>
+
+                          <div className="text-right shrink-0 text-xs">
+                            <span className="font-black font-mono text-[#2E6F40] block">
+                              {item.distanceMeters < 1000 ? `${item.distanceMeters} m` : `${(item.distanceMeters / 1000).toFixed(1)} km`}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-medium">
+                              🚶‍♂️ {item.walkingTimeMinutes} mnt
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {!isScanningOsm && osmScanResults.length === 0 && (
+                <div className="py-10 text-center space-y-2">
+                  <AlertCircle size={28} className="mx-auto text-amber-500" />
+                  <p className="text-xs font-bold text-slate-700">Tidak ada POI yang ditemukan dalam radius 3 km</p>
+                  <p className="text-[11px] text-slate-400">Pastikan koordinat properti akurat dan terisi dengan benar.</p>
+                </div>
+              )}
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center shrink-0">
+              <span className="text-xs text-slate-500 font-medium">
+                {selectedOsmIds.size} fasilitas dipilih
+              </span>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowOsmScanModal(false)}
+                  className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  Tutup
+                </button>
+                <button
+                  type="button"
+                  onClick={handleImportSelectedOsmAmenities}
+                  disabled={isImportingOsm || selectedOsmIds.size === 0}
+                  className="px-5 py-2 bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-extrabold uppercase tracking-wider rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isImportingOsm ? <RotateCw size={13} className="animate-spin" /> : <DownloadCloud size={13} />}
+                  <span>{isImportingOsm ? 'Mengimpor...' : 'Impor ke Database'}</span>
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

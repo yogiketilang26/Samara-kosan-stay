@@ -46,6 +46,17 @@ body {
   color: #3A444D;
 }
 
+/* Prevent Chrome / Safari / Edge autofill blue or light background overriding dark input elements */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus, 
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #020617 inset !important;
+  -webkit-text-fill-color: #f8fafc !important;
+  transition: background-color 5000s ease-in-out 0s;
+  caret-color: #ffffff;
+}
+
 .font-display {
   font-family: var(--font-display);
 }

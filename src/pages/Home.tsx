@@ -22,6 +22,9 @@ import {
 import PremiumSearchFilter from '../components/premium/PremiumSearchFilter';
 import PremiumRoomGrid from '../components/premium/PremiumRoomGrid';
 import PropertyMapView from '../components/map/PropertyMapView';
+import { sanitizePropertyCoordinates, isValidCoordinate } from '../utils/mapCoordinates';
+import { createOsmStandardTileLayer } from '../utils/mapTiles';
+import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
 
 interface HomeProps {}
 
@@ -29,11 +32,14 @@ interface HomeProps {}
 const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => void }> = ({ property, onOpenFullMap }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const [tileError, setTileError] = useState(false);
+
+  const coords = sanitizePropertyCoordinates(property);
+  const lat = coords.lat;
+  const lng = coords.lng;
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const lat = property.lat || -6.368;
-    const lng = property.lng || 106.83;
 
     if (mapRef.current) {
       try {
@@ -49,11 +55,10 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
       scrollWheelZoom: false,
     }).setView([lat, lng], 16);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap &copy; CARTO',
-      subdomains: 'abcd',
-      maxZoom: 20
-    }).addTo(map);
+    createOsmStandardTileLayer(
+      {},
+      (hasError) => setTileError(hasError)
+    ).addTo(map);
 
     const customIcon = L.divIcon({
       className: 'custom-leaflet-detail-marker',
@@ -97,7 +102,7 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
         mapRef.current = null;
       }
     };
-  }, [property.id, property.lat, property.lng, property.name, property.address]);
+  }, [property.id, lat, lng, property.name, property.address]);
 
   return (
     <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 overflow-hidden relative flex flex-col justify-between min-h-[220px] h-full shadow-xs text-left space-y-3">
@@ -107,7 +112,7 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
             <MapPin size={13} className="text-[#2E6F40]" />
             Titik Lokasi Gedung & Alamat
           </h4>
-          <p className="text-[10px] text-[#64748B] font-mono mt-0.5">LAT: {property.lat || -6.368} | LNG: {property.lng || 106.83}</p>
+          <p className="text-[10px] text-[#64748B] font-mono mt-0.5">LAT: {lat} | LNG: {lng}</p>
         </div>
         <div className="flex items-center gap-2">
           {onOpenFullMap && (
@@ -121,7 +126,7 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
             </button>
           )}
           <a
-            href={`https://www.google.com/maps/search/?api=1&query=${property.lat || -6.368},${property.lng || 106.83}`}
+            href={`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`}
             target="_blank"
             rel="noreferrer"
             className="text-[10px] font-bold text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#d8ebd8] px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
@@ -365,6 +370,30 @@ export default function Home({}: HomeProps) {
     }
   }, [hooksLoading]);
 
+  // Periodic background check to release rooms with 0 lease duration past 24h grace period
+  useEffect(() => {
+    const runAutoRelease = async () => {
+      try {
+        const result = await database.autoReleaseExpiredLeases();
+        if (result.releasedRooms > 0) {
+          console.log(`[Home Auto-Release] Released ${result.releasedRooms} expired rooms.`);
+          const [freshRooms, freshTenants] = await Promise.all([
+            database.fetchRooms(),
+            database.fetchTenants()
+          ]);
+          if (freshRooms && freshRooms.length > 0) setRooms(freshRooms);
+          if (freshTenants) setTenants(freshTenants);
+        }
+      } catch (e) {
+        console.warn('[Home] Auto release check:', e);
+      }
+    };
+
+    runAutoRelease();
+    const interval = setInterval(runAutoRelease, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Listener for custom navigation events (e.g. from Navbar)
   useEffect(() => {
     const handleCustomNav = (e: any) => {
@@ -540,9 +569,20 @@ export default function Home({}: HomeProps) {
   };
 
   const handleSelectRoom = (room: Room, flowType: 'monthly' | 'daily' | 'survey') => {
+    // Check real-time lease status for 24h grace period auto-release
+    const leaseStatus = getRoomLeaseStatus(room, tenants, []);
+
     if (room.status === 'occupied' || room.status === 'reserved' || room.status === 'maintenance') {
-      alert(`Kamar ${room.room_number} saat ini sudah ${room.status === 'occupied' ? 'terisi oleh penyewa' : 'dipesan (reserved)'} dan tidak dapat dibooking.`);
-      return;
+      if (leaseStatus.isAvailableForBooking) {
+        // Automatically allow booking since 24h grace period has passed!
+        console.log(`[Home] Room ${room.room_number} lease expired >24h. Allowing booking.`);
+      } else {
+        const remainingText = leaseStatus.leaseInfo 
+          ? ` (${leaseStatus.leaseInfo.remainingDaysText})` 
+          : '';
+        alert(`Kamar ${room.room_number} saat ini ${room.status === 'occupied' ? `masih terisi oleh penyewa${remainingText}` : room.status === 'maintenance' ? 'sedang dalam pemeliharaan' : 'sedang dipesan (reserved)'} dan belum dapat dibooking.`);
+        return;
+      }
     }
     setActiveRoom(room);
     setCheckoutFlow(flowType);
@@ -803,7 +843,10 @@ export default function Home({}: HomeProps) {
               occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
               signature_url: signatureUrl
             };
-            await database.saveBooking(bookingRecord);
+            const savedBooking = await database.saveBooking(bookingRecord);
+            if (savedBooking && savedBooking.id && activeRoom?.id) {
+              await database.holdRoomAtomic(activeRoom.id, savedBooking.id, 15);
+            }
           }
         } catch (dbErr) {
           console.warn('Silent database pre-save warning:', dbErr);
@@ -1506,11 +1549,7 @@ export default function Home({}: HomeProps) {
           scrollWheelZoom: true,
         }).setView([-6.368, 106.83], 12); // Depok UI Campus default
         
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-          attribution: '&copy; OpenStreetMap &copy; CARTO',
-          subdomains: 'abcd',
-          maxZoom: 20
-        }).addTo(map);
+        createOsmStandardTileLayer().addTo(map);
 
         mapRef.current = map;
 
@@ -1537,7 +1576,8 @@ export default function Home({}: HomeProps) {
 
     // Add markers for current filteredProperties
     filteredProperties.forEach(p => {
-      if (p.lat && p.lng) {
+      const coords = sanitizePropertyCoordinates(p);
+      if (isValidCoordinate(coords.lat, coords.lng)) {
         const isSelected = selectedMapProperty?.id === p.id;
         
         const customIcon = L.divIcon({
@@ -1562,11 +1602,11 @@ export default function Home({}: HomeProps) {
           iconAnchor: [30, 21]
         });
 
-        const marker = L.marker([p.lat, p.lng], { icon: customIcon })
+        const marker = L.marker([coords.lat, coords.lng], { icon: customIcon })
           .addTo(map)
           .on('click', () => {
             setSelectedMapProperty(p);
-            map.setView([p.lat!, p.lng!], 16, { animate: true });
+            map.setView([coords.lat, coords.lng], 16, { animate: true });
           });
 
         markersRef.current[p.id] = marker;
@@ -1574,18 +1614,24 @@ export default function Home({}: HomeProps) {
     });
 
     // Directly focus on selected branch coordinate, or single result, or fit bounds
-    if (selectedMapProperty?.lat && selectedMapProperty?.lng) {
-      map.setView([selectedMapProperty.lat, selectedMapProperty.lng], 16, { animate: true });
+    if (selectedMapProperty) {
+      const selCoords = sanitizePropertyCoordinates(selectedMapProperty);
+      if (isValidCoordinate(selCoords.lat, selCoords.lng)) {
+        map.setView([selCoords.lat, selCoords.lng], 16, { animate: true });
+      }
     } else {
       const validCoords = filteredProperties
-        .filter(p => p.lat && p.lng)
-        .map(p => [p.lat!, p.lng!] as [number, number]);
+        .map(p => sanitizePropertyCoordinates(p))
+        .filter(c => isValidCoordinate(c.lat, c.lng))
+        .map(c => [c.lat, c.lng] as [number, number]);
 
       if (validCoords.length === 1) {
         map.setView(validCoords[0], 16, { animate: true });
       } else if (validCoords.length > 1) {
         const bounds = L.latLngBounds(validCoords);
-        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+        }
       }
     }
 
@@ -1593,8 +1639,11 @@ export default function Home({}: HomeProps) {
 
   // Handle zooming/panning to property when selectedMapProperty changes outside map
   useEffect(() => {
-    if (mapRef.current && selectedMapProperty?.lat && selectedMapProperty?.lng) {
-      mapRef.current.setView([selectedMapProperty.lat, selectedMapProperty.lng], 16, { animate: true });
+    if (mapRef.current && selectedMapProperty) {
+      const selCoords = sanitizePropertyCoordinates(selectedMapProperty);
+      if (isValidCoordinate(selCoords.lat, selCoords.lng)) {
+        mapRef.current.setView([selCoords.lat, selCoords.lng], 16, { animate: true });
+      }
     }
   }, [selectedMapProperty]);
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+Ôªøimport React, { useState, useEffect } from 'react';
 import * as LucideIcons from 'lucide-react';
 import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAULT_OWNER_SIGNATURE, getAuthHeaders } from '../lib/supabase';
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
@@ -19,6 +19,8 @@ import InvoiceCard from '../components/transaction/InvoiceCard';
 import { CoaDiagnosticModal } from '../components/accounting/CoaDiagnosticModal';
 import { AccountingIntegrityAuditModal } from '../components/accounting/AccountingIntegrityAuditModal';
 import { formatRupiah } from '../utils/formatCurrency';
+import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
+import { calculateOccupancy, calculateTotalInflow, calculateTotalExpenses, calculateNOI, calculateGrossPipeline } from '../lib/financialMetrics';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { 
   Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, AlertCircle, XCircle,
@@ -28,7 +30,7 @@ import {
   ExternalLink, RefreshCw, Server, Copy, Mail, Play, RotateCw,
   Sparkles, Landmark, Coins, ShoppingBag, Wrench, Wallet, Percent, Shield, ShieldCheck,
   TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle,
-  FileSignature, PenTool, Upload, CheckCircle2, Scale
+  FileSignature, PenTool, Upload, CheckCircle2, Scale, KeyRound, Key
 } from 'lucide-react';
 
 interface AdminProps {}
@@ -554,7 +556,7 @@ export default function Admin({}: AdminProps) {
       }).join(','))
     ].join('\n');
     
-    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(["Ôªø" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
@@ -821,10 +823,10 @@ export default function Admin({}: AdminProps) {
       if (refetchAccounts) refetchAccounts();
       if (refetchJournalEntries) refetchJournalEntries();
 
-      alert(`‚úÖ Pengajuan Kas Kecil #${req.id} (${req.applicant}) berhasil disetujui!\n\nEntri 'financial_transaction' baru telah otomatis dibuat dan saldo Kas Kecil (1000) telah disesuaikan.`);
+      alert(`[OK] Pengajuan Kas Kecil #${req.id} (${req.applicant}) berhasil disetujui!\n\nEntri 'financial_transaction' baru telah otomatis dibuat dan saldo Kas Kecil (1000) telah disesuaikan.`);
     } catch (err: any) {
       console.error("Gagal memproses persetujuan kas kecil:", err);
-      alert("‚ùå Gagal memproses persetujuan kas kecil: " + (err.message || err));
+      alert("[X] Gagal memproses persetujuan kas kecil: " + (err.message || err));
     } finally {
       setIsProcessingPetty(false);
     }
@@ -855,10 +857,10 @@ export default function Admin({}: AdminProps) {
 
       setShowRejectPettyModal(null);
       setPettyCashRejectReason('');
-      alert(`‚ö†Ô∏è Pengajuan Kas Kecil #${req.id} oleh ${req.applicant} telah ditolak.`);
+      alert(`[!] Pengajuan Kas Kecil #${req.id} oleh ${req.applicant} telah ditolak.`);
     } catch (err: any) {
       console.error("Gagal menolak kas kecil:", err);
-      alert("‚ùå Gagal menolak pengajuan kas kecil: " + (err.message || err));
+      alert("[X] Gagal menolak pengajuan kas kecil: " + (err.message || err));
     } finally {
       setIsProcessingPetty(false);
     }
@@ -893,10 +895,10 @@ export default function Admin({}: AdminProps) {
         date: new Date().toISOString().split('T')[0]
       });
       setShowNewPettyCashModal(false);
-      alert("‚úÖ Pengajuan Kas Kecil baru berhasil dibuat dan masuk dalam status 'pending' menunggu persetujuan.");
+      alert("[OK] Pengajuan Kas Kecil baru berhasil dibuat dan masuk dalam status 'pending' menunggu persetujuan.");
     } catch (err: any) {
       console.error("Gagal membuat pengajuan kas kecil:", err);
-      alert("‚ùå Gagal membuat pengajuan kas kecil: " + (err.message || err));
+      alert("[X] Gagal membuat pengajuan kas kecil: " + (err.message || err));
     } finally {
       setIsProcessingPetty(false);
     }
@@ -920,8 +922,10 @@ export default function Admin({}: AdminProps) {
     email: '',
     role: 'staff' as 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user',
     access: 'Staff akses terbatas',
-    active: true
+    active: true,
+    property_id: null as number | null
   });
+
 
   // Manual Tenant creation modal states
   const [showTenantModal, setShowTenantModal] = useState(false);
@@ -1016,6 +1020,50 @@ export default function Admin({}: AdminProps) {
 
   // Accounting Integrity Audit Modal States (SAMARA STAY v14 -> v15)
   const [showIntegrityAuditModal, setShowIntegrityAuditModal] = useState(false);
+
+  // Auto-Release & Lease Expiration Sync States
+  const [isSyncingExpiredLeases, setIsSyncingExpiredLeases] = useState(false);
+
+  const handleSyncExpiredLeases = async () => {
+    setIsSyncingExpiredLeases(true);
+    try {
+      const result = await database.autoReleaseExpiredLeases();
+      if (result.releasedRooms > 0) {
+        showToast(`Berhasil melepaskan ${result.releasedRooms} kamar habis masa sewa (>24 jam) menjadi status Available.`);
+      } else {
+        showToast('Sinkronisasi selesai. Tidak ada kamar habis sewa yang melewati batas 24 jam.');
+      }
+      startModuleRefresh('rooms');
+      startModuleRefresh('tenants');
+      startModuleRefresh('bookings');
+      await Promise.all([refetchRooms(), refetchTenants(), refetchBookings()]);
+    } catch (err: any) {
+      console.error('Error auto-releasing expired leases:', err);
+      alert('Gagal menjalankan auto-release kamar: ' + (err?.message || 'Kesalahan sistem'));
+    } finally {
+      setIsSyncingExpiredLeases(false);
+    }
+  };
+
+  // Background timer to auto-release leases that have hit 0 duration and passed 24h
+  useEffect(() => {
+    const runBackgroundLeaseCheck = async () => {
+      try {
+        const res = await database.autoReleaseExpiredLeases();
+        if (res.releasedRooms > 0) {
+          refetchRooms();
+          refetchTenants();
+          refetchBookings();
+        }
+      } catch (e) {
+        console.warn('[Admin] Periodic lease release check:', e);
+      }
+    };
+
+    runBackgroundLeaseCheck();
+    const timer = setInterval(runBackgroundLeaseCheck, 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleRunCoaDiagnostics = async (force: boolean = true) => {
     setIsCheckingCoa(true);
@@ -1309,17 +1357,31 @@ export default function Admin({}: AdminProps) {
         try {
           const updated = { ...b, status: 'approved' as const };
           await database.saveBooking(updated);
-          database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui`);
+          database.logActivity("System", "BOOKING_APPROVAL", `Sewa kamar ${b.room_number} disetujui (Invoice & email notifikasi dikirim)`);
           
           startModuleRefresh('bookings');
-          await refetchBookings();
-          showToast('Sewa kamar berhasil disetujui!');
+          startModuleRefresh('rooms');
+          startModuleRefresh('tenants');
+          startModuleRefresh('payments');
+          startModuleRefresh('finance');
+          await Promise.all([
+            refetchBookings(),
+            refetchRooms(),
+            refetchTenants(),
+            refetchPayments(),
+            refetchTransactions ? refetchTransactions() : Promise.resolve()
+          ]);
+          showToast('Sewa kamar berhasil disetujui dan invoice email telah dikirimkan ke tenant!');
         } catch (err: any) {
           console.error('[Admin] Error approving booking:', err);
           showToast(err.message || 'Gagal menyetujui sewa kamar.', 'error');
         } finally {
           endItemProcessing(b.id);
           endModuleRefresh('bookings');
+          endModuleRefresh('rooms');
+          endModuleRefresh('tenants');
+          endModuleRefresh('payments');
+          endModuleRefresh('finance');
         }
       }
     );
@@ -1729,7 +1791,7 @@ export default function Admin({}: AdminProps) {
                               ${userSigUrl ? `
                                 <img src="${userSigUrl}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
                               ` : `
-                                <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">‚úì DISETUJUI DIGITAL</p>
+                                <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">[OK] DISETUJUI DIGITAL</p>
                               `}
                             </div>
                             <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${s.tenant_name}</p>
@@ -1975,7 +2037,7 @@ export default function Admin({}: AdminProps) {
                           ${userSigUrl ? `
                             <img src="${userSigUrl}" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
                           ` : `
-                            <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">‚úì DISETUJUI DIGITAL</p>
+                            <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">[OK] DISETUJUI DIGITAL</p>
                           `}
                         </div>
                         <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${s.tenant_name}</p>
@@ -2242,6 +2304,24 @@ export default function Admin({}: AdminProps) {
     }
   };
 
+  const handleQuickPropertyChange = async (u: UserSystem, propIdVal: string) => {
+    startItemProcessing(u.id);
+    try {
+      const targetPropId = propIdVal === '' ? null : Number(propIdVal);
+      await database.assignUserProperty(u.id, targetPropId);
+      startModuleRefresh('users');
+      await refetchUsers();
+      const propName = targetPropId ? (properties.find(p => p.id === targetPropId)?.name || `ID ${targetPropId}`) : 'Global (Semua Properti)';
+      showToast(`Penugasan properti ${u.full_name} berhasil diubah ke ${propName}`);
+    } catch (err: any) {
+      console.error('[Admin] Error updating user property:', err);
+      showToast(err.message || 'Gagal memperbarui penugasan properti pengguna.', 'error');
+    } finally {
+      endItemProcessing(u.id);
+      endModuleRefresh('users');
+    }
+  };
+
   const handleQuickRoleChange = async (u: UserSystem, newRole: UserSystem['role']) => {
     startItemProcessing(u.id);
     try {
@@ -2272,7 +2352,10 @@ export default function Admin({}: AdminProps) {
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     const roleId = (userForm.role === 'super' || userForm.role === 'super_admin' || userForm.role === 'owner') ? 1 : userForm.role === 'admin' ? 2 : userForm.role === 'finance' ? 3 : 4;
-    const accessDesc = (userForm.role === 'super' || userForm.role === 'super_admin') ? 'Akses penuh sistem, log audit & database' : userForm.role === 'owner' ? 'Akses pemilik properti & eksekutif' : userForm.role === 'admin' ? 'Akses kontrol panel asrama & inventaris' : userForm.role === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas';
+    const propName = userForm.property_id ? properties.find(p => p.id === userForm.property_id)?.name : null;
+    const accessDesc = userForm.property_id
+      ? `Akses Terbatas: Properti ${propName || userForm.property_id}`
+      : (userForm.role === 'super' || userForm.role === 'super_admin') ? 'Akses penuh sistem, log audit & database' : userForm.role === 'owner' ? 'Akses pemilik properti & eksekutif' : userForm.role === 'admin' ? 'Akses kontrol panel asrama & inventaris' : userForm.role === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas';
 
     const payload: Partial<UserSystem> = {
       ...(activeUserEdit ? { id: activeUserEdit.id } : {}),
@@ -2281,13 +2364,21 @@ export default function Admin({}: AdminProps) {
       role: userForm.role,
       role_id: roleId,
       access: accessDesc,
-      active: userForm.active
+      active: userForm.active,
+      property_id: userForm.property_id ?? null
     };
     setIsSavingUser(true);
     try {
+      if (activeUserEdit?.id) {
+        try {
+          await database.assignUserProperty(activeUserEdit.id, userForm.property_id ?? null);
+        } catch (assignErr) {
+          console.warn('[Admin] assignUserProperty fallback notice:', assignErr);
+        }
+      }
       await database.saveUser(payload);
       setShowUserModal(false);
-      setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true });
+      setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true, property_id: null });
       setActiveUserEdit(null);
       startModuleRefresh('users');
       await refetchUsers();
@@ -2322,6 +2413,8 @@ export default function Admin({}: AdminProps) {
       }
     );
   };
+
+  
 
   const handleDeleteCoupon = async (id: number) => {
     customConfirm(
@@ -2460,17 +2553,18 @@ export default function Admin({}: AdminProps) {
   };
 
   // Aggregated pricing math
-  const totalOccupied = rooms.filter(r=>r.status === 'occupied').length;
-  const occupancyRate = rooms.length > 0 ? Math.round((totalOccupied / rooms.length) * 100) : 0;
+  const occupancyMath = calculateOccupancy(rooms);
+  const totalOccupied = occupancyMath.occupiedRooms;
+  const occupancyRate = occupancyMath.ratePercentage;
   
   // Real time direct calculated PBJT values
-  const rawRevenue = bookings.filter(b=>b.status === 'approved').reduce((acc,curr)=>acc+Number(curr.total_price),0);
+  const rawRevenue = calculateGrossPipeline(bookings.filter(b=>b.status === 'approved'));
   const totalPBJT = Math.round(rawRevenue * 0.10); // 10% Local tax
 
   // Double-entry finance aggregations
-  const totalInflow = transactions.filter(t=>t.type === 'income' || t.type === 'dp_booking').reduce((acc,curr)=>acc+Number(curr.amount), 0);
-  const totalOutflow = transactions.filter(t=>t.type === 'expense').reduce((acc,curr)=>acc+Number(curr.amount), 0);
-  const netEarnings = totalInflow - totalOutflow;
+  const totalInflow = calculateTotalInflow(transactions, payments);
+  const totalOutflow = calculateTotalExpenses(transactions);
+  const netEarnings = calculateNOI(totalInflow, totalOutflow);
 
   const filteredPayments = payments.filter(p => {
     const matchesSearch = p.tenant_name.toLowerCase().includes(paymentSearch.toLowerCase()) || p.id.toLowerCase().includes(paymentSearch.toLowerCase());
@@ -2528,27 +2622,29 @@ export default function Admin({}: AdminProps) {
             {/* Quick KPI stats row */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Okupansi Kamar</span>
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Okupansi Kamar</span>
                 <span className="text-2xl font-extrabold text-[#0D9488] font-mono block">{occupancyRate}%</span>
                 <span className="text-[11px] text-[#64748B] font-sans block">{totalOccupied} terisi dari {rooms.length} unit</span>
               </div>
 
               <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Sewa Bulanan Aktif</span>
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Sewa Bulanan Aktif</span>
                 <span className="text-2xl font-extrabold text-[#3A444D] font-mono block">{bookings.length} kontrak</span>
                 <span className="text-[11px] text-[#64748B] font-sans block">Approved settlement</span>
               </div>
 
               <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Estimasi Omzet</span>
-                <span className="text-base sm:text-lg font-extrabold text-[#0D9488] font-mono block leading-loose select-all">{formatRupiah(rawRevenue)}</span>
-                <span className="text-[11px] text-[#64748B] font-sans block">Sewa terakumulasi</span>
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Total Pendapatan (Inflow)</span>
+                <span className="text-base sm:text-lg font-extrabold text-[#0D9488] font-mono block leading-loose select-all">{formatRupiah(totalInflow > 0 ? totalInflow : rawRevenue)}</span>
+                <span className="text-[11px] text-[#64748B] font-sans block">
+                  {totalInflow > 0 ? `Kas Real-Time (Kontrak: ${formatRupiah(rawRevenue)})` : 'Sewa terakumulasi'}
+                </span>
               </div>
 
               <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider">Pajak PBJT (10%)</span>
-                <span className="text-base sm:text-lg font-extrabold text-amber-600 font-mono block leading-loose select-all">{formatRupiah(totalPBJT)}</span>
-                <span className="text-[11px] text-[#64748B] font-sans block">Kewajiban pajak daerah</span>
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Pajak PBJT (10%)</span>
+                <span className="text-base sm:text-lg font-extrabold text-amber-600 font-mono block leading-loose select-all">{formatRupiah(Math.round((totalInflow > 0 ? totalInflow : rawRevenue) * 0.10))}</span>
+                <span className="text-[11px] text-[#64748B] font-sans block">Kewajiban pajak daerah (10%)</span>
               </div>
             </div>
 
@@ -2567,6 +2663,117 @@ export default function Admin({}: AdminProps) {
                 </ResponsiveContainer>
               </div>
             </div>
+
+            {/* Sisa Durasi Sewa & 24h Auto-Release Engine Section */}
+            {(() => {
+              const activeTenants = tenantsList.filter(t => t.status !== 'checkout');
+              const tenantsWithLease = activeTenants.map(t => {
+                const leaseInfo = calculateLeaseRemaining(t.start_date, t.duration_months || 1);
+                return { ...t, leaseInfo };
+              });
+
+              const dueToday = tenantsWithLease.filter(t => t.leaseInfo.isDueToday);
+              const expiringSoon = tenantsWithLease.filter(t => t.leaseInfo.diffDays > 0 && t.leaseInfo.diffDays <= 14);
+              const expiredPast24h = tenantsWithLease.filter(t => t.leaseInfo.isExpiredPast24h);
+
+              return (
+                <div className="bg-white border border-[#E2E8F0] p-5 sm:p-6 rounded-[22px] shadow-xs space-y-5 text-left">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-[#F1F5F9] pb-4">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shadow-2xs">
+                        <Clock size={18} />
+                      </div>
+                      <div>
+                        <h3 className="font-extrabold text-sm text-[#3A444D] uppercase tracking-tight font-display">
+                          Monitoring Sisa Hari Sewa & Otomatisasi Kamar
+                        </h3>
+                        <p className="text-[11px] text-[#64748B]">
+                          Kamar dengan durasi sewa 0 hari akan otomatis beralih menjadi <strong>Available</strong> dan dapat dibooking end user setelah melewati toleransi 24 jam.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleSyncExpiredLeases}
+                      disabled={isSyncingExpiredLeases}
+                      className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <RotateCw size={13} className={isSyncingExpiredLeases ? 'animate-spin' : ''} />
+                      <span>{isSyncingExpiredLeases ? 'Menyinkronkan...' : 'Sinkronkan & Auto-Release Kamar'}</span>
+                    </button>
+                  </div>
+
+                  {/* 3 Metric Cards for Lease Lifecycles */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                    <div className="p-4 bg-rose-50/60 border border-rose-200 rounded-xl space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-extrabold text-rose-800 uppercase tracking-wider font-mono">
+                          Jatuh Tempo (Tenggang 24 Jam)
+                        </span>
+                        {dueToday.length > 0 && (
+                          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                        )}
+                      </div>
+                      <div className="text-2xl font-black text-rose-700 font-mono">{dueToday.length} Kamar</div>
+                      <p className="text-[10px] text-rose-600">Durasi sewa 0 hari, masa toleransi aktif</p>
+                    </div>
+
+                    <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl space-y-1">
+                      <span className="text-[10px] font-extrabold text-amber-800 uppercase tracking-wider font-mono">
+                        Segera Berakhir (&le;14 Hari)
+                      </span>
+                      <div className="text-2xl font-black text-amber-700 font-mono">{expiringSoon.length} Kamar</div>
+                      <p className="text-[10px] text-amber-600">Perlu follow-up konfirmasi perpanjangan</p>
+                    </div>
+
+                    <div className="p-4 bg-teal-50/60 border border-teal-200 rounded-xl space-y-1">
+                      <span className="text-[10px] font-extrabold text-teal-800 uppercase tracking-wider font-mono">
+                        Otomatis Tersedia (&gt;24 Jam)
+                      </span>
+                      <div className="text-2xl font-black text-teal-700 font-mono">{expiredPast24h.length} Kamar</div>
+                      <p className="text-[10px] text-teal-600">Siap & terbuka untuk booking end user baru</p>
+                    </div>
+                  </div>
+
+                  {/* Active list preview if any expiring */}
+                  {tenantsWithLease.filter(t => t.leaseInfo.diffDays <= 14).length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-[#F1F5F9]">
+                      <span className="text-[11px] font-bold text-[#3A444D] block uppercase tracking-wider">
+                        Daftar Penghuni Mendekati Batas Sewa:
+                      </span>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                        {tenantsWithLease
+                          .filter(t => t.leaseInfo.diffDays <= 14)
+                          .slice(0, 6)
+                          .map(item => (
+                            <div 
+                              key={item.id}
+                              className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-3 text-xs"
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-extrabold font-mono text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200 text-[11px]">
+                                    Kamar {item.room_number}
+                                  </span>
+                                  <span className="font-bold text-slate-800">{item.full_name}</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-1">
+                                  Jatuh Tempo: {item.leaseInfo.endDate.toLocaleDateString('id-ID')}
+                                </div>
+                              </div>
+
+                              <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full border shadow-2xs ${item.leaseInfo.badgeClass}`}>
+                                {item.leaseInfo.remainingDaysText}
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -2647,7 +2854,7 @@ export default function Admin({}: AdminProps) {
                   </div>
                   {getIsSupabaseConfigured() && (
                     <div className="bg-slate-50 rounded-xl p-4 max-w-lg mx-auto text-left border border-[#E2E8F0] space-y-3">
-                      <span className="block text-[10px] font-bold text-slate-400 font-mono uppercase">üí° SOLUSI UNTUK MENAMPILKAN DATA DARI SUPABASE:</span>
+                      <span className="block text-[10px] font-bold text-slate-400 font-mono uppercase"> SOLUSI UNTUK MENAMPILKAN DATA DARI SUPABASE:</span>
                       <p className="text-[11px] text-[#3A444D] leading-relaxed">
                         Jalankan perintah SQL berikut di menu <strong>SQL Editor</strong> di dashboard Supabase Anda untuk mematikan RLS atau mengaktifkan kebijakan baca untuk publik (SELECT):
                       </p>
@@ -2767,7 +2974,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   </div>
                   {getIsSupabaseConfigured() && (
                     <div className="bg-slate-50 rounded-xl p-4 max-w-lg mx-auto text-left border border-[#E2E8F0] space-y-3">
-                      <span className="block text-[10px] font-bold text-slate-400 font-mono uppercase">üí° SOLUSI UNTUK MENAMPILKAN DATA DARI SUPABASE:</span>
+                      <span className="block text-[10px] font-bold text-slate-400 font-mono uppercase"> SOLUSI UNTUK MENAMPILKAN DATA DARI SUPABASE:</span>
                       <p className="text-[11px] text-[#3A444D] leading-relaxed">
                         Jalankan perintah SQL berikut di menu <strong>SQL Editor</strong> dashboard Supabase Anda untuk mematikan RLS:
                       </p>
@@ -3229,15 +3436,15 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                setIsGeneratingAi(false);
                                const exceededBudget = budgets.find(b => b.spent > b.limit);
                                const lowStock = inventoryItems.filter(i => i.stock <= i.minStock);
-                               setAiInsightText(`### üìä REPORT EXECUTIVE INSIGHT - SAMARA KOS ERP\n` +
+                               setAiInsightText(`###  REPORT EXECUTIVE INSIGHT - SAMARA KOS ERP\n` +
                                  `**Diproduksi Real-time Pada:** ${new Date().toLocaleString()}\n\n` +
                                  `#### 1. Analisis Profitabilitas & Cash Flow\n` +
                                  `- **Total Arus Kas Masuk (Inflow):** ${formatRupiah(totalInflow)} menunjukkan sirkulasi keuangan yang sangat sehat.\n` +
                                  `- **Efisiensi Pengeluaran:** Rasio biaya terhadap omset saat ini berkisar **${totalInflow ? Math.round((totalOutflow/totalInflow)*100) : 0}%**, berada dalam batas ideal standar industri (maksimal 35%).\n` +
                                  `- **Laba Bersih Operasional:** Bisnis mencatatkan laba bersih sebesar **${formatRupiah(netEarnings)}**.\n\n` +
                                  `#### 2. Deteksi Anomali & Kontrol Anggaran (Peringatan Deviasi)\n` +
-                                 `${exceededBudget ? `- ‚ö†Ô∏è **PELANGGARAN ANGGARAN:** Beban akun **"${exceededBudget.category}"** saat ini telah menyentuh **${formatRupiah(exceededBudget.spent)}**, melampaui batas toleransi anggaran sebesar **${formatRupiah(exceededBudget.limit)}** (Varian Negatif: **-${Math.round((exceededBudget.spent - exceededBudget.limit)/exceededBudget.limit*100)}%**).\n` : `- ‚úÖ **KONTROL ANGGARAN:** Semua pos operasional berjalan tertib dan tidak ada penyimpangan batas anggaran.\n`}` +
-                                 `${lowStock.length > 0 ? `- üõí **PERINGATAN RANTAI PASOK:** Ditemukan item inventaris **${lowStock.map(l => l.name).join(', ')}** yang berada di bawah tingkat persediaan minimum. Segera buat purchase order baru untuk menghindari kekosongan stock.\n` : `- ‚úÖ **STATUS INVENTARIS:** Tingkat persediaan logistik kos aman.\n`}\n` +
+                                 `${exceededBudget ? `- [!] **PELANGGARAN ANGGARAN:** Beban akun **"${exceededBudget.category}"** saat ini telah menyentuh **${formatRupiah(exceededBudget.spent)}**, melampaui batas toleransi anggaran sebesar **${formatRupiah(exceededBudget.limit)}** (Varian Negatif: **-${Math.round((exceededBudget.spent - exceededBudget.limit)/exceededBudget.limit*100)}%**).\n` : `- [OK] **KONTROL ANGGARAN:** Semua pos operasional berjalan tertib dan tidak ada penyimpangan batas anggaran.\n`}` +
+                                 `${lowStock.length > 0 ? `-  **PERINGATAN RANTAI PASOK:** Ditemukan item inventaris **${lowStock.map(l => l.name).join(', ')}** yang berada di bawah tingkat persediaan minimum. Segera buat purchase order baru untuk menghindari kekosongan stock.\n` : `- [OK] **STATUS INVENTARIS:** Tingkat persediaan logistik kos aman.\n`}\n` +
                                  `#### 3. Rekomendasi Finansial Berbasis Keputusan Bisnis\n` +
                                  `1. **Restrukturisasi Promosi:** Disarankan membatasi diskon kupon langsung karena pos pemasaran melampaui anggaran perencanaan.\n` +
                                  `2. **Mitigasi Pajak:** Saldo Utang Pajak Daerah PBJT DKI sebesar **${formatRupiah(accounts.find(a=>a.id===2100)?.balance || 0)}** harus segera disetorkan ke kas daerah sebelum tanggal 15 bulan depan guna menghindari sanksi administratif denda 2% per bulan.`
@@ -5075,7 +5282,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                              {!stmt.matched && reconciliationCandidates[stmt.id] && reconciliationCandidates[stmt.id].length > 0 && (
                                <div className="mt-1 p-2.5 bg-amber-50/50 border border-amber-100 rounded-xl space-y-2">
-                                 <span className="text-[9px] font-bold text-amber-800 block">üí° Kandidat Pencocokan ({reconciliationCandidates[stmt.id].length}):</span>
+                                 <span className="text-[9px] font-bold text-amber-800 block"> Kandidat Pencocokan ({reconciliationCandidates[stmt.id].length}):</span>
                                  <div className="space-y-1.5">
                                    {reconciliationCandidates[stmt.id].map(cand => (
                                      <div key={cand.id} className="flex justify-between items-center bg-white p-2 rounded-lg border border-amber-200/60 shadow-2xs gap-3">
@@ -5439,7 +5646,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/10'
                                 : 'bg-amber-500/10 text-amber-600 border-amber-500/10 animate-pulse'
                             }`}>
-                              {b.occupant_arrival_status === 'checked_in' ? '‚úì Sudah Check-In (Settle)' : '‚è≥ Menunggu Kedatangan'}
+                              {b.occupant_arrival_status === 'checked_in' ? '[OK] Sudah Check-In (Settle)' : ' Menunggu Kedatangan'}
                             </span>
                           </div>
                           
@@ -5867,10 +6074,21 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Daftar Aktif Penghuni Kamar (Tenants)</h2>
                 <p className="text-xs text-[#64748B] mt-0.5">Daftar seluruh penghuni kosmopolit terverifikasi dengan info alokasi kamar & jangka waktu sewa berjalan.</p>
               </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  const phoneNum = prompt("Ketik nomor WhatsApp penghuni baru (misal: 081293840293):");
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleSyncExpiredLeases}
+                  disabled={isSyncingExpiredLeases}
+                  className="bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 font-bold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                  title="Otomatis melepaskan kamar habis sewa (>24 jam) menjadi status Available"
+                >
+                  <RotateCw size={12} className={isSyncingExpiredLeases ? 'animate-spin' : ''} />
+                  <span>{isSyncingExpiredLeases ? 'Menyinkronkan...' : 'Auto-Release (>24 Jam)'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const phoneNum = prompt("Ketik nomor WhatsApp penghuni baru (misal: 081293840293):");
                   const nameInput = prompt("Ketik nama penghuni baru:");
                   const roomInput = prompt("Ketik nomor kamar penghuni (misal: R201 atau 202):");
                   const durationInMonthsInput = prompt("Ketik jangka waktu sewa (dalam bulan):", "3");
@@ -5901,6 +6119,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 <Plus size={11} />
                 Pendaftaran Manual
               </button>
+              </div>
             </div>
 
             {/* Sub-tabs & Building Filters for Tenants */}
@@ -5942,10 +6161,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   onChange={(e) => setSelectedTenantPropertyFilter(e.target.value)}
                   className="bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0D9488] shadow-xs cursor-pointer"
                 >
-                  <option value="all">üè¢ Semua Gedung Kos ({properties.length})</option>
+                  <option value="all"> Semua Gedung Kos ({properties.length})</option>
                   {properties.map(p => (
                     <option key={p.id} value={String(p.id)}>
-                      üìç {p.name}
+                       {p.name}
                     </option>
                   ))}
                 </select>
@@ -5962,7 +6181,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 })
                 .map(t => {
                 const propertyName = properties.find(p => p.id === t.property_id)?.name || 'Properti Kos';
-                const dateEnd = new Date(new Date(t.start_date).setMonth(new Date(t.start_date).getMonth() + (t.duration_months || 1))).toISOString().split('T')[0];
+                const leaseInfo = calculateLeaseRemaining(t.start_date, t.duration_months || 1);
+                const dateEnd = leaseInfo.endDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+                const cleanPhone = (t.phone || '').replace(/[^0-9]/g, '').replace(/^0/, '62');
+                const waMessage = `Halo kak ${t.full_name}, kami dari Samara Stay menginformasikan bahwa durasi sewa Kamar ${t.room_number} Anda ${leaseInfo.isDueToday ? 'jatuh tempo hari ini' : leaseInfo.diffDays < 0 ? 'telah berakhir' : `tersisa ${leaseInfo.diffDays} hari lagi (hingga ${dateEnd})`}. Mohon konfirmasi apakah ingin melakukan perpanjangan sewa. Terima kasih!`;
                 return (
                   <div key={t.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex gap-4 items-start text-xs relative overflow-hidden shadow-xs text-left hover:border-[#0D9488] transition-all">
                     <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-extrabold text-white shrink-0 shadow-inner bg-[#0D9488]/10 text-[#0D9488]`}>
@@ -6008,9 +6230,9 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       </div>
 
                       <div className="space-y-1 text-[#64748B] text-[11px]">
-                        <p>üìç Kamar Alokasi: <strong className="text-[#0D9488] font-bold font-mono">Kamar {t.room_number}</strong></p>
-                        <p>üìû No. WhatsApp: <span className="font-mono text-[#3A444D]">{t.phone}</span></p>
-                        <p>‚è±Ô∏è Jangka Pemesanan: <span className="font-mono text-[#3A444D] font-bold">{t.duration_months || 1} Bulan</span></p>
+                        <p> Kamar Alokasi: <strong className="text-[#0D9488] font-bold font-mono">Kamar {t.room_number}</strong></p>
+                        <p> No. WhatsApp: <span className="font-mono text-[#3A444D]">{t.phone}</span></p>
+                        <p> Jangka Pemesanan: <span className="font-mono text-[#3A444D] font-bold">{t.duration_months || 1} Bulan</span></p>
                         <p className="text-[10px] text-[#64748B] mt-1">
                           Periode: <span className="font-mono font-bold text-[#64748B]">{t.start_date}</span> s/d <span className="font-mono font-bold text-[#64748B]">{dateEnd}</span>
                         </p>
@@ -6036,6 +6258,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           }`}>
                             {t.payment_status === 'paid' ? 'LUNAS' : t.payment_status === 'overdue' ? 'TUNGGAKAN' : 'BELUM BAYAR'}
                           </span>
+                          {t.status !== 'checkout' && (
+                            <span className={`text-[9px] font-extrabold px-2.5 py-0.5 rounded-full border shadow-2xs ${leaseInfo.badgeClass}`}>
+                              ‚è≥ {leaseInfo.remainingDaysText}
+                            </span>
+                          )}
                         </div>
                         {t.status !== 'checkout' && (
                           <div className="flex items-center gap-2 flex-wrap">
@@ -6060,6 +6287,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                       <FileText size={11} className="text-[#0D9488]" />
                                       Bukti Invoice Perpanjangan {tenantExts.length > 1 ? `(${tenantExts.length})` : ''}
                                     </button>
+                                  )}
+                                  {cleanPhone && (
+                                    <a
+                                      href={`https://wa.me/${cleanPhone}?text=${encodeURIComponent(waMessage)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-bold px-2 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                      title="Kirim pengingat sisa durasi sewa via WhatsApp"
+                                    >
+                                      <Mail size={11} className="text-emerald-600" />
+                                      Pengingat WA
+                                    </a>
                                   )}
                                   <button
                                     type="button"
@@ -6272,7 +6511,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     email: '',
                     role: 'staff',
                     access: 'Staff akses terbatas',
-                    active: true
+                    active: true,
+                    property_id: null
                   });
                   setShowUserModal(true);
                 }}
@@ -6301,8 +6541,19 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                         {u.role === 'super' || u.role === 'super_admin' ? 'SUPER ADMIN' : u.role === 'owner' ? 'OWNER / PEMILIK' : u.role === 'admin' ? 'SYSTEM ADMIN' : u.role === 'finance' ? 'CHIEF FINANCIAL' : 'FIELD OPERATOR'}
                       </span>
                     </div>
-                    <p className="text-[10px] text-[#64748B]">üìß Email: <span className="font-mono text-[#3A444D]">{u.email}</span></p>
-                    <p className="text-[10px] text-slate-500 flex items-center gap-1">üîë Izin Otoritas: <span className="font-sans text-slate-305">{u.access}</span></p>
+                    <p className="text-[10px] text-[#64748B]"> Email: <span className="font-mono text-[#3A444D]">{u.email}</span></p>
+                    <p className="text-[10px] text-slate-500 flex items-center gap-1"> Izin Otoritas: <span className="font-sans text-slate-305">{u.access}</span></p>
+                    <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                      Penugasan: <span className={`font-semibold px-2 py-0.5 rounded-md text-[9px] ${
+                        u.property_id 
+                          ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' 
+                          : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {u.property_id 
+                          ? (properties.find(p => p.id === u.property_id)?.name || `Properti #${u.property_id}`) 
+                          : 'Global (Semua Properti)'}
+                      </span>
+                    </p>
                     <span className="text-[9px] text-slate-600 block">Last login: {u.last_login || 'Masa aktif hari ini'}</span>
                   </div>
 
@@ -6323,6 +6574,22 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       </select>
                     </div>
 
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-slate-400 font-mono font-bold">Properti:</span>
+                      <select
+                        value={u.property_id ?? ''}
+                        onChange={(e) => handleQuickPropertyChange(u, e.target.value)}
+                        disabled={processingItems[u.id]}
+                        className="bg-slate-950 text-slate-200 border border-slate-750 text-[10px] font-bold py-1 px-2 rounded-lg cursor-pointer outline-none focus:border-amber-500 disabled:opacity-50 max-w-[130px] truncate"
+                      >
+                        <option value="">Global / Semua</option>
+                        {properties.map(p => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    
                     <button
                       type="button"
                       onClick={() => {
@@ -6332,7 +6599,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           email: u.email,
                           role: u.role,
                           access: u.access,
-                          active: u.active
+                          active: u.active,
+                          property_id: u.property_id ?? null
                         });
                         setShowUserModal(true);
                       }}
@@ -6456,7 +6724,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-850 space-y-1">
                     <span className="text-slate-500 block uppercase font-mono font-bold">Client Key (Public-Facing)</span>
                     <p className="font-mono text-[#3A444D] break-all select-all">
-                      {(import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || 'üî¥ NOT DETECTED'}
+                      {(import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || ' NOT DETECTED'}
                     </p>
                     <span className={`inline-block text-[8px] font-bold uppercase rounded-full px-2 py-0.2 mt-1 ${((import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || '').startsWith('SB-') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-450 border border-red-500/20'}`}>
                       {((import.meta as any).env.VITE_MIDTRANS_CLIENT_KEY || '').startsWith('SB-') ? 'Valid Sandbox Format' : 'Missing SB- Prefix (Production or Invalid)'}
@@ -6466,7 +6734,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-850 space-y-1">
                     <span className="text-slate-500 block uppercase font-mono font-bold">Server Key (Secure API Proxy)</span>
                     <p className="font-mono text-[#3A444D]">
-                      ‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢{midtransLogs.length > 0 ? " (Configured)" : " (Loading diagnostics)"}
+                      ----------------{midtransLogs.length > 0 ? " (Configured)" : " (Loading diagnostics)"}
                     </p>
                     <span className="inline-block text-[8px] font-bold bg-amber-500/10 text-amber-550 border border-amber-500/20 uppercase rounded-full px-2 py-0.2 mt-1">
                       Secure Proxy Enabled
@@ -6475,7 +6743,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 </div>
 
                 <div className="text-[10px] text-[#64748B] space-y-1.5 leading-relaxed bg-slate-950/40 p-3 rounded-2xl border border-white/5">
-                  <p className="font-bold text-[#3A444D]">üí° Cara Menyelesaikan Pembayaran Sandbox / Simulasi:</p>
+                  <p className="font-bold text-[#3A444D]"> Cara Menyelesaikan Pembayaran Sandbox / Simulasi:</p>
                   <ul className="list-disc pl-4 space-y-1 text-slate-350">
                     <li>Saat booking baru di checkout, modal <span className="text-[#0D9488] font-bold font-bold">Midtrans Snap</span> akan muncul otomatis di client browser.</li>
                     <li>Jika server tidak mendeteksi kredensial asli, tombol <span className="text-emerald-400 font-bold">"Failsafe Interactive Simulation"</span> gratis akan terdorong secara otomatis!</li>
@@ -6594,7 +6862,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             {log.message}
                           </div>
                           <span className="text-slate-600 text-[10px] font-bold font-sans">
-                            {isExpanded ? 'Collapse ‚ñ≤' : 'Details ‚ñº'}
+                            {isExpanded ? 'Collapse ^' : 'Details v'}
                           </span>
                         </div>
                       </div>
@@ -6679,7 +6947,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <input 
                         type="password" 
                         readOnly
-                        value="‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢"
+                        value="--------------------------------"
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-[#3A444D] font-mono text-[10px]"
                       />
                       <span className="absolute right-3 top-2 text-[8px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded px-1.5 py-0.5 font-bold uppercase font-mono">
@@ -6870,7 +7138,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 p-2.5 rounded-xl text-[10px] space-y-1">
                         <span className="font-bold uppercase font-mono text-[9px] block">Rekomendasi Diagnostik:</span>
                         {emailDiagnosticsData.recommendations.map((rec: string, idx: number) => (
-                          <p key={idx} className="leading-normal font-sans">‚Ä¢ {rec}</p>
+                          <p key={idx} className="leading-normal font-sans">- {rec}</p>
                         ))}
                       </div>
                     )}
@@ -6884,7 +7152,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       : 'bg-red-500/10 border-red-500/20 text-red-400'
                   }`}>
                     <p className="font-extrabold uppercase font-mono tracking-wider">
-                      {emailResult.success ? '‚úì Sukses Terkirim' : '‚úó Gagal Mengirim'}
+                      {emailResult.success ? '[OK] Sukses Terkirim' : '[X] Gagal Mengirim'}
                     </p>
                     <p className="font-sans leading-relaxed text-[#3A444D]">{emailResult.message}</p>
                     {emailResult.details && (
@@ -7093,7 +7361,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                               </span>{' '}
                               <span className="text-white">{h.table}</span>
                             </div>
-                            <span className="text-slate-500 text-[8px]">‚úì verified</span>
+                            <span className="text-slate-500 text-[8px]">[OK] verified</span>
                           </div>
                         ))}
 
@@ -7138,7 +7406,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 </span>
                               </td>
                               <td className="py-3 font-bold">{evt.id}</td>
-                              <td className="py-3 text-right text-emerald-600 font-extrabold">‚úì DIOLAH</td>
+                              <td className="py-3 text-right text-emerald-600 font-extrabold">[OK] DIOLAH</td>
                             </tr>
                           ))}
 
@@ -7261,7 +7529,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                               </div>
                               <div className="flex items-center gap-2 text-[9px] text-[#64748B]">
                                 <span className="uppercase tracking-wider font-semibold">[{m.type}]</span>
-                                <span>‚Ä¢</span>
+                                <span>-</span>
                                 <span>{m.timestamp}</span>
                               </div>
                             </div>
@@ -7464,7 +7732,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                       {errorLogs.length === 0 && (
                         <div className="text-center py-12 text-slate-550 font-sans text-xs">
-                          <p className="font-extrabold">‚úì Sistem Sehat & Bersih Dari Error</p>
+                          <p className="font-extrabold">[OK] Sistem Sehat & Bersih Dari Error</p>
                           <p className="text-[10px] mt-1">Tidak ada unhandled exceptions atau crashed promises yang ditangkap pada sesi berjalan ini.</p>
                         </div>
                       )}
@@ -7540,7 +7808,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                       {observability.getLogs().length === 0 && (
                         <div className="text-center py-12 text-slate-500 font-sans text-xs">
-                          <p className="font-bold text-slate-400">‚úì Console Log Kosong</p>
+                          <p className="font-bold text-slate-400">[OK] Console Log Kosong</p>
                           <p className="text-[10px] text-slate-500 mt-1">Belum ada log sistem yang tercatat pada sesi ini.</p>
                         </div>
                       )}
@@ -7895,6 +8163,20 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             />
           </div>
 
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Penugasan Cabang Properti</label>
+            <select
+              value={userForm.property_id ?? ''}
+              onChange={(e) => setUserForm({ ...userForm, property_id: e.target.value ? Number(e.target.value) : null })}
+              className="w-full bg-slate-950 border border-slate-805 p-2.5 rounded-xl text-slate-200 cursor-pointer font-bold text-xs outline-none focus:border-amber-500"
+            >
+              <option value="">Akses Global (Semua Properti / Portofolio Super & Owner)</option>
+              {properties.map(p => (
+                <option key={p.id} value={p.id}>{p.name} ({p.location || p.address || 'Unit Properti'})</option>
+              ))}
+            </select>
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Jabatan / Role</label>
@@ -7949,6 +8231,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         </form>
       </Modal>
+
+      
 
       {/* Pelunasan Survey Modal */}
       <Modal
@@ -8631,223 +8915,13 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <div className="pt-4 border-t border-slate-200 flex justify-between items-end">
                 <div className="text-[9px] text-slate-400">
                   <p className="font-bold text-slate-600">Terverifikasi Sistem Keuangan Samara Stay</p>
-                  <p>Posting Otomatis ke Ledger COA 1010/4000</p>
-                </div>
-                <div className="text-center">
-                  <span className="text-[9px] text-teal-700 font-mono font-bold block mb-1">[STEMPEL DIGITAL DITERIMA]</span>
-                  <div className="w-16 h-16 border-2 border-teal-600 rounded-full flex items-center justify-center p-1 text-[8px] font-black text-teal-700 uppercase tracking-tighter text-center mx-auto rotate-[-12deg]">
-                    LUNAS<br/>SAMARA STAY
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => setShowExtensionProofModal(false)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer text-center"
-              >
-                Tutup
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  window.print();
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-bold transition-all text-xs cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
-              >
-                <Printer size={14} />
-                Cetak / Download Invoice
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Modal: Riwayat Pembayaran & Invoice Penghuni */}
-      {showTenantHistoryModal && selectedTenantForHistory && (
-        <Modal
-          isOpen={showTenantHistoryModal}
-          onClose={() => setShowTenantHistoryModal(false)}
-          title={`Riwayat Pembayaran & Invoice - ${selectedTenantForHistory.full_name}`}
-        >
-          <div className="space-y-4 font-sans text-slate-800 text-left">
-            <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4 flex justify-between items-center flex-wrap gap-2">
-              <div>
-                <h4 className="font-extrabold text-teal-900 text-sm">{selectedTenantForHistory.full_name}</h4>
-                <p className="text-xs text-teal-700 font-medium">
-                  {properties.find(p => p.id === selectedTenantForHistory.property_id)?.name || 'Gedung Kos Samara'} - <strong className="font-mono">Unit {selectedTenantForHistory.room_number}</strong>
-                </p>
-                <p className="text-[10px] text-teal-600 font-mono mt-0.5">WhatsApp: {selectedTenantForHistory.phone}</p>
-              </div>
-              <div className="text-right">
-                <span className={`text-[10px] uppercase font-bold px-2.5 py-1 rounded-full font-mono border ${
-                  selectedTenantForHistory.payment_status === 'paid'
-                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                    : 'bg-amber-100 text-amber-800 border-amber-300'
-                }`}>
-                  {selectedTenantForHistory.payment_status === 'paid' ? 'STATUS: LUNAS' : 'BELUM LUNAS'}
-                </span>
-                <p className="text-[10px] text-slate-500 font-mono mt-1">Mulai: {selectedTenantForHistory.start_date}</p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                <History size={14} className="text-[#0D9488]" />
-                Daftar Transaksi Perpanjangan & Invoice Payment
-              </h4>
-
-              {(() => {
-                const tenantExts = contractExtensionsList.filter(ext => ext.tenant_id === selectedTenantForHistory.id || (ext.tenant_name && ext.tenant_name.toLowerCase() === selectedTenantForHistory.full_name.toLowerCase()));
-                const tenantPayments = payments.filter(p => p.tenant_name && p.tenant_name.toLowerCase() === selectedTenantForHistory.full_name.toLowerCase());
-
-                if (tenantExts.length === 0 && tenantPayments.length === 0) {
-                  return (
-                    <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-500 font-medium">
-                      Belum ada catatan riwayat perpanjangan kontrak atau invoice pembayaran khusus penghuni ini.
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
-                    {tenantExts.map((ext) => (
-                      <div key={`ext-${ext.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-xs hover:border-teal-300 transition-all flex justify-between items-center flex-wrap gap-3">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-bold text-slate-900">{ext.midtrans_order_id || `EXT-${ext.id}`}</span>
-                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-teal-50 text-teal-700 border border-teal-200 font-mono">
-                              +{ext.extension_months} Bulan
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-500">
-                            Metode: <strong className="text-slate-700">{ext.payment_method || 'Midtrans SNAP'}</strong> ‚Ä¢ {new Date(ext.created_at || Date.now()).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
-                          </p>
-                          {ext.notes && <p className="text-[10px] text-slate-400 italic">{ext.notes}</p>}
-                        </div>
-
-                        <div className="flex items-center gap-3 shrink-0">
-                          <div className="text-right font-mono">
-                            <span className="text-xs font-extrabold text-emerald-600 block">{formatRupiah(ext.total_amount)}</span>
-                            <span className={`text-[8px] uppercase font-bold px-1.5 py-0.5 rounded border ${
-                              ext.status === 'paid'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : ext.status === 'cancelled'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : 'bg-amber-50 text-amber-700 border-amber-200'
-                            }`}>
-                              {ext.status === 'paid' ? 'LUNAS (PAID)' : ext.status === 'cancelled' ? 'DIBATALKAN' : 'PENDING'}
-                            </span>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedExtensionProof(ext);
-                              setShowExtensionProofModal(true);
-                            }}
-                            className="px-3 py-1.5 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
-                          >
-                            <FileText size={12} />
-                            Bukti Invoice
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-
-                    {tenantPayments.filter(p => !tenantExts.some(e => e.midtrans_order_id === p.midtrans_order_id || e.invoice_id === p.id)).map((p) => (
-                      <div key={`pay-${p.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-xs hover:border-teal-300 transition-all flex justify-between items-center flex-wrap gap-3">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-bold text-slate-900">{p.id}</span>
-                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
-                              Invoice Pelunasan
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-500">
-                            Metode: <strong className="text-slate-700">{p.method}</strong> ‚Ä¢ {p.payment_date}
-                          </p>
-                        </div>
-
-                        <div className="flex items-center gap-3 shrink-0">
-                          <div className="text-right font-mono">
-                            <span className="text-xs font-extrabold text-emerald-600 block">{formatRupiah(p.amount)}</span>
-                            <span className="text-[8px] uppercase font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200">
-                              LUNAS
-                            </span>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedExtensionProof({
-                                id: Date.now(),
-                                tenant_id: selectedTenantForHistory.id,
-                                tenant_name: selectedTenantForHistory.full_name,
-                                property_id: selectedTenantForHistory.property_id,
-                                property_name: properties.find(prop => prop.id === selectedTenantForHistory.property_id)?.name || 'Gedung Kos Samara',
-                                room_number: selectedTenantForHistory.room_number,
-                                extension_months: selectedTenantForHistory.duration_months || 1,
-                                monthly_rate: p.amount,
-                                total_amount: p.amount,
-                                payment_method: p.method,
-                                status: 'paid',
-                                midtrans_order_id: p.midtrans_order_id || p.id,
-                                invoice_id: p.id,
-                                created_at: p.payment_date
-                              });
-                              setShowExtensionProofModal(true);
-                            }}
-                            className="px-3 py-1.5 bg-[#0D9488] hover:bg-[#115E59] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
-                          >
-                            <FileText size={12} />
-                            Bukti Invoice
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
-
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={() => setShowTenantHistoryModal(false)}
-                className="w-full py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer text-center"
-              >
-                Tutup Riwayat
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* COA Diagnostic Modal */}
-      <CoaDiagnosticModal
-        isOpen={showCoaModal}
-        onClose={() => setShowCoaModal(false)}
-        diagnosticData={coaDiagnosticData}
-        isLoading={isCheckingCoa}
-        isRepairing={isRepairingCoa}
-        onRefresh={() => handleRunCoaDiagnostics(true)}
-        onRepair={handleRepairCoa}
-      />
-
-      {/* Accounting Integrity Audit Modal (SAMARA STAY v14 -> v15) */}
-      <AccountingIntegrityAuditModal
-        isOpen={showIntegrityAuditModal}
-        onClose={() => setShowIntegrityAuditModal(false)}
-        onRepaired={() => {
-          if (refetchAccounts) refetchAccounts();
-          if (refetchJournalEntries) refetchJournalEntries();
-          if (refetchTransactions) refetchTransactions();
-        }}
-      />
-    </div>
-  );
-}
-export { Admin };
+         xúÏY[o⁄H~ÔØπU›5ötìî§¢	ÕVõ§Q Z≠¢äx¿nlœhf\`i˛˚ûÒ|RµR+≠37ü˚˜°‰Í∞„+*§L—I},]ÅÓ:'ˆîptÚ°ãZVÀjÓZñ’i≤„'®puö∂˚E3£hÏa!.±OéIÊ“ì@nîW√z¡pP⁄p{¿ÊQt+	ˆÃ?,Mh Mü4æQœF#èéÔê?2[∆Òm–ª∏Íù£”˜gÔ]ı–ª~—˝ÿi™áhü^êvf∂^!G˝Qnn∂”õHåW ßa`€úÑûá&ô#W_$:¢œ!ÿt≤H2≥´qªØ4ä%˜0ùW.då1I≥‡S∫SGë± ÚÁ&%!$ñƒº5[mõL?j-ã–˘Õe∑ﬂÒÊqø{—ΩÓ¢˛†˚èŒ
+Æ‘kì°¸X¡∞ë°¶òôÌ∆^I⁄Œ(îí%‰Ç¡÷x“(Õ“‡ƒs«wGÀZ#Adﬂ°≥ﬁ\í@∏4∏‚îN.®çΩ⁄{Ç‘ÔK'‰W±ÖpÂ„πó∏?ç·)≥∑¡a˝B¯·höÌY±ü‚_´pçÇ<
+Iê…ƒ3—∫π@„ê MF›†‡Ê¢Æe◊B≤ígbK˝Î.5a3sõŒåÉµ˙Î“ä˚o¥¯‘º}jùÏÓÔ\õ˘ˆi´µ◊€;H™¬ÃÅ¨{¥çÖÉAb5Ò`‚™XmA¨>ËäŒOwˇ%GÀ÷Ó=jñWùâÔPù“Y‡Ql£˜¡Íé…V>,Â\a†”å‚<ÄHOÓñÕ(ö:D◊Ó/∞DWƒ¡ò=OÖÄ¡`ÍÑÅã^4Sü-$”Ä8ê∫BRæàBœüC¶yd,âœæ£<Y†Êjk°¢ı°]ÒÅë‡®‚‡l¨®ÿ£Ç2ªºGìÿ“ïl¸¥Q]=[V)—Pu}@àﬁZú3~°¥∂åâπ0w„pàŸZ∞o%•¡#Y(}≈£ Œ#DÄjíØ;—h;É>mH¶©‚8›ë3BÇ|\Gy6„ò≈Â∑\|ıµﬂŸÕ%´“î‡8Œ∂v§⁄	ﬂ8ﬁ∆®ù¶≥´y+QÄπ–‚?±›–◊‚›íq
+ *]"(M5¶Çá5\UFm#Ÿ∂∫v˝MC	âæ~E;gƒÅ˝EÍc"hÁß#$ß0\¥ç‚%∆ÒM‡JTm@$Ñ˛àp∞C|ívul´l†€ñï'IØr$…ó¶•∞ˆoK—eÏpÉ`Ã°ÅrMÈ¡z
+†£x\±ç_ä¸n˘)+¸öˆ¨K9õGà ¿–*ê≠ïnIr<”°Rµíx·CJPßPD1±√∞kÔhπ”¥ŸH|¬±gõ≠4Ã”ï’In¶C/-K‘atVn_ˇÃhÅJ§¯«´™‘8∏È∆ÏpGI˜∂w~së¸.cv{~ $S^TàI Í°á›M·bs9¥aˇñ1πMÀÙÀrÃ◊∫¥˙d»EûŸi∏˙ÃUÒòÈPJÙ"Â;¶π&%ª¶|»–qãS<É°Å¢@¯N∏ z<ˆ”< «QQ2ß*»Ö¡e≠äˆçi $XDπ∏6óRÜê+Í-ŒA#®¡(^˘’IØÔ>Têa
+p-≥#* ¿.
+CIœÈåÖíw”°+ o™kxkV≈ƒfJÕ$©D™X/Ÿ˜∞R>hΩƒµJºµK–9È†ﬂ
+:$„ØãŒj6Aµ¬y ™U◊“~Nd»É”ÀESu˚Ø*˙> vLY2ìÁ;6±K]WEüè}Ázd†B-N¢ˆ~.â“∂9ì»Ph’{É∂6£íC´II±∏%¨‰-ÒBa#ûOñME,q#+FÍ&â)U9ÅRç¬@Üw∞"XêÜi∑°%ëp˙ûÿø¶+{|É´
+g˘xn:ÊÌÀΩ® ´Œl‚A;µàçÀ∏*ÓZaóô‡Ù1´©‹éÍã>àÓ»ËÇ2˜≥• |◊ ,–Â∏¨j“3]%3_nAñìv3C∫UúËõÀ `¨‚‘’&~\‰Œ)æ<”b÷ÅJú&ÙUx=MçZ˝z¨˙I)ç;Xø’Jπõ s+”“∏õñ¥e/%ïÜ¿ä¿@`åxôî∆ÿ@∏ Ô:≤W◊ ^À%å®T$«EÔÚÊÚÏÏ∆(Û™úytAeæØËËXKC«“∆`£@ß!«H⁄Ê~'≤IaÉ“˜Ë-º`’‡†Z¥, ≥aÜÿ!—¥—jÇv<\ﬂhÇäZ∏Ö}’≥TU˜:◊£ÇE&î˚X^áÃ≈NÌ2Íıb&£‡uà}H
+©ËçUØÎ»mı√+ˆnñ`'sSˆÀ7é¿¿Qk÷Ô®êœ6LcÛ≥7s√dΩÆÅu-L$Êo∞@ ˛˛Âs+Óë@@b“üîTŸ¬ä„‡(ÆΩ≈IéÅ±äüæYÚ5d\]Ë˜˙ø`\ImÚ `(§–ÈÈ–®◊3¢ﬁuB∏±·ΩXVµ_îˆ?‘Sò˛RøıÜROr_Øˆo˝1-›@ì∫⁄ﬂÒk‚Vﬂ‚+#'î¿›Ë√÷∫€mï?∂≠Mﬂìn3^y ˙ûﬂˇ})∑º{ˇ˙…ìˇ   ˇˇ ¨S˙$

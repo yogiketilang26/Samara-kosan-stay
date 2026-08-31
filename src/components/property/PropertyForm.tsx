@@ -8,6 +8,7 @@ import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { createOsmStandardTileLayer, OSM_ATTRIBUTION } from '../../utils/mapTiles';
 
 const renderIcon = (iconName: string) => {
   const IconComponent = (LucideIcons as any)[iconName] || LucideIcons.HelpCircle;
@@ -111,9 +112,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         attributionControl: false
       });
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19
-      }).addTo(map);
+      createOsmStandardTileLayer().addTo(map);
 
       map.on('click', (e: L.LeafletMouseEvent) => {
         const newLat = parseFloat(e.latlng.lat.toFixed(6));

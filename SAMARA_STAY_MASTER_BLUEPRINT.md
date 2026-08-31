@@ -763,11 +763,22 @@ flowchart TD
 
 ## 33. SAMARA STAY — CURRENT SYSTEM BLUEPRINT
 
-Samara Stay v14 is a fully integrated, production-ready, security-hardened Property Management System and ERP Financial Engine with multi-property financial dimensions.
+Samara Stay v16 is a fully integrated, production-ready, security-hardened Property Management System and ERP Financial Engine featuring a dedicated Executive Owner Portal, multi-property financial dimensions, and standardized Supabase + Midtrans real-time synchronization.
 
 ### Key Operational Capabilities:
+* **Tri-View Architecture:** Seamless switching between Public Booking Portal (`user`), Operations & Accounting Backoffice (`admin`), and Executive/Investor Dashboard (`owner`).
+* **Executive Owner Portal (`src/pages/Owner.tsx`):**
+  * **Executive KPI Cards:** Real-time synchronization of Cash Inflow, Active Lease Contracts, Room Occupancy (%), Net Operating Income (NOI), and 85% Distributable Dividend Pool.
+  * **P&L Breakdown & Dividend Engine:** Instant calculation of operating profit, expense ratios, and automated dividend distribution simulation.
+  * **Multi-Branch Comparative Matrix:** Side-by-side performance comparison across Salemba UI, Pasar Minggu, and Jagakarsa UI branches (Occupancy, Inflow, Maintenance Expenses, Net Profit).
+  * **Live Midtrans Cashflow & Escrow Clearing:** Real-time visibility into settled transaction volume, MDR gateway fees, and unreconciled COA 1200 funds.
+  * **Lease Expiration & Retention Monitor:** Proactive alerts for leases expiring within 45 days to optimize room turnover.
+* **Standardized Financial Metric Alignment (Super Admin vs. Owner Portal):**
+  * **Realized Inflow:** Derived strictly from verified settlements in `financial_transactions` (`income` & `dp_booking`).
+  * **Gross Contract Pipeline:** Aggregated from approved tenant booking contracts (`bookings.total_price`).
+  * **Realized Outflow:** Derived directly from recorded operational expenses (`expense`) and facility maintenance logs.
 * **Tenant Booking:** End-to-end self-service booking with instant QRIS/Virtual Account payments via Midtrans SNAP.
-* **Property Financial Dimension:** `financial_transactions` ledger entries now record `property_id` across automated booking settlements, survey deposits, and contract extensions, enabling future per-property P&L reporting.
+* **Property Financial Dimension:** `financial_transactions` ledger entries record `property_id` across automated booking settlements, survey deposits, and contract extensions, enabling true per-property P&L reporting.
 * **Contract Extension System (Perpanjangan Kontrak - Hardened Polling & Security):** Super Admin can trigger online (Midtrans SNAP) or offline (Cash/Direct Transfer) lease renewals for active tenants directly in the Admin portal.
   * **Server-Side Security:** Execution of contract extensions and financial transactions is protected behind Express server endpoints (`/api/admin/contract-extension/settle` & `/api/admin/financial-transaction/post`) with admin session verification (`requireAdminAuth`) and `service_role` execution.
   * **Realtime Synchronization:** Automatically updates tenant lease duration (`duration_months`), recalculates expiration dates, and logs history in `contract_extensions` table via PostgreSQL atomic RPC `settle_contract_extension`.
@@ -779,4 +790,40 @@ Samara Stay v14 is a fully integrated, production-ready, security-hardened Prope
 * **Realtime Operations:** A unified WebSocket manager ensures that room status updates, new bookings, contract extensions, petty cash requests, and payment approvals refresh instantly across all connected admin dashboards without requiring manual page reloads.
 
 ---
-*DOCUMENTATION COMPLETED — MASTER BLUEPRINT AUTHORIZED FOR SAMARA STAY ERP V14.0*
+
+## 34. DATA CONSISTENCY & UNIFIED SUPABASE SINGLE-SOURCE ARCHITECTURE (SUPER ADMIN & OWNER PARITY)
+
+### 1. Single Source of Truth (SSOT) Architecture
+To eliminate any disparity in financial, operational, and tenant metrics between the **Backoffice Super Admin** and **Executive Owner Portal**:
+* **Direct Database Synchronization:** Both interfaces retrieve data from the exact same Supabase PostgreSQL tables:
+  * `properties` & `rooms` (Master room stock & occupancy states)
+  * `tenants` & `bookings` (Active leaseholders & approved bookings)
+  * `financial_transactions` & `payments` (Realized general ledger cashflow & payment invoices)
+  * `midtrans_clearing_transactions` & `journal_entries` (Gateway clearing & COA accounts)
+  * `maintenance`, `petty_cash_requests`, & `purchase_orders` (Operational costs)
+* **Unified Query Bounds:** Extended default fetch limit to `1000` items across all `database.fetch*` functions to ensure neither portal truncates operational or historical financial records.
+* **Instant WebSocket Event Dispatch:** Granular database table subscriptions (`useRealtimeTable`) propagate changes immediately across active tabs and user roles.
+
+### 2. Standardized Mathematical Calculation Module (`src/lib/financialMetrics.ts`)
+* **Total Cash Inflow:** `calculateTotalInflow(transactions, payments)` uniformly aggregates verified income entries and paid invoices.
+* **Operational Expenses:** `calculateTotalExpenses(transactions)` aggregates real expense postings.
+* **Net Operating Income (NOI):** `calculateNOI(inflow, expenses)` ensures identical bottom-line figures for dividend distributions.
+* **Portfolio Occupancy Rate:** `calculateOccupancy(rooms)` computes occupancy based on live room status (`occupied` vs total units).
+
+### 3. Persistent Dual-Layer Authentication & Credential Storage
+* **Dual-Layer Architecture:**
+  1. Primary auth check against Supabase GoTrue Auth.
+  2. Fallback check against Persistent Scrypt-Hashed Auth Store (`server/authStore.ts` storing `.server_auth_store.json`) for custom credentials (e.g. `owner@samarastay.co.id` with `owner123`).
+  3. System default fallback credential validation (`samarastay2026`).
+* **Client Session Sync:** Tokens issued by the backend are synced to client-side Supabase Auth via `supabase.auth.setSession` to ensure authenticated RLS compliance.
+* **RBAC Route Guarding:** `ProtectedRoute.tsx` enforces proper permissions while allowing cross-portal oversight for authorized administrators and owners.
+
+### 4. Internal Security Audit Ledger & Owner Credential Override Protection
+* **Cryptographic Tamper-Evident Ledger:** Implemented in `server/securityAuditStore.ts` and stored in `.security_audit_store.json` using SHA-256 blockchain hash chaining. Every security block points to its `previousHash`, allowing instant validation of ledger integrity.
+* **Strict Protection on Owner Accounts:** Protects `owner@samarastay.co.id` against unauthorized overrides in `server.ts` (`/api/auth/quick-reset-password`). Attempts by unauthenticated or non-superadmin actors are blocked (403 Forbidden) and logged with `CRITICAL` severity and `BLOCKED` status.
+* **Manual System Configuration Auditing:** Tracks all changes made to system settings, booking/survey policies, FAQ items, digital signatures, COA master records, and user role updates via `src/lib/securityAudit.ts`.
+* **Integrated Audit UI Module (`SecurityAuditLogModule`):** Accessible in both Super Admin Panel (`/admin`) and Owner Portal (`/owner`), featuring real-time cryptographic hash verification, multi-criteria filtering, manual audit logging, and compliance CSV/JSON exports.
+
+---
+*DOCUMENTATION COMPLETED — MASTER BLUEPRINT AUTHORIZED FOR SAMARA STAY ERP V16.0*
+

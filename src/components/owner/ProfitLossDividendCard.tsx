@@ -11,8 +11,8 @@ interface ProfitLossDividendCardProps {
   grossRevenue: number;
   totalExpenses: number;
   netOperatingIncome: number;
-  revenueBreakdown: { name: string; amount: number; code: string }[];
-  expenseBreakdown: { name: string; amount: number; code: string }[];
+  revenueBreakdown: { name: string; amount: number; code: string; isEstimated?: boolean }[];
+  expenseBreakdown: { name: string; amount: number; code: string; isEstimated?: boolean }[];
 }
 
 export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
@@ -80,6 +80,11 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
                     {rev.code}
                   </span>
                   <span>{rev.name}</span>
+                  {rev.isEstimated && (
+                    <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-bold uppercase tracking-wider">
+                      [Estimasi]
+                    </span>
+                  )}
                 </div>
                 <span className="font-semibold text-slate-800">
                   {formatRupiah(rev.amount)}
@@ -109,6 +114,11 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
                     {exp.code}
                   </span>
                   <span className="line-clamp-1">{exp.name}</span>
+                  {exp.isEstimated && (
+                    <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-bold uppercase tracking-wider">
+                      [Estimasi]
+                    </span>
+                  )}
                 </div>
                 <span className="font-semibold text-slate-800">
                   {formatRupiah(exp.amount)}

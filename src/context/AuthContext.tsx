@@ -4,7 +4,8 @@ import { supabase } from '../lib/supabase';
 export interface UserProfile {
   id: string;
   email: string;
-  role: 'admin' | 'user';
+  role: 'super' | 'super_admin' | 'owner' | 'admin' | 'staff' | 'finance' | 'user' | 'tenant';
+  raw_role?: string;
   name: string;
 }
 
@@ -12,7 +13,7 @@ interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  signup: (email: string, password: string, fullName: string) => Promise<{ success: boolean; error?: string }>;
+  signup: (email: string, password: string, fullName: string, portal?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
 }
 
@@ -90,7 +91,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signup = async (email: string, password: string, fullName: string): Promise<{ success: boolean; error?: string }> => {
+  const signup = async (email: string, password: string, fullName: string, portal?: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
@@ -100,7 +101,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({
           email: email.trim(),
           password: password.trim(),
-          fullName: fullName.trim()
+          fullName: fullName.trim(),
+          portal: portal
         }),
       });
 

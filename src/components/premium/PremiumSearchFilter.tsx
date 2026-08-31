@@ -8,8 +8,8 @@ import { StandardFacility } from '../../types';
 interface PremiumSearchFilterProps {
   searchLocation: string;
   setSearchLocation: (val: string) => void;
-  selectedType: 'all' | 'putra' | 'putri' | 'campur';
-  setSelectedType: (val: 'all' | 'putra' | 'putri' | 'campur') => void;
+  selectedType?: 'all' | 'putra' | 'putri' | 'campur';
+  setSelectedType?: (val: 'all' | 'putra' | 'putri' | 'campur') => void;
   searchDurationType: 'monthly' | 'daily';
   setSearchDurationType: (val: 'monthly' | 'daily') => void;
   searchMode: 'building' | 'room';
@@ -104,7 +104,7 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-end pt-2">
         
         {/* Input 1: Search Keyword Input Field */}
-        <div className="md:col-span-5 space-y-2">
+        <div className="md:col-span-8 space-y-2">
           <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">
             Kata Kunci / Cabang / Tipe Kamar
           </label>
@@ -129,31 +129,8 @@ export const PremiumSearchFilter: React.FC<PremiumSearchFilterProps> = ({
           </div>
         </div>
 
-        {/* Input 2: Kebijakan Tipe Hunian (Gender Policy) */}
+        {/* Input 2: Durasi Sewa */}
         <div className="md:col-span-4 space-y-2">
-          <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">
-            Tipe Hunian (Gender)
-          </label>
-          <div className="flex bg-[#F8FAFC] border border-[#E2E8F0] p-1 rounded-2xl w-full">
-            {(['all', 'putra', 'putri', 'campur'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setSelectedType(t)}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold uppercase transition-all duration-300 cursor-pointer ${
-                  selectedType === t 
-                    ? 'bg-[#2E6F40] text-white shadow-sm' 
-                    : 'text-[#64748B] hover:text-[#2E6F40]'
-                }`}
-              >
-                {t === 'all' ? 'Semua' : t}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Input 3: Durasi Sewa */}
-        <div className="md:col-span-3 space-y-2">
           <label className="block text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans">
             Durasi Sewa
           </label>

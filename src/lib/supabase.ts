@@ -12,6 +12,7 @@ import {
   MidtransClearingTransaction, BankReconciliationMatch, NearbyAmenity
 } from '../types';
 import { INITIAL_NEARBY_AMENITIES } from '../data/nearbyAmenities';
+import { sanitizePropertyCoordinates } from '../utils/mapCoordinates';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
 let activeSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || (import.meta as any).env?.SUPABASE_URL || '';
@@ -36,9 +37,25 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 // Standardize Auth Client: Always initialize one client instance using safe placeholders to prevent GoTrue/client creation crashes
+const SUPABASE_CLIENT_OPTIONS = {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10
+    },
+    timeout: 20000,
+    heartbeatIntervalMs: 15000
+  }
+};
+
 export let supabase = createClient(
   activeSupabaseUrl || 'https://placeholder-project.supabase.co',
-  activeSupabaseAnonKey || 'placeholder-anon-key'
+  activeSupabaseAnonKey || 'placeholder-anon-key',
+  SUPABASE_CLIENT_OPTIONS
 );
 
 // Realtime listeners state to avoid duplicate subscriptions
@@ -51,6 +68,7 @@ class SupabaseRealtimeManager {
   private listeners: Map<string, Set<RealtimeCallback>> = new Map();
   private connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' = 'DISCONNECTED';
   private retryTimeout: any = null;
+  private watchdogTimeout: any = null;
   private retryCount = 0;
   private lastEventTime: string | null = null;
   private subscriptionHistory: { timestamp: string, type: 'SUBSCRIBE' | 'UNSUBSCRIBE', table: string }[] = [];
@@ -58,6 +76,7 @@ class SupabaseRealtimeManager {
   private reconnectAttempts = 0;
   private droppedSubscriptions = 0;
   private onLogCallbacks: Set<(level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', message: string) => void> = new Set();
+  private isNetworkListenersRegistered = false;
 
   public registerOnLog(callback: (level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', message: string) => void) {
     this.onLogCallbacks.add(callback);
@@ -76,6 +95,7 @@ class SupabaseRealtimeManager {
     this.client = supabaseClient;
     this.isConfigured = isConfigured;
     this.cleanupAll();
+    this.setupNetworkLifecycleListeners();
     
     if (this.isConfigured && this.client) {
       this.connectionStatus = 'DISCONNECTED';
@@ -83,20 +103,50 @@ class SupabaseRealtimeManager {
     }
   }
 
-  private establishGlobalChannel() {
+  private setupNetworkLifecycleListeners() {
+    if (this.isNetworkListenersRegistered || typeof window === 'undefined') return;
+    this.isNetworkListenersRegistered = true;
+
+    window.addEventListener('online', () => {
+      console.log('[REALTIME MANAGER] Network came online. Verifying websocket channel...');
+      this.triggerLog('INFO', 'Network came online. Re-checking realtime channel connection.');
+      if (this.isConfigured && this.connectionStatus !== 'CONNECTED') {
+        this.establishGlobalChannel(true);
+      }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[REALTIME MANAGER] App tab regained visibility. Verifying channel health...');
+        if (this.isConfigured && (this.connectionStatus === 'DISCONNECTED' || !this.globalChannel)) {
+          this.establishGlobalChannel(true);
+        }
+      }
+    });
+  }
+
+  private establishGlobalChannel(force = false) {
     if (!this.client || !this.isConfigured) return;
 
-    if (this.connectionStatus === 'CONNECTED' || this.connectionStatus === 'CONNECTING') {
+    if (!force && (this.connectionStatus === 'CONNECTED' || this.connectionStatus === 'CONNECTING')) {
       return; // DO NOTHING IF ALREADY CONNECTED OR CONNECTING
     }
 
     this.connectionStatus = 'CONNECTING';
     this.triggerLog('INFO', 'Websocket status changed to CONNECTING');
 
-    if (this.retryTimeout) {
-      clearTimeout(this.retryTimeout);
-      this.retryTimeout = null;
-    }
+    this.clearRetryTimeout();
+    this.clearWatchdogTimeout();
+
+    // Watchdog: If subscription gets stuck in CONNECTING state for > 15s, reset and retry
+    this.watchdogTimeout = setTimeout(() => {
+      if (this.connectionStatus === 'CONNECTING') {
+        console.warn('[REALTIME MANAGER WATCHDOG] Subscription hung in CONNECTING state for 15s. Resetting channel...');
+        this.triggerLog('WARNING', 'Realtime subscription connection timed out (watchdog fired). Re-establishing...');
+        this.handleRealtimeDisconnected();
+        this.scheduleReconnect();
+      }
+    }, 15000);
 
     try {
       console.log('[REALTIME MANAGER] Setting up single global database-wide listener...');
@@ -136,6 +186,8 @@ class SupabaseRealtimeManager {
         })
         .subscribe((status: string, err?: any) => {
           console.log(`[REALTIME MANAGER STATUS] Global channel status: ${status}`);
+          this.clearWatchdogTimeout();
+
           if (status === 'SUBSCRIBED') {
             this.retryCount = 0;
             this.handleRealtimeConnected();
@@ -151,8 +203,23 @@ class SupabaseRealtimeManager {
         });
     } catch (err) {
       console.error('[REALTIME MANAGER] Error establishing global channel:', err);
+      this.clearWatchdogTimeout();
       this.handleRealtimeDisconnected();
       this.scheduleReconnect();
+    }
+  }
+
+  private clearRetryTimeout() {
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+      this.retryTimeout = null;
+    }
+  }
+
+  private clearWatchdogTimeout() {
+    if (this.watchdogTimeout) {
+      clearTimeout(this.watchdogTimeout);
+      this.watchdogTimeout = null;
     }
   }
 
@@ -166,12 +233,16 @@ class SupabaseRealtimeManager {
     this.triggerLog('INFO', `Websocket scheduling reconnect attempt #${this.reconnectAttempts}`);
 
     this.retryCount++;
-    const delay = Math.min(1000 * Math.pow(2, this.retryCount), 30000);
+    // Exponential backoff with jitter (1s, 1.5s, 2.25s, ... capped at 30s)
+    const baseDelay = Math.min(1000 * Math.pow(1.5, this.retryCount), 30000);
+    const jitter = Math.floor(Math.random() * 500);
+    const delay = baseDelay + jitter;
+    
     console.log(`[REALTIME MANAGER] Reconnecting global channel in ${delay}ms (Attempt ${this.retryCount})`);
     
     this.retryTimeout = setTimeout(() => {
       this.retryTimeout = null;
-      this.establishGlobalChannel();
+      this.establishGlobalChannel(true);
     }, delay);
   }
 
@@ -190,10 +261,8 @@ class SupabaseRealtimeManager {
   }
 
   public cleanupAll() {
-    if (this.retryTimeout) {
-      clearTimeout(this.retryTimeout);
-      this.retryTimeout = null;
-    }
+    this.clearRetryTimeout();
+    this.clearWatchdogTimeout();
     this.retryCount = 0;
 
     if (this.globalChannel && this.client) {
@@ -317,7 +386,7 @@ export function configureSupabaseDynamically(url: string, key: string) {
     activeSupabaseUrl = url;
     activeSupabaseAnonKey = key;
     isSupabaseConfigured = true;
-    supabase = createClient(url, key);
+    supabase = createClient(url, key, SUPABASE_CLIENT_OPTIONS);
     console.log('[SUPABASE] Configured dynamically from server runtime environment!');
     
     // Re-initialize realtime subscriptions with the new client
@@ -350,7 +419,8 @@ const tableSchemas: Record<string, string[]> = {
     'duration_days', 'check_in_date', 'check_out_date', 'nik', 'ktp_image', 'is_dp',
     'dp_amount', 'coupon_code', 'discount_amount', 'is_for_other', 'occupant_name',
     'occupant_phone', 'occupant_email', 'occupant_nik', 'occupant_ktp_image',
-    'is_occupant_verified', 'occupant_arrival_status', 'signature_url', 'created_at'
+    'is_occupant_verified', 'occupant_arrival_status', 'signature_url',
+    'hold_expires_at', 'owner_signature_url', 'owner_signed_at', 'owner_signer_name', 'owner_notes', 'created_at'
   ],
   payments: [
     'id', 'tenant_name', 'property_id', 'amount', 'method', 'status', 'payment_date',
@@ -387,7 +457,7 @@ const tableSchemas: Record<string, string[]> = {
     'max_discount_amount', 'is_active', 'description', 'created_at'
   ],
   settings: [
-    'id', 'booking_rules', 'survey_rules', 'standard_facilities', 'why_choose_us', 'faqs', 'updated_at'
+    'id', 'booking_rules', 'survey_rules', 'standard_facilities', 'why_choose_us', 'faqs', 'owner_signature_url', 'updated_at'
   ]
 };
 
@@ -476,7 +546,7 @@ export const database = {
   // --- PROPERTIES ---
   async fetchProperties(options?: { limit?: number; offset?: number }): Promise<Property[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       let { data, error } = await supabase
@@ -533,8 +603,12 @@ export const database = {
           }
         }
 
+        const coords = sanitizePropertyCoordinates(p);
+
         const cleanProperty = { 
           ...p, 
+          lat: coords.lat,
+          lng: coords.lng,
           facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(p.facilities) ? p.facilities : []),
           deposit_amount: depositVal ?? 500000
         };
@@ -554,6 +628,11 @@ export const database = {
       const id = prop.id;
       const payload = { ...prop };
       
+      // Ensure coordinates are clean numbers
+      const coords = sanitizePropertyCoordinates(payload);
+      payload.lat = coords.lat;
+      payload.lng = coords.lng;
+
       // Extract facilities from payload so they are not written to properties table
       const facilitiesToSync = payload.facilities;
       delete (payload as any).facilities;
@@ -823,7 +902,7 @@ export const database = {
   // --- ROOMS ---
   async fetchRooms(options?: { limit?: number; offset?: number }): Promise<Room[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       let { data, error } = await supabase
@@ -991,7 +1070,7 @@ export const database = {
   // --- BOOKINGS ---
   async fetchBookings(options?: { limit?: number; offset?: number }): Promise<Booking[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1026,6 +1105,37 @@ export const database = {
       const payload = { ...booking };
       delete (payload as any).id;
 
+      // Check if this operation is an approval transition
+      const isApprovalTransition = payload.status === 'approved' || booking.status === 'approved';
+
+      if (isApprovalTransition && id) {
+        // --- 1. IDEMPOTENCY GUARD VIA SECURE ADMIN API & SERVICE ROLE RPC ---
+        const headers = await getAuthHeaders();
+        const res = await fetch('/api/admin/booking/approve', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            booking_id: id,
+            payment_method: payload.payment_method || existingBooking?.payment_method || 'Transfer Manual'
+          })
+        });
+
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || 'Gagal memproses approval booking di server.');
+        }
+
+        const approveResult = await res.json();
+        if (approveResult.already_approved) {
+          console.log(`[SUPABASE IDEMPOTENCY] Booking ID ${id} is ALREADY approved. Skipping duplicate side-effects.`);
+          return (approveResult.booking || { ...existingBooking, ...booking, status: 'approved' }) as Booking;
+        }
+
+        const updated = (approveResult.booking || { ...existingBooking, ...booking, status: 'approved' }) as Booking;
+        return updated;
+      }
+
+      // Non-approval standard save/update
       if (!id && !payload.status) payload.status = 'pending';
       if (!id && !payload.booking_date) payload.booking_date = new Date().toISOString().split('T')[0];
 
@@ -1037,61 +1147,7 @@ export const database = {
 
       const updated = (data && data.length > 0 ? data[0] : { ...existingBooking, ...booking }) as Booking;
 
-      // Approved status side-effects
-      if (updated.status === 'approved' && updated.room_id) {
-        const occupantName = (updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_name || updated.tenant_name) : updated.tenant_name;
-        await safeSupabaseUpsert('rooms', { status: 'occupied', current_tenant_name: occupantName }, updated.room_id);
-
-        const tenantPayload = {
-          full_name: occupantName,
-          phone: (updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_phone || updated.phone) : updated.phone,
-          email: ((updated.is_for_other || !!updated.occupant_name) ? (updated.occupant_email || updated.email) : updated.email) || '',
-          avatar_initials: occupantName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
-          avatar_color: "bg-indigo-600",
-          property_id: updated.property_id,
-          room_number: updated.room_number,
-          start_date: updated.check_in_date || new Date().toISOString().split('T')[0],
-          duration_months: updated.duration_months || 1,
-          payment_status: 'paid'
-        };
-
-        let existingTenantId = null;
-        try {
-          const { data: dbTenants } = await supabase
-            .from('tenants')
-            .select('id')
-            .eq('room_number', updated.room_number)
-            .eq('property_id', updated.property_id)
-            .limit(1);
-          if (dbTenants && dbTenants.length > 0) {
-            existingTenantId = dbTenants[0].id;
-          }
-        } catch (dbErr) {
-          console.warn('[SUPABASE] Failed checking existing tenants table:', dbErr);
-        }
-
-        await safeSupabaseUpsert('tenants', tenantPayload, existingTenantId);
-
-        const invoiceId = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
-        const paymentPayload = {
-          id: invoiceId,
-          tenant_name: updated.tenant_name,
-          property_id: updated.property_id,
-          amount: updated.total_price,
-          method: updated.payment_method || 'Midtrans',
-          status: 'paid',
-          payment_date: new Date().toISOString().split('T')[0],
-          midtrans_order_id: updated.midtrans_order_id || null,
-          transaction_id: `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`
-        };
-        const { error: paymentErr } = await safeSupabaseUpsert('payments', paymentPayload, invoiceId);
-        if (paymentErr) {
-          const { id: _, ...fallbackPayload } = paymentPayload;
-          await safeSupabaseUpsert('payments', fallbackPayload);
-        }
-
-        await this.syncPropertyRoomCount(updated.property_id);
-      } else if (updated.status === 'rejected' && updated.room_id) {
+      if (updated.status === 'rejected' && updated.room_id) {
         if (existingBooking && existingBooking.status === 'approved') {
           await safeSupabaseUpsert('rooms', { status: 'available', current_tenant_name: null }, updated.room_id);
           await this.syncPropertyRoomCount(updated.property_id);
@@ -1105,10 +1161,210 @@ export const database = {
     }
   },
 
+  // Atomic Room Hold for Concurrency & Anti-Double Booking
+  async holdRoomAtomic(roomId: number, bookingId: number, holdMinutes: number = 15): Promise<{ success: boolean; message: string; hold_expires_at?: string }> {
+    if (!isSupabaseConfigured) {
+      return { success: true, message: 'Local mode active' };
+    }
+    try {
+      const { data, error } = await supabase.rpc('hold_room_atomic', {
+        p_room_id: roomId,
+        p_booking_id: bookingId,
+        p_hold_minutes: holdMinutes
+      });
+
+      if (error) {
+        console.warn('[SUPABASE] RPC hold_room_atomic fallback:', error);
+        // Fallback atomic check via direct query if RPC is not deployed yet
+        const { data: roomData } = await supabase
+          .from('rooms')
+          .select('id, status')
+          .eq('id', roomId)
+          .single();
+
+        if (roomData && roomData.status === 'occupied') {
+          return { success: false, message: 'Kamar sudah terisi (Occupied).' };
+        }
+
+        const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000).toISOString();
+        await supabase
+          .from('bookings')
+          .update({ hold_expires_at: expiresAt })
+          .eq('id', bookingId);
+
+        return { success: true, message: 'Kamar berhasil di-hold (fallback)', hold_expires_at: expiresAt };
+      }
+
+      return data as { success: boolean; message: string; hold_expires_at?: string };
+    } catch (err: any) {
+      console.error('[SUPABASE] holdRoomAtomic execution error:', err);
+      return { success: false, message: err?.message || 'Gagal mengunci kamar' };
+    }
+  },
+
+  // Cleanup expired room holds
+  async cleanupExpiredRoomHolds(): Promise<number> {
+    if (!isSupabaseConfigured) return 0;
+    try {
+      const nowIso = new Date().toISOString();
+      const { data: expiredBookings } = await supabase
+        .from('bookings')
+        .select('id, room_id, status, hold_expires_at')
+        .eq('status', 'pending')
+        .lt('hold_expires_at', nowIso);
+
+      if (expiredBookings && expiredBookings.length > 0) {
+        console.log(`[CLEANUP] Found ${expiredBookings.length} expired room holds to release.`);
+        for (const b of expiredBookings) {
+          if (b.room_id) {
+            await supabase
+              .from('rooms')
+              .update({ status: 'available', current_tenant_name: null })
+              .eq('id', b.room_id)
+              .eq('status', 'reserved');
+          }
+        }
+        return expiredBookings.length;
+      }
+      return 0;
+    } catch (err) {
+      console.warn('[CLEANUP] Expired room hold cleanup error:', err);
+      return 0;
+    }
+  },
+
+  // Otomatisasi Pelepasan Kamar (Auto-Release Expired Leases):
+  // Jika durasi sewa sudah 0 dan telah melewati batas toleransi 24 jam, kamar otomatis menjadi available
+  // dan dapat dibooking kembali oleh end user lain.
+  async autoReleaseExpiredLeases(): Promise<{ releasedRooms: number; checkedOutTenants: number }> {
+    if (!isSupabaseConfigured) return { releasedRooms: 0, checkedOutTenants: 0 };
+    try {
+      const now = new Date();
+      let releasedRoomsCount = 0;
+      let checkedOutTenantsCount = 0;
+
+      // 1. Periksa seluruh penyewa aktif di tabel 'tenants'
+      const { data: activeTenants } = await supabase
+        .from('tenants')
+        .select('*')
+        .neq('status', 'checkout');
+
+      if (activeTenants && activeTenants.length > 0) {
+        for (const tenant of activeTenants) {
+          if (!tenant.start_date) continue;
+          const startDate = new Date(tenant.start_date);
+          if (isNaN(startDate.getTime())) continue;
+
+          const endDate = new Date(startDate);
+          const months = Math.max(1, tenant.duration_months || 1);
+          endDate.setMonth(endDate.getMonth() + months);
+
+          const diffMs = endDate.getTime() - now.getTime();
+          const diffHours = diffMs / (1000 * 60 * 60);
+
+          // Jika durasi sewa sudah habis (0) dan melewati batas 24 jam
+          if (diffHours <= -24) {
+            console.log(`[AUTO-RELEASE] Penyewa ${tenant.full_name} (Kamar ${tenant.room_number}) telah habis masa sewanya (>24 jam). Mengosongkan kamar.`);
+            
+            // Tandai tenant status menjadi checkout
+            await supabase
+              .from('tenants')
+              .update({ status: 'checkout' })
+              .eq('id', tenant.id);
+            checkedOutTenantsCount++;
+
+            // Ubah status kamar di tabel 'rooms' menjadi 'available'
+            let roomQuery = supabase
+              .from('rooms')
+              .update({ status: 'available', current_tenant_name: null })
+              .eq('room_number', tenant.room_number);
+            
+            if (tenant.property_id) {
+              roomQuery = roomQuery.eq('property_id', tenant.property_id);
+            }
+            await roomQuery;
+            releasedRoomsCount++;
+
+            // Perbarui booking terkait menjadi checkout jika ada
+            await supabase
+              .from('bookings')
+              .update({ status: 'checkout' })
+              .eq('room_number', tenant.room_number)
+              .eq('status', 'approved');
+
+            // Catat log aktivitas sistem
+            try {
+              await this.logActivity(
+                "System", 
+                "AUTO_RELEASE_EXPIRED_LEASE", 
+                `Otomatis mengosongkan Kamar ${tenant.room_number} (${tenant.full_name}) karena masa sewa telah habis dan melewati toleransi 24 jam.`
+              );
+            } catch (e) {}
+          }
+        }
+      }
+
+      // 2. Periksa juga booking berstatus 'approved' yang mungkin belum memiliki record di tabel tenant
+      const { data: approvedBookings } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('status', 'approved');
+
+      if (approvedBookings && approvedBookings.length > 0) {
+        for (const booking of approvedBookings) {
+          const startStr = booking.check_in_date || booking.booking_date;
+          if (!startStr) continue;
+          const startDate = new Date(startStr);
+          if (isNaN(startDate.getTime())) continue;
+
+          const endDate = new Date(startDate);
+          if (booking.booking_type === 'daily' && booking.duration_days && booking.duration_days > 0) {
+            endDate.setDate(endDate.getDate() + booking.duration_days);
+          } else {
+            const months = Math.max(1, booking.duration_months || 1);
+            endDate.setMonth(endDate.getMonth() + months);
+          }
+
+          const diffMs = endDate.getTime() - now.getTime();
+          const diffHours = diffMs / (1000 * 60 * 60);
+
+          if (diffHours <= -24) {
+            console.log(`[AUTO-RELEASE] Booking ID ${booking.id} (Kamar ${booking.room_number}) telah kadaluarsa (>24 jam). Mengubah status checkout.`);
+            await supabase
+              .from('bookings')
+              .update({ status: 'checkout' })
+              .eq('id', booking.id);
+
+            if (booking.room_id) {
+              await supabase
+                .from('rooms')
+                .update({ status: 'available', current_tenant_name: null })
+                .eq('id', booking.room_id);
+            } else if (booking.room_number) {
+              let rQuery = supabase
+                .from('rooms')
+                .update({ status: 'available', current_tenant_name: null })
+                .eq('room_number', booking.room_number);
+              if (booking.property_id) {
+                rQuery = rQuery.eq('property_id', booking.property_id);
+              }
+              await rQuery;
+            }
+          }
+        }
+      }
+
+      return { releasedRooms: releasedRoomsCount, checkedOutTenants: checkedOutTenantsCount };
+    } catch (err) {
+      console.warn('[AUTO-RELEASE] Auto-release expired leases error:', err);
+      return { releasedRooms: 0, checkedOutTenants: 0 };
+    }
+  },
+
   // --- SURVEYS ---
   async fetchSurveys(options?: { limit?: number; offset?: number }): Promise<Survey[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1227,7 +1483,7 @@ export const database = {
   // --- COUPONS ---
   async fetchCoupons(options?: { limit?: number; offset?: number }): Promise<Coupon[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1284,7 +1540,7 @@ export const database = {
   // --- FINANCIAL ACCOUNTING SYSTEMS ---
   async fetchAccounts(options?: { limit?: number; offset?: number }): Promise<AccountCOA[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 200;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1305,7 +1561,7 @@ export const database = {
 
   async fetchFinancialTransactions(options?: { limit?: number; offset?: number }): Promise<FinancialTransaction[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 200;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1326,7 +1582,7 @@ export const database = {
 
   async fetchJournalEntries(options?: { limit?: number; offset?: number }): Promise<JournalEntry[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 200;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1532,6 +1788,7 @@ export const database = {
     }
 
     await this.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey, sewa, why-choose-us, dan FAQ berhasil disimpan.");
+    
     return settings;
   },
 
@@ -1826,7 +2083,7 @@ export const database = {
   // --- TENANTS ---
   async fetchTenants(options?: { limit?: number; offset?: number }): Promise<Tenant[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1884,7 +2141,7 @@ export const database = {
   // --- CONTRACT EXTENSIONS ---
   async fetchContractExtensions(options?: { limit?: number; offset?: number }): Promise<ContractExtension[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -1994,7 +2251,7 @@ export const database = {
   // --- PAYMENTS ---
   async fetchPayments(options?: { limit?: number; offset?: number }): Promise<PaymentInvoice[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2036,7 +2293,7 @@ export const database = {
   // --- USERS ---
   async fetchUsers(options?: { limit?: number; offset?: number }): Promise<UserSystem[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2069,11 +2326,26 @@ export const database = {
       }
       const updated = (data && data.length > 0 ? data[0] : user) as UserSystem;
       await this.logActivity("System", user.id ? "UPDATE_USER" : "CREATE_USER", `User ${updated.full_name} (${updated.role}) disimpan.`);
+      
       return updated;
     } catch (err: any) {
       console.error('saveUser failed:', err);
       throw err;
     }
+  },
+
+  async assignUserProperty(userId: string, propertyId: number | null): Promise<any> {
+    const headers = await getAuthHeaders();
+    const res = await fetch(`/api/admin/users/${userId}/assign-property`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ property_id: propertyId })
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || 'Gagal menugaskan properti untuk pengguna.');
+    }
+    return await res.json();
   },
 
   async deleteUser(id: string): Promise<boolean> {
@@ -2085,6 +2357,7 @@ export const database = {
         throw new Error(`Gagal menghapus user: ${error.message}`);
       }
       await this.logActivity("System", "DELETE_USER", `Menghapus user ID: ${id}`);
+
       return true;
     } catch (err: any) {
       console.error('deleteUser failed:', err);
@@ -2120,14 +2393,25 @@ export const database = {
   // --- MAINTENANCE ---
   async fetchMaintenance(options?: { limit?: number; offset?: number }): Promise<Maintenance[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
-      const { data, error } = await supabase
-        .from('maintenances')
+      let { data, error } = await supabase
+        .from('maintenance')
         .select('*')
         .range(offset, offset + limit - 1)
         .order('id', { ascending: false });
+
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        const fallbackRes = await supabase
+          .from('maintenances')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: false });
+        data = fallbackRes.data;
+        error = fallbackRes.error;
+      }
+
       if (error) {
         logSupabaseError('fetchMaintenance', error);
         return [];
@@ -2166,9 +2450,18 @@ export const database = {
         status: maint.status,
         date: maint.date
       };
-      const { data, error } = id
-        ? await supabase.from('maintenances').update(payload).eq('id', id).select().single()
-        : await supabase.from('maintenances').insert(payload).select().single();
+      let { data, error } = id
+        ? await supabase.from('maintenance').update(payload).eq('id', id).select().single()
+        : await supabase.from('maintenance').insert(payload).select().single();
+
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        const fallbackRes = id
+          ? await supabase.from('maintenances').update(payload).eq('id', id).select().single()
+          : await supabase.from('maintenances').insert(payload).select().single();
+        data = fallbackRes.data;
+        error = fallbackRes.error;
+      }
+
       if (error) {
         logSupabaseError('saveMaintenance', error);
         throw error;
@@ -2183,7 +2476,7 @@ export const database = {
   // --- PETTY CASH REQUESTS ---
   async fetchPettyCashRequests(options?: { limit?: number; offset?: number }): Promise<PettyCashRequest[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2230,7 +2523,7 @@ export const database = {
   // --- FIXED ASSETS ---
   async fetchFixedAssets(options?: { limit?: number; offset?: number }): Promise<FixedAsset[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2296,7 +2589,7 @@ export const database = {
   // --- BUDGETS ---
   async fetchBudgets(options?: { limit?: number; offset?: number }): Promise<Budget[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2353,7 +2646,7 @@ export const database = {
   // --- VENDORS ---
   async fetchVendors(options?: { limit?: number; offset?: number }): Promise<Vendor[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2398,7 +2691,7 @@ export const database = {
   // --- PURCHASE ORDERS ---
   async fetchPurchaseOrders(options?: { limit?: number; offset?: number }): Promise<PurchaseOrder[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2445,7 +2738,7 @@ export const database = {
   // --- INVENTORY ITEMS ---
   async fetchInventoryItems(options?: { limit?: number; offset?: number }): Promise<InventoryItem[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2508,7 +2801,7 @@ export const database = {
   // --- BANK STATEMENT ITEMS ---
   async fetchBankStatementItems(options?: { limit?: number; offset?: number }): Promise<BankStatementItem[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 100;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2574,7 +2867,7 @@ export const database = {
   // --- MIDTRANS CLEARING & RECONCILIATION ---
   async fetchMidtransClearingTransactions(options?: { limit?: number; offset?: number }): Promise<MidtransClearingTransaction[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 200;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase
@@ -2613,7 +2906,7 @@ export const database = {
 
   async fetchBankReconciliationMatches(options?: { limit?: number; offset?: number }): Promise<BankReconciliationMatch[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 200;
+    const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
       const { data, error } = await supabase

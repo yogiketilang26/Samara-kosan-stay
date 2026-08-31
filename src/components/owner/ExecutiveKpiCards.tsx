@@ -6,7 +6,8 @@ import {
 import { formatRupiah } from '../../utils/formatCurrency';
 
 interface ExecutiveKpiCardsProps {
-  grossRevenue: number;
+  grossRevenue: number; // Realized cash inflow (Rp 189.825.000)
+  totalContractRevenue?: number; // Total contract pipeline (Rp 262.655.000)
   totalExpenses: number;
   netOperatingIncome: number;
   distributableDividend: number;
@@ -19,6 +20,7 @@ interface ExecutiveKpiCardsProps {
 
 export const ExecutiveKpiCards: React.FC<ExecutiveKpiCardsProps> = ({
   grossRevenue,
+  totalContractRevenue,
   totalExpenses,
   netOperatingIncome,
   distributableDividend,
@@ -28,16 +30,16 @@ export const ExecutiveKpiCards: React.FC<ExecutiveKpiCardsProps> = ({
   avgRevenuePerRoom,
   pendingMidtransClearing
 }) => {
-  const profitMargin = grossRevenue > 0 ? (netOperatingIncome / grossRevenue) * 100 : 0;
+  const profitMargin = grossRevenue > 0 ? (netOperatingIncome / grossRevenue) * 100 : (totalExpenses === 0 ? 100 : 0);
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
       
-      {/* 1. Gross Revenue / Total Omzet */}
+      {/* 1. Gross Revenue / Total Inflow */}
       <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm relative overflow-hidden flex flex-col justify-between group hover:shadow-md transition-all">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold text-slate-500 uppercase tracking-wider font-mono">
-            Total Omzet Pendapatan
+            Total Pendapatan (Inflow)
           </span>
           <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
             <TrendingUp size={18} />
@@ -47,12 +49,18 @@ export const ExecutiveKpiCards: React.FC<ExecutiveKpiCardsProps> = ({
           <div className="text-2xl font-extrabold text-slate-900 font-display tracking-tight">
             {formatRupiah(grossRevenue)}
           </div>
-          <div className="flex items-center gap-1.5 mt-2 text-xs text-slate-500">
-            <span className="text-emerald-600 font-bold flex items-center">
-              <ArrowUpRight size={13} />
-              Sewa & DP
-            </span>
-            <span>• Seluruh transaksi masuk</span>
+          <div className="flex flex-col gap-0.5 mt-2 text-xs text-slate-500">
+            <div className="flex items-center justify-between">
+              <span className="text-emerald-600 font-bold flex items-center gap-0.5 text-[11px]">
+                <ArrowUpRight size={12} />
+                Arus Kas Masuk Real-Time
+              </span>
+            </div>
+            {totalContractRevenue && totalContractRevenue > 0 ? (
+              <span className="text-[10px] text-slate-400 font-mono">
+                Akumulasi Kontrak: {formatRupiah(totalContractRevenue)}
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
@@ -70,10 +78,10 @@ export const ExecutiveKpiCards: React.FC<ExecutiveKpiCardsProps> = ({
         <div className="mt-3">
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-extrabold text-slate-900 font-display tracking-tight">
-              {occupancyRate.toFixed(1)}%
+              {Math.round(occupancyRate)}%
             </span>
             <span className="text-xs font-semibold text-slate-500">
-              ({occupiedRooms}/{totalRooms} Unit Terisi)
+              ({occupiedRooms} terisi dari {totalRooms} unit)
             </span>
           </div>
           {/* Progress bar */}
@@ -102,8 +110,8 @@ export const ExecutiveKpiCards: React.FC<ExecutiveKpiCardsProps> = ({
           </div>
           <div className="flex items-center justify-between mt-2 text-xs">
             <span className="text-slate-500">Beban: {formatRupiah(totalExpenses)}</span>
-            <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
-              Margin {profitMargin.toFixed(0)}%
+            <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md text-[11px]">
+              Marjin {profitMargin.toFixed(0)}%
             </span>
           </div>
         </div>

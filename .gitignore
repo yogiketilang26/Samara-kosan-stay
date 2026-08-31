@@ -9,3 +9,5 @@ coverage/
 test_*.cjs
 query_*.cjs
 *.local.cjs
+.server_auth_store.json
+.security_audit_store.json

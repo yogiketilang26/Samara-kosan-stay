@@ -1,14 +1,20 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { Property, Room, NearbyAmenity, AmenityCategory } from '../../types';
 import { database } from '../../lib/supabase';
 import { 
   AMENITY_CATEGORIES, 
   INITIAL_NEARBY_AMENITIES, 
   getAmenitiesForProperty,
-  AmenityCategoryConfig,
-  calculateDistanceMeters
+  fetchNearbyAmenitiesFromOSM
 } from '../../data/nearbyAmenities';
+import {
+  sanitizePropertyCoordinates,
+  sanitizeAmenityCoordinates,
+  isValidCoordinate,
+  calculateDistanceMeters
+} from '../../utils/mapCoordinates';
 import { 
   MapPin, 
   Building2, 
@@ -23,22 +29,27 @@ import {
   Moon, 
   Search, 
   Layers, 
-  Eye, 
   CheckCircle, 
-  ArrowRight, 
   ExternalLink, 
-  Compass, 
   Maximize2, 
   Minimize2,
   Calendar,
   Bed,
-  Info,
-  ChevronRight,
-  Filter,
   Route,
-  Clock,
-  Car
+  Car,
+  RotateCw,
+  LocateFixed,
+  AlertCircle,
+  Globe,
+  RefreshCw,
+  Compass
 } from 'lucide-react';
+import { 
+  createOsmStandardTileLayer, 
+  createSatelliteTileLayer, 
+  OSM_ATTRIBUTION,
+  ESRI_SATELLITE_ATTRIBUTION
+} from '../../utils/mapTiles';
 
 interface PropertyMapViewProps {
   properties: Property[];
@@ -50,31 +61,17 @@ interface PropertyMapViewProps {
   lang?: 'id' | 'en';
 }
 
-type MapLayerType = 'light' | 'voyager' | 'osm' | 'satellite';
+type MapLayerType = 'osm' | 'satellite';
 
-const MAP_LAYERS: Record<MapLayerType, { name: string; url: string; attribution: string; maxZoom: number }> = {
-  light: {
-    name: 'Carto Light (Bersih)',
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-    maxZoom: 20
-  },
-  voyager: {
-    name: 'Carto Voyager (Warna)',
-    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-    maxZoom: 20
-  },
+const MAP_LAYERS: Record<MapLayerType, { name: string; attribution: string; maxZoom: number }> = {
   osm: {
-    name: 'OpenStreetMap Standar',
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors',
+    name: 'OpenStreetMap (Standar)',
+    attribution: OSM_ATTRIBUTION,
     maxZoom: 19
   },
   satellite: {
-    name: 'Satelit Esri Imagery',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+    name: 'Citra Satelit Esri',
+    attribution: ESRI_SATELLITE_ATTRIBUTION,
     maxZoom: 18
   }
 };
@@ -96,86 +93,176 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
   // Search & Filter states
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<AmenityCategory | 'all'>('all');
-  const [radiusFilter, setRadiusFilter] = useState<number>(2000); // 2000m (2km) default
+  const [radiusFilter, setRadiusFilter] = useState<number>(3000); // 3000m (3km) default
   const [showRadiusCircle, setShowRadiusCircle] = useState(true);
-  const [activeLayer, setActiveLayer] = useState<MapLayerType>('light');
+  const [activeLayer, setActiveLayer] = useState<MapLayerType>('osm');
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'properties' | 'amenities'>('amenities');
   const [hoveredAmenityId, setHoveredAmenityId] = useState<string | null>(null);
+  const [mapTileError, setMapTileError] = useState<string | null>(null);
 
-  // Map DOM and Leaflet References
+  // User Live Geolocation
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [isLocatingUser, setIsLocatingUser] = useState(false);
+  const userMarkerRef = useRef<L.Marker | null>(null);
+
+  // Dynamic POIs from Overpass API + Supabase
+  const [osmAmenities, setOsmAmenities] = useState<NearbyAmenity[]>([]);
+  const [dbAmenities, setDbAmenities] = useState<NearbyAmenity[]>([]);
+  const [isLoadingOsm, setIsLoadingOsm] = useState(false);
+  const [osmFetchError, setOsmFetchError] = useState<string | null>(null);
+
+  // Map DOM & Leaflet References
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
-  const tileLayerRef = useRef<L.TileLayer | null>(null);
-  const propertyMarkersRef = useRef<Record<number, L.Marker>>({});
-  const amenityMarkersRef = useRef<Record<string, L.Marker>>({});
-  const radiusCircleRef = useRef<L.Circle | null>(null);
+  const baseLayersRef = useRef<{ osm: L.TileLayer | null; satellite: L.TileLayer | null }>({ osm: null, satellite: null });
+  const propertyLayerRef = useRef<L.LayerGroup | null>(null);
+  const facilityLayerRef = useRef<L.LayerGroup | null>(null);
+  const radiusLayerRef = useRef<L.LayerGroup | null>(null);
+  const userLocationLayerRef = useRef<L.LayerGroup | null>(null);
+  const propertyMarkersRef = useRef<{ [id: number]: L.Marker }>({});
+  const amenityMarkersRef = useRef<{ [id: string]: L.Marker }>({});
 
-  // Active property object
+  // Resolve active selected property with safe coordinates
   const activeProperty = useMemo(() => {
-    return properties.find(p => p.id === activePropId) || properties[0] || null;
+    const found = properties.find(p => p.id === activePropId) || properties[0] || null;
+    if (!found) return null;
+    const coords = sanitizePropertyCoordinates(found);
+    return { ...found, lat: coords.lat, lng: coords.lng };
   }, [properties, activePropId]);
 
-  // Database amenities state
-  const [dbAmenities, setDbAmenities] = useState<NearbyAmenity[]>(INITIAL_NEARBY_AMENITIES);
-  const [isLoadingAmenities, setIsLoadingAmenities] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-    const loadAmenities = async () => {
-      setIsLoadingAmenities(true);
-      try {
-        const fetched = await database.fetchNearbyAmenities();
-        if (isMounted && fetched && fetched.length > 0) {
-          setDbAmenities(fetched);
-        }
-      } catch (err) {
-        console.warn('Could not load amenities from Supabase, using initial data:', err);
-      } finally {
-        if (isMounted) setIsLoadingAmenities(false);
-      }
-    };
-    loadAmenities();
-    return () => {
-      isMounted = false;
-    };
-  }, [activePropId]);
-
-  // Sync active property with prop
+  // Sync prop changes from outside
   useEffect(() => {
     if (selectedPropertyId && selectedPropertyId !== activePropId) {
       setActivePropId(selectedPropertyId);
     }
   }, [selectedPropertyId]);
 
-  // Calculated amenities for the active property
+  // 1. Fetch Supabase custom amenities for current property
+  useEffect(() => {
+    if (!activePropId) return;
+
+    let isMounted = true;
+    database.fetchNearbyAmenities(activePropId)
+      .then(data => {
+        if (isMounted && data && data.length > 0) {
+          setDbAmenities(data);
+        }
+      })
+      .catch(err => {
+        console.warn('[PropertyMapView] Failed to fetch amenities from Supabase:', err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activePropId]);
+
+  // 2. Fetch Live POIs from OpenStreetMap Overpass API for active property
+  const loadOsmAmenities = useCallback(async (forceRefresh = false) => {
+    if (!activeProperty || !isValidCoordinate(activeProperty.lat, activeProperty.lng)) return;
+
+    setIsLoadingOsm(true);
+    setOsmFetchError(null);
+
+    try {
+      const radiusToScan = Math.max(radiusFilter > 0 ? radiusFilter : 3000, 1500);
+      const results = await fetchNearbyAmenitiesFromOSM(
+        activeProperty.id,
+        activeProperty.lat,
+        activeProperty.lng,
+        radiusToScan,
+        forceRefresh
+      );
+
+      if (results && results.length > 0) {
+        setOsmAmenities(results);
+      } else {
+        // Fallback to static if Overpass returns empty
+        setOsmAmenities([]);
+      }
+    } catch (err: any) {
+      console.warn('[PropertyMapView] Overpass fetch notice:', err);
+      setOsmFetchError('Gagal memuat POI langsung dari OpenStreetMap. Menampilkan data cadangan.');
+    } finally {
+      setIsLoadingOsm(false);
+    }
+  }, [activeProperty, radiusFilter]);
+
+  useEffect(() => {
+    loadOsmAmenities(false);
+  }, [loadOsmAmenities]);
+
+  // Combined amenities for the active property (Prioritize OSM Overpass, then DB, then Curated Fallback)
   const activePropertyAmenities = useMemo(() => {
     if (!activeProperty) return [];
-    return getAmenitiesForProperty(activeProperty, dbAmenities);
-  }, [activeProperty, dbAmenities]);
 
-  // Filtered amenities according to category, radius, and search query
+    const map = new Map<string, NearbyAmenity>();
+
+    // 1. Add DB amenities
+    dbAmenities.forEach(a => {
+      const dist = calculateDistanceMeters(activeProperty.lat, activeProperty.lng, a.lat, a.lng);
+      map.set(`${a.name.toLowerCase()}_${a.category}`, {
+        ...a,
+        distanceMeters: dist,
+        walkingTimeMinutes: Math.max(1, Math.round(dist / 75)),
+        drivingTimeMinutes: Math.max(1, Math.round(dist / 350))
+      });
+    });
+
+    // 2. Add Live OSM amenities
+    osmAmenities.forEach(a => {
+      const key = `${a.name.toLowerCase()}_${a.category}`;
+      if (!map.has(key)) {
+        map.set(key, a);
+      }
+    });
+
+    // 3. If still empty, add default curated amenities
+    if (map.size === 0) {
+      const defaultPool = getAmenitiesForProperty(activeProperty, INITIAL_NEARBY_AMENITIES);
+      defaultPool.forEach(a => {
+        map.set(`${a.name.toLowerCase()}_${a.category}`, a);
+      });
+    }
+
+    const all = Array.from(map.values());
+    all.sort((a, b) => a.distanceMeters - b.distanceMeters);
+    return all;
+  }, [activeProperty, dbAmenities, osmAmenities]);
+
+  // Filter amenities by category, radius, and text search
   const filteredAmenities = useMemo(() => {
     return activePropertyAmenities.filter(amenity => {
-      const matchCategory = selectedCategory === 'all' || amenity.category === selectedCategory;
-      const matchRadius = radiusFilter === 0 || amenity.distanceMeters <= radiusFilter;
-      const matchSearch = !searchQuery.trim() || 
-        amenity.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        amenity.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        amenity.address?.toLowerCase().includes(searchQuery.toLowerCase());
-
-      return matchCategory && matchRadius && matchSearch;
+      // Category filter
+      if (selectedCategory !== 'all' && amenity.category !== selectedCategory) {
+        return false;
+      }
+      // Radius filter
+      if (radiusFilter > 0 && amenity.distanceMeters > radiusFilter) {
+        return false;
+      }
+      // Text Search filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = amenity.name.toLowerCase().includes(q);
+        const matchDesc = (amenity.description || '').toLowerCase().includes(q);
+        const matchAddr = (amenity.address || '').toLowerCase().includes(q);
+        if (!matchName && !matchDesc && !matchAddr) return false;
+      }
+      return true;
     });
   }, [activePropertyAmenities, selectedCategory, radiusFilter, searchQuery]);
 
-  // Format IDR Currency
-  const formatRupiah = (val: number) => {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
+  const formatRupiah = (num: number) => {
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0
+    }).format(num);
   };
 
-  // Helper to render Amenity Icon
-  const getAmenityCategoryIcon = (category: AmenityCategory, size = 14) => {
-    switch (category) {
+  const getAmenityCategoryIcon = (cat: AmenityCategory, size = 14) => {
+    switch (cat) {
       case 'transit': return <Train size={size} className="text-sky-600" />;
       case 'education': return <GraduationCap size={size} className="text-purple-600" />;
       case 'healthcare': return <Hospital size={size} className="text-rose-600" />;
@@ -188,14 +275,15 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
   };
 
   // -------------------------------------------------------------
-  // 1. LEAFLET MAP INITIALIZATION & TILE LAYER MANAGEMENT
+  // 1. LEAFLET MAP INITIALIZATION & LAYER GROUPS ARCHITECTURE
   // -------------------------------------------------------------
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
-      const initialLat = activeProperty?.lat || -6.2000;
-      const initialLng = activeProperty?.lng || 106.8450;
+      const coords = sanitizePropertyCoordinates(activeProperty);
+      const initialLat = coords.lat;
+      const initialLng = coords.lng;
 
       const map = L.map(mapContainerRef.current, {
         center: [initialLat, initialLng],
@@ -207,23 +295,50 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
       // Custom zoom control in bottom right
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      // Attribution
-      L.control.attribution({ position: 'bottomleft', prefix: false })
-        .addAttribution('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>')
-        .addTo(map);
+      // Attribution Control
+      const attrControl = L.control.attribution({ position: 'bottomleft', prefix: false });
+      attrControl.addAttribution(OSM_ATTRIBUTION);
+      attrControl.addTo(map);
 
-      // Base Tile Layer
-      const layerConfig = MAP_LAYERS[activeLayer];
-      const tileLayer = L.tileLayer(layerConfig.url, {
-        attribution: layerConfig.attribution,
-        maxZoom: layerConfig.maxZoom,
-        subdomains: 'abcd'
-      }).addTo(map);
+      // Create base layers
+      const osmLayer = createOsmStandardTileLayer({}, (hasError, message) => {
+        if (hasError) {
+          setMapTileError(message || 'Peta gagal dimuat. Periksa koneksi internet.');
+        } else {
+          setMapTileError(null);
+        }
+      });
 
-      tileLayerRef.current = tileLayer;
+      const satelliteLayer = createSatelliteTileLayer({}, (hasError, message) => {
+        if (hasError) {
+          setMapTileError(message || 'Gagal memuat citra satelit.');
+        } else {
+          setMapTileError(null);
+        }
+      });
+
+      baseLayersRef.current = { osm: osmLayer, satellite: satelliteLayer };
+
+      // Add default basemap
+      if (activeLayer === 'satellite') {
+        satelliteLayer.addTo(map);
+      } else {
+        osmLayer.addTo(map);
+      }
+
+      // Initialize Hierarchical Data LayerGroups in exact Z-order
+      const radiusLayer = L.layerGroup().addTo(map);
+      const propertyLayer = L.layerGroup().addTo(map);
+      const facilityLayer = L.layerGroup().addTo(map);
+      const userLocationLayer = L.layerGroup().addTo(map);
+
+      radiusLayerRef.current = radiusLayer;
+      propertyLayerRef.current = propertyLayer;
+      facilityLayerRef.current = facilityLayer;
+      userLocationLayerRef.current = userLocationLayer;
       mapInstanceRef.current = map;
 
-      // Handle ResizeObserver for smooth container resizes
+      // Handle ResizeObserver for responsive container resizing
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => {
           try {
@@ -232,6 +347,18 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
         });
         ro.observe(mapContainerRef.current);
       }
+
+      // Invalidate size immediately to prevent gray/unrendered tiles
+      setTimeout(() => {
+        try {
+          map.invalidateSize();
+        } catch (e) {}
+      }, 100);
+      setTimeout(() => {
+        try {
+          map.invalidateSize();
+        } catch (e) {}
+      }, 400);
     }
 
     return () => {
@@ -243,50 +370,73 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
           console.warn('[Leaflet Cleanup] Error removing map:', e);
         }
         mapInstanceRef.current = null;
+        baseLayersRef.current = { osm: null, satellite: null };
+        propertyLayerRef.current = null;
+        facilityLayerRef.current = null;
+        radiusLayerRef.current = null;
+        userLocationLayerRef.current = null;
       }
     };
   }, []);
 
-  // Update Tile Layer when layer switch changed
+  // Update Basemap Layer without recreating map or affecting data layers
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    if (tileLayerRef.current) {
-      map.removeLayer(tileLayerRef.current);
+    const { osm, satellite } = baseLayersRef.current;
+    if (!osm || !satellite) return;
+
+    if (activeLayer === 'satellite') {
+      if (map.hasLayer(osm)) {
+        map.removeLayer(osm);
+      }
+      if (!map.hasLayer(satellite)) {
+        satellite.addTo(map);
+      }
+    } else {
+      if (map.hasLayer(satellite)) {
+        map.removeLayer(satellite);
+      }
+      if (!map.hasLayer(osm)) {
+        osm.addTo(map);
+      }
     }
-
-    const layerConfig = MAP_LAYERS[activeLayer];
-    const newLayer = L.tileLayer(layerConfig.url, {
-      attribution: layerConfig.attribution,
-      maxZoom: layerConfig.maxZoom,
-      subdomains: 'abcd'
-    }).addTo(map);
-
-    tileLayerRef.current = newLayer;
   }, [activeLayer]);
 
-  // -------------------------------------------------------------
-  // 2. RENDER PROPERTY MARKERS & RADIUS CIRCLE
-  // -------------------------------------------------------------
+  // Trigger invalidateSize on fullscreen toggle or activePropId change
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
+    const t = setTimeout(() => {
+      try {
+        map.invalidateSize();
+      } catch (e) {}
+    }, 150);
+    return () => clearTimeout(t);
+  }, [isFullscreen, activePropId]);
 
-    // Clear old property markers
-    (Object.values(propertyMarkersRef.current) as L.Marker[]).forEach(m => m.remove());
+  // -------------------------------------------------------------
+  // 2. RENDER PROPERTY MARKERS & RADIUS CIRCLE (VIA LAYERGROUPS)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const propertyLayer = propertyLayerRef.current;
+    const radiusLayer = radiusLayerRef.current;
+    const map = mapInstanceRef.current;
+    if (!propertyLayer || !radiusLayer || !map) return;
+
+    // Clear old layers
+    propertyLayer.clearLayers();
+    radiusLayer.clearLayers();
     propertyMarkersRef.current = {};
-
-    // Remove old radius circle
-    if (radiusCircleRef.current) {
-      radiusCircleRef.current.remove();
-      radiusCircleRef.current = null;
-    }
 
     // Add Markers for all properties
     properties.forEach(prop => {
-      const lat = prop.lat || -6.2000;
-      const lng = prop.lng || 106.8450;
+      const coords = sanitizePropertyCoordinates(prop);
+      if (!isValidCoordinate(coords.lat, coords.lng)) return;
+
+      const lat = coords.lat;
+      const lng = coords.lng;
       const isSelected = prop.id === activePropId;
       const propRooms = rooms.filter(r => r.property_id === prop.id);
       const availableRoomsCount = propRooms.filter(r => r.status === 'available' || !r.status).length;
@@ -321,7 +471,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
       });
 
       const marker = L.marker([lat, lng], { icon: propIcon, zIndexOffset: isSelected ? 1000 : 500 })
-        .addTo(map)
+        .addTo(propertyLayer)
         .on('click', () => {
           setActivePropId(prop.id);
           onSelectProperty(prop);
@@ -349,6 +499,9 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
               ${availableRoomsCount} Unit Siap Huni
             </span>
           </div>
+          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed #e2e8f0; font-size: 10px; color: #64748b; font-family: monospace;">
+            OpenStreetMap: ${lat.toFixed(5)}, ${lng.toFixed(5)}
+          </div>
         </div>
       `;
       marker.bindPopup(popupContent, { offset: [0, -35] });
@@ -358,41 +511,44 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
     // Render Radius Circle around active property
     if (activeProperty && showRadiusCircle && radiusFilter > 0) {
-      const lat = activeProperty.lat || -6.2000;
-      const lng = activeProperty.lng || 106.8450;
-
-      const circle = L.circle([lat, lng], {
-        radius: radiusFilter,
-        color: '#2E6F40',
-        weight: 1.5,
-        opacity: 0.8,
-        fillColor: '#2E6F40',
-        fillOpacity: 0.08,
-        dashArray: '6, 6'
-      }).addTo(map);
-
-      radiusCircleRef.current = circle;
+      const coords = sanitizePropertyCoordinates(activeProperty);
+      if (isValidCoordinate(coords.lat, coords.lng)) {
+        L.circle([coords.lat, coords.lng], {
+          radius: radiusFilter,
+          color: '#2E6F40',
+          weight: 1.5,
+          opacity: 0.8,
+          fillColor: '#2E6F40',
+          fillOpacity: 0.08,
+          dashArray: '6, 6'
+        }).addTo(radiusLayer);
+      }
     }
 
   }, [properties, activePropId, activeProperty, showRadiusCircle, radiusFilter, rooms]);
 
   // -------------------------------------------------------------
-  // 3. RENDER NEARBY AMENITY MARKERS
+  // 3. RENDER NEARBY AMENITY MARKERS (VIA FACILITY LAYERGROUP)
   // -------------------------------------------------------------
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
+    const facilityLayer = facilityLayerRef.current;
+    if (!facilityLayer) return;
 
     // Clear old amenity markers
-    (Object.values(amenityMarkersRef.current) as L.Marker[]).forEach(m => m.remove());
+    facilityLayer.clearLayers();
     amenityMarkersRef.current = {};
+
+    const propCoords = sanitizePropertyCoordinates(activeProperty);
 
     // Render filtered amenities
     filteredAmenities.forEach(amenity => {
+      const amenCoords = sanitizeAmenityCoordinates(amenity, propCoords.lat, propCoords.lng);
+      if (!isValidCoordinate(amenCoords.lat, amenCoords.lng)) return;
+
       const categoryConfig = AMENITY_CATEGORIES.find(c => c.id === amenity.category) || AMENITY_CATEGORIES[0];
       const isHovered = hoveredAmenityId === amenity.id;
 
-      // Icon emoji or mini letter based on category
+      // Icon emoji based on category
       let categoryEmoji = '📍';
       if (amenity.category === 'transit') categoryEmoji = '🚆';
       else if (amenity.category === 'education') categoryEmoji = '🎓';
@@ -420,8 +576,8 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
         iconAnchor: [80, 35]
       });
 
-      const marker = L.marker([amenity.lat, amenity.lng], { icon: amenityIcon, zIndexOffset: isHovered ? 900 : 300 })
-        .addTo(map);
+      const marker = L.marker([amenCoords.lat, amenCoords.lng], { icon: amenityIcon, zIndexOffset: isHovered ? 900 : 300 })
+        .addTo(facilityLayer);
 
       // Popup for amenity
       const popupHtml = `
@@ -440,7 +596,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
             <span style="font-weight: 800; color: #2E6F40;">${amenity.distanceMeters} Meter</span>
           </div>
 
-          <a href="https://www.google.com/maps/dir/?api=1&destination=${amenity.lat},${amenity.lng}" 
+          <a href="https://www.google.com/maps/dir/?api=1&destination=${amenCoords.lat},${amenCoords.lng}" 
              target="_blank" 
              rel="noreferrer"
              style="display: block; text-align: center; background: #2E6F40; color: white; font-size: 10px; font-weight: 800; padding: 6px; border-radius: 6px; text-decoration: none; text-transform: uppercase; letter-spacing: 0.5px;">
@@ -452,84 +608,171 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
       amenityMarkersRef.current[amenity.id] = marker;
     });
-
-  }, [filteredAmenities, hoveredAmenityId, lang]);
+  }, [filteredAmenities, activeProperty, hoveredAmenityId, lang]);
 
   // -------------------------------------------------------------
-  // 4. MAP NAVIGATION HELPERS
+  // 4. MAP INTERACTION HANDLERS
   // -------------------------------------------------------------
   const handleFlyToProperty = (prop: Property) => {
+    const coords = sanitizePropertyCoordinates(prop);
+    if (!isValidCoordinate(coords.lat, coords.lng)) return;
+
     setActivePropId(prop.id);
     onSelectProperty(prop);
-    if (mapInstanceRef.current && prop.lat && prop.lng) {
-      mapInstanceRef.current.flyTo([prop.lat, prop.lng], 16, { duration: 1.2 });
-      // Open Property Popup
-      const m = propertyMarkersRef.current[prop.id];
-      if (m) {
-        setTimeout(() => m.openPopup(), 1300);
+
+    const map = mapInstanceRef.current;
+    if (map) {
+      map.flyTo([coords.lat, coords.lng], 16, {
+        duration: 1.2,
+        easeLinearity: 0.25
+      });
+      // Open popup for this marker after flying
+      setTimeout(() => {
+        const marker = propertyMarkersRef.current[prop.id];
+        if (marker) marker.openPopup();
+      }, 1300);
+    }
+  };
+
+  const handleAmenityClick = (amenity: NearbyAmenity) => {
+    const propCoords = sanitizePropertyCoordinates(activeProperty);
+    const amenCoords = sanitizeAmenityCoordinates(amenity, propCoords.lat, propCoords.lng);
+    if (!isValidCoordinate(amenCoords.lat, amenCoords.lng)) return;
+
+    const map = mapInstanceRef.current;
+    if (map) {
+      map.panTo([amenCoords.lat, amenCoords.lng]);
+      const marker = amenityMarkersRef.current[amenity.id];
+      if (marker) {
+        marker.openPopup();
       }
     }
   };
 
   const handleFitAllProperties = () => {
     const map = mapInstanceRef.current;
-    if (!map) return;
+    if (!map || properties.length === 0) return;
 
-    const coords = properties
-      .filter(p => p.lat && p.lng)
-      .map(p => [p.lat!, p.lng!] as [number, number]);
+    const validBounds: L.LatLngExpression[] = properties
+      .map(p => sanitizePropertyCoordinates(p))
+      .filter(c => isValidCoordinate(c.lat, c.lng))
+      .map(c => [c.lat, c.lng]);
 
-    if (coords.length > 0) {
-      const bounds = L.latLngBounds(coords);
-      map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15 });
+    if (validBounds.length > 0) {
+      map.fitBounds(L.latLngBounds(validBounds), { padding: [60, 60], maxZoom: 16 });
     }
   };
 
-  const handleAmenityClick = (amenity: NearbyAmenity) => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    map.flyTo([amenity.lat, amenity.lng], 17, { duration: 1.0 });
-    const marker = amenityMarkersRef.current[amenity.id];
-    if (marker) {
-      setTimeout(() => marker.openPopup(), 1100);
+  const handleGetUserLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Perangkat Anda tidak mendukung geolokasi GPS.');
+      return;
     }
+
+    setIsLocatingUser(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setIsLocatingUser(false);
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setUserLocation({ lat, lng });
+
+        const map = mapInstanceRef.current;
+        const userLocationLayer = userLocationLayerRef.current;
+        if (!map || !userLocationLayer) return;
+
+        // Clear old user marker in userLocationLayer
+        userLocationLayer.clearLayers();
+
+        const userIcon = L.divIcon({
+          className: 'user-gps-location-marker',
+          html: `
+            <div class="relative flex items-center justify-center">
+              <div class="w-6 h-6 rounded-full bg-blue-500/30 animate-ping absolute"></div>
+              <div class="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-lg z-10 flex items-center justify-center text-white text-[8px] font-black">
+                ●
+              </div>
+            </div>
+          `,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+
+        const marker = L.marker([lat, lng], { icon: userIcon, zIndexOffset: 2000 })
+          .addTo(userLocationLayer)
+          .bindPopup(`
+            <div style="font-family: system-ui; font-size: 11px; padding: 4px; font-weight: bold; color: #1e293b;">
+              📍 Posisi Anda Sekarang<br/>
+              <span style="font-size: 9px; color: #64748b; font-family: monospace;">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>
+            </div>
+          `);
+
+        userMarkerRef.current = marker;
+        map.flyTo([lat, lng], 15, { duration: 1.2 });
+        setTimeout(() => marker.openPopup(), 1300);
+      },
+      (err) => {
+        setIsLocatingUser(false);
+        alert('Gagal mendeteksi lokasi GPS Anda. Pastikan izin lokasi browser aktif.');
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
   };
 
   return (
     <div 
-      className={`bg-white border border-[#E2E8F0] rounded-[28px] overflow-hidden shadow-xl flex flex-col transition-all duration-300 font-sans ${
-        isFullscreen ? 'fixed inset-0 z-[200] rounded-none' : 'w-full h-[850px] relative my-6'
+      className={`bg-white rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden transition-all duration-300 flex flex-col ${
+        isFullscreen ? 'fixed inset-0 z-[9999] rounded-none' : 'w-full h-[820px]'
       }`}
-      id="samara-stay-leaflet-property-map-view"
     >
       {/* ------------------------------------------------------ */}
-      {/* TOP BAR / CONTROL HEADER */}
+      {/* HEADER CONTROLS BAR */}
       {/* ------------------------------------------------------ */}
-      <div className="bg-[#3A444D] text-white px-5 py-4 flex flex-wrap justify-between items-center gap-4 border-b border-white/10 z-20">
+      <div className="bg-[#3A444D] text-white px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 shrink-0 z-20">
+        
+        {/* Title & Brand */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-[#2E6F40] text-white flex items-center justify-center shadow-md">
-            <Compass size={22} className="animate-spin-slow text-emerald-300" />
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400">
+            <Compass size={18} />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-extrabold font-display tracking-tight text-white uppercase">
-                {lang === 'id' ? 'PETA INTERAKTIF SAMARA STAY' : 'SAMARA STAY INTERACTIVE MAP'}
-              </h2>
-              <span className="bg-[#2E6F40] text-emerald-200 text-[10px] font-black px-2 py-0.5 rounded-full font-mono uppercase tracking-wider">
-                LEAFLET.JS POWERED
+            <h2 className="text-sm font-extrabold tracking-tight flex items-center gap-2">
+              <span>Eksplorasi Peta & Fasilitas Sekitar</span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-mono">
+                <Globe size={10} /> OpenStreetMap + Leaflet
               </span>
-            </div>
-            <p className="text-xs text-slate-300 font-medium">
-              {lang === 'id' 
-                ? 'Eksplorasi lokasi seluruh cabang & akses fasilitas umum terdekat secara visual' 
-                : 'Explore all property branches & nearby public amenities interactively'}
+            </h2>
+            <p className="text-[11px] text-slate-300">
+              {activeProperty ? `${activeProperty.name} (${activeProperty.city || 'Jakarta'})` : 'Pilih unit kos'} &bull; Radius {radiusFilter > 0 ? `${radiusFilter / 1000} km` : 'Semua'}
             </p>
           </div>
         </div>
 
-        {/* Quick Toolbar */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Global Toolbar Buttons */}
+        <div className="flex items-center flex-wrap gap-2">
+          
+          {/* Reload Overpass POI Data Button */}
+          <button
+            onClick={() => loadOsmAmenities(true)}
+            disabled={isLoadingOsm}
+            className="bg-white/10 hover:bg-white/20 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-white/10 disabled:opacity-50"
+            title="Tarik Ulang Fasilitas dari OpenStreetMap"
+          >
+            <RefreshCw size={13} className={isLoadingOsm ? 'animate-spin text-emerald-400' : 'text-slate-300'} />
+            <span>{isLoadingOsm ? 'Memuat OSM...' : 'Sinkronkan OSM'}</span>
+          </button>
+
+          {/* My Location GPS Button */}
+          <button
+            onClick={handleGetUserLocation}
+            disabled={isLocatingUser}
+            className="bg-blue-600/80 hover:bg-blue-600 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-blue-400/30 disabled:opacity-50"
+            title="Deteksi Lokasi GPS Saya"
+          >
+            {isLocatingUser ? <RotateCw size={13} className="animate-spin" /> : <LocateFixed size={13} />}
+            <span>{isLocatingUser ? 'Mencari...' : 'Posisi Saya'}</span>
+          </button>
+
           {/* Layer Selector */}
           <div className="flex items-center bg-black/30 p-1 rounded-xl border border-white/15 text-xs">
             <Layers size={13} className="text-emerald-400 mx-2" />
@@ -538,10 +781,8 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
               onChange={(e) => setActiveLayer(e.target.value as MapLayerType)}
               className="bg-transparent text-white text-xs font-bold focus:outline-none pr-2 cursor-pointer"
             >
-              <option value="light" className="text-slate-900">Peta Bersih (Light)</option>
-              <option value="voyager" className="text-slate-900">Peta Warna (Voyager)</option>
-              <option value="osm" className="text-slate-900">OpenStreetMap</option>
-              <option value="satellite" className="text-slate-900">Citra Satelit</option>
+              <option value="osm" className="text-slate-900">OpenStreetMap (Standar)</option>
+              <option value="satellite" className="text-slate-900">Citra Satelit Esri</option>
             </select>
           </div>
 
@@ -576,6 +817,32 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
         {/* ==================================================== */}
         <div className="flex-1 relative h-[450px] lg:h-full w-full bg-slate-100">
           <div ref={mapContainerRef} className="w-full h-full z-10" />
+
+          {/* Tile Load Error Fallback Banner */}
+          {mapTileError && (
+            <div className="absolute top-16 right-4 z-[450] bg-rose-600/95 text-white text-xs font-semibold px-3.5 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 backdrop-blur-md border border-rose-400/40 animate-fade-in max-w-sm">
+              <AlertCircle size={16} className="text-amber-300 shrink-0" />
+              <div className="flex-1">
+                <span className="font-bold block">{mapTileError}</span>
+                <span className="text-[10px] text-rose-100">Silakan ganti ke Citra Satelit Esri atau periksa koneksi.</span>
+              </div>
+              <button 
+                onClick={() => setMapTileError(null)} 
+                className="text-white/80 hover:text-white font-black text-sm px-1"
+                title="Tutup Notifikasi"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Overpass Live Fetch Status Badge */}
+          {isLoadingOsm && (
+            <div className="absolute top-16 left-4 z-[450] bg-slate-900/90 text-white text-xs font-semibold px-3.5 py-2 rounded-2xl shadow-xl flex items-center gap-2 backdrop-blur-md border border-slate-700/50">
+              <RefreshCw size={13} className="animate-spin text-emerald-400" />
+              <span>Memindai fasilitas sekitar via OpenStreetMap Overpass API...</span>
+            </div>
+          )}
 
           {/* Floating Property Jump Switcher (Overlaid at top of Map) */}
           <div className="absolute top-4 left-4 right-4 lg:right-auto z-[400] flex gap-2 overflow-x-auto no-scrollbar py-1">
@@ -616,7 +883,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              ✨ Semua Amenitas ({activePropertyAmenities.length})
+              ✨ Semua ({activePropertyAmenities.length})
             </button>
 
             {AMENITY_CATEGORIES.map(cat => {
@@ -666,6 +933,10 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                   <p className="text-xs text-[#64748B] line-clamp-1 mt-0.5">
                     {activeProperty.address}
                   </p>
+                  <p className="text-[10px] font-mono text-slate-400 mt-0.5 flex items-center gap-1">
+                    <Globe size={11} className="text-emerald-600" />
+                    OSM: {activeProperty.lat.toFixed(5)}, {activeProperty.lng.toFixed(5)}
+                  </p>
                 </div>
                 <div className="text-right shrink-0">
                   <span className="text-xs font-extrabold text-[#2E6F40] font-mono block">
@@ -676,23 +947,32 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
               </div>
 
               {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
+              <div className="grid grid-cols-3 gap-2 pt-1">
                 {onScheduleSurvey && (
                   <button
                     onClick={() => onScheduleSurvey(activeProperty)}
-                    className="py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                    className="py-2 px-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer text-center"
                   >
-                    <Calendar size={13} className="text-[#2E6F40]" />
-                    <span>Jadwal Survey</span>
+                    <Calendar size={12} className="text-[#2E6F40]" />
+                    <span>Survey</span>
                   </button>
                 )}
                 <button
                   onClick={() => onSelectProperty(activeProperty)}
-                  className="py-2 px-3 bg-[#2E6F40] hover:bg-[#235531] text-white rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs text-center"
+                  className="py-2 px-2 bg-[#2E6F40] hover:bg-[#235531] text-white rounded-xl text-[11px] font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer shadow-xs text-center"
                 >
-                  <Bed size={13} />
-                  <span>Katalog Kamar</span>
+                  <Bed size={12} />
+                  <span>Kamar</span>
                 </button>
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${activeProperty.lat},${activeProperty.lng}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="py-2 px-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer shadow-xs text-center"
+                >
+                  <Navigation size={12} className="text-emerald-400" />
+                  <span>Rute</span>
+                </a>
               </div>
             </div>
           )}
@@ -706,7 +986,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari stasiun, kampus, RS, kafe terdekat..."
+                placeholder="Cari stasiun, kampus, RS, minimarket terdekat..."
                 className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2E6F40]/30 transition-all font-medium text-slate-800"
               />
               {searchQuery && (
@@ -730,6 +1010,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                   { label: '500m', val: 500 },
                   { label: '1 km', val: 1000 },
                   { label: '2 km', val: 2000 },
+                  { label: '3 km', val: 3000 },
                   { label: '5 km', val: 5000 },
                   { label: 'Semua', val: 0 }
                 ].map(r => (
@@ -752,17 +1033,24 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
           {/* List of Nearby Amenities (Scrollable) */}
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5 divide-y divide-slate-100">
             <div className="flex justify-between items-center pb-1">
-              <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 font-mono">
-                {filteredAmenities.length} FASILITAS TERDEKAT
+              <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 font-mono flex items-center gap-1.5">
+                <span>{filteredAmenities.length} FASILITAS TERDEKAT</span>
+                {osmAmenities.length > 0 && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold font-sans">
+                    OSM Live
+                  </span>
+                )}
               </span>
               <span className="text-[10px] text-slate-400 font-medium">
-                Klik kartu untuk fokus di peta
+                Klik kartu untuk sorot
               </span>
             </div>
 
             {filteredAmenities.map(amenity => {
               const catConfig = AMENITY_CATEGORIES.find(c => c.id === amenity.category) || AMENITY_CATEGORIES[0];
               const isHovered = hoveredAmenityId === amenity.id;
+              const propCoords = sanitizePropertyCoordinates(activeProperty);
+              const amenCoords = sanitizeAmenityCoordinates(amenity, propCoords.lat, propCoords.lng);
 
               return (
                 <div
@@ -799,7 +1087,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
                     <div className="text-right shrink-0">
                       <span className="text-xs font-black font-mono text-[#2E6F40] block">
-                        {amenity.distanceMeters} m
+                        {amenity.distanceMeters < 1000 ? `${amenity.distanceMeters} m` : `${(amenity.distanceMeters / 1000).toFixed(1)} km`}
                       </span>
                       <span className="text-[10px] text-slate-500 font-medium">
                         🚶‍♂️ {amenity.walkingTimeMinutes} mnt
@@ -819,7 +1107,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                       🛵 ~{amenity.drivingTimeMinutes || 2} mnt motor
                     </span>
                     <a
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${amenity.lat},${amenity.lng}`}
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${amenCoords.lat},${amenCoords.lng}`}
                       target="_blank"
                       rel="noreferrer"
                       onClick={(e) => e.stopPropagation()}
@@ -833,7 +1121,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
               );
             })}
 
-            {filteredAmenities.length === 0 && (
+            {filteredAmenities.length === 0 && !isLoadingOsm && (
               <div className="p-8 text-center space-y-2 bg-white rounded-2xl border border-slate-200 my-4">
                 <MapPin size={28} className="mx-auto text-slate-300 animate-bounce" />
                 <p className="text-xs font-bold text-slate-600">Tidak ada fasilitas dalam radius ini</p>
@@ -856,10 +1144,10 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
           <div className="p-3 bg-white border-t border-[#E2E8F0] flex items-center justify-between text-[11px] text-slate-500 shrink-0">
             <span className="flex items-center gap-1 font-medium">
               <CheckCircle size={12} className="text-[#2E6F40]" />
-              Data terverifikasi tim survey
+              Data Geospasial OpenStreetMap
             </span>
             <span className="font-mono text-[10px] text-slate-400">
-              Leaflet v1.9.4
+              Leaflet 1.9.4
             </span>
           </div>
 

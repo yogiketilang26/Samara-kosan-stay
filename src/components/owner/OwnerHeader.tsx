@@ -1,5 +1,5 @@
 import React from 'react';
-import { Building2, Calendar, RefreshCw, Printer, Download, Sparkles, Filter } from 'lucide-react';
+import { Building2, Calendar, RefreshCw, Printer, Download, Sparkles, Filter, PenTool, ShieldCheck } from 'lucide-react';
 import { Property } from '../../types';
 
 interface OwnerHeaderProps {
@@ -11,6 +11,8 @@ interface OwnerHeaderProps {
   onRefresh: () => void;
   isLoading: boolean;
   onPrint: () => void;
+  onOpenSignatureTab?: () => void;
+  pendingSignatureCount?: number;
 }
 
 export const OwnerHeader: React.FC<OwnerHeaderProps> = ({
@@ -21,7 +23,9 @@ export const OwnerHeader: React.FC<OwnerHeaderProps> = ({
   onSelectPeriod,
   onRefresh,
   isLoading,
-  onPrint
+  onPrint,
+  onOpenSignatureTab,
+  pendingSignatureCount = 0
 }) => {
   return (
     <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 border-b border-slate-800 text-white p-6 md:p-8">
@@ -29,13 +33,14 @@ export const OwnerHeader: React.FC<OwnerHeaderProps> = ({
         
         {/* Title & Badge */}
         <div>
-          <div className="flex items-center gap-2.5 mb-2">
+          <div className="flex items-center gap-2.5 mb-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-widest bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
               <Sparkles size={11} className="text-amber-400" />
               Executive Investor Portal
             </span>
-            <span className="text-xs text-slate-400 font-mono">
-              Live Realtime Data
+            <span className="text-xs text-slate-400 font-mono flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block"></span>
+              Live Realtime Supabase & MailerSend
             </span>
           </div>
           <h1 className="text-2xl md:text-3xl font-black font-display tracking-tight text-white flex items-center gap-3">
@@ -43,13 +48,30 @@ export const OwnerHeader: React.FC<OwnerHeaderProps> = ({
             Dashboard Pemilik & Investor
           </h1>
           <p className="text-sm text-slate-400 mt-1 max-w-2xl">
-            Pantau performa portofolio properti, arus kas masuk dari Midtrans, rasio okupansi kamar, dan kalkulasi bagi hasil/dividen secara transparan.
+            Pantau performa portofolio properti, arus kas masuk dari Midtrans, rasio okupansi kamar, dan pengesahan tanda tangan digital kontrak sewa.
           </p>
         </div>
 
         {/* Filters & Actions */}
         <div className="flex flex-wrap items-center gap-3">
           
+          {/* TTD Owner Quick Shortcut */}
+          {onOpenSignatureTab && (
+            <button
+              onClick={onOpenSignatureTab}
+              className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-emerald-400 hover:text-emerald-300 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-inner relative"
+              title="Buka Menu Tanda Tangan Digital & Pengesahan Dokumen"
+            >
+              <PenTool size={13} />
+              <span>TTD Digital Owner</span>
+              {pendingSignatureCount > 0 && (
+                <span className="px-1.5 py-0.2 bg-amber-500 text-slate-950 font-black rounded-full text-[9px] animate-pulse">
+                  {pendingSignatureCount}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* Property Selector */}
           <div className="relative">
             <select
@@ -100,7 +122,7 @@ export const OwnerHeader: React.FC<OwnerHeaderProps> = ({
             title="Cetak atau unduh laporan eksekutif pemilik"
           >
             <Printer size={14} />
-            <span>Cetak Laporan</span>
+            <span className="hidden sm:inline">Cetak Laporan</span>
           </button>
 
         </div>
