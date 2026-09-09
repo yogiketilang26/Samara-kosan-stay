@@ -3,7 +3,7 @@ import L from 'leaflet';
 import { database, DEFAULT_OWNER_SIGNATURE } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import * as LucideIcons from 'lucide-react';
-import { Property, Room, Booking, Survey, Coupon, SystemSettings, StandardFacility, FAQItem, Tenant } from '../types';
+import { Property, Room, Booking, Survey, Coupon, SystemSettings, StandardFacility, FAQItem, Tenant, ContractExtension } from '../types';
 import BookingForm from '../components/transaction/BookingForm';
 import InvoiceCard from '../components/transaction/InvoiceCard';
 import Loader from '../components/common/Loader';
@@ -170,14 +170,18 @@ export default function Home({}: HomeProps) {
   const { data: surveysData, loading: surveysLoading } = useRealtimeTable<Survey>(
     'surveys',
     () => database.fetchSurveys());
+  const { data: contractExtensionsData, loading: contractExtensionsLoading } = useRealtimeTable<ContractExtension>(
+    'contract_extensions',
+    () => database.fetchContractExtensions());
 
-  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading || tenantsLoading || surveysLoading;
+  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading || tenantsLoading || surveysLoading || contractExtensionsLoading;
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [surveys, setSurveys] = useState<Survey[]>([]);
+  const [contractExtensions, setContractExtensions] = useState<ContractExtension[]>([]);
   const [loading, setLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
@@ -196,7 +200,7 @@ export default function Home({}: HomeProps) {
 
   // Filters State (Connected with Search catalogue page)
   const [selectedType, setSelectedType] = useState<'all' | 'putra' | 'putri' | 'campur'>('all');
-  const [priceRange, setPriceRange] = useState<number>(15000000);
+  const [priceRange, setPriceRange] = useState<number>(5000000);
   const [onlyAvailable, setOnlyAvailable] = useState<boolean>(false);
   const [selectedRoomFacilities, setSelectedRoomFacilities] = useState<string[]>([]);
   const [selectedSharedFacilities, setSelectedSharedFacilities] = useState<string[]>([]);
@@ -256,7 +260,13 @@ export default function Home({}: HomeProps) {
     occupantName: '',
     occupantPhone: '',
     occupantEmail: '',
-    occupantNik: ''
+    occupantNik: '',
+    isMarried: false,
+    marriageCertificateUrl: '',
+    spouseName: '',
+    spouseNik: '',
+    spousePhone: '',
+    spouseRelation: 'istri'
   });
 
   // Booking details states
@@ -278,6 +288,27 @@ export default function Home({}: HomeProps) {
   // Rooms catalog modal state
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+
+  // Filter state for embedded Room Showcase on Detail page
+  const [detailRoomTab, setDetailRoomTab] = useState<'all' | 'available' | 'occupied'>('all');
+  const [detailRoomFloor, setDetailRoomFloor] = useState<number | 'all'>('all');
+
+  // Synchronized room availability validator directly connected to Supabase data & contract states.
+  // When a contract ends with no extension, this room immediately becomes available to end users.
+  const isRoomAvailable = (r: Room): boolean => {
+    if (!r) return false;
+    const leaseStatus = getRoomLeaseStatus(r, tenants, undefined, contractExtensions);
+    return leaseStatus.isAvailableForBooking;
+  };
+
+  // Whenever catalog modal opens, instantly refetch latest room statuses from Supabase so locks are 100% current
+  useEffect(() => {
+    if (isCatalogOpen) {
+      database.fetchRooms().then(fresh => {
+        if (fresh && fresh.length > 0) setRooms(fresh);
+      }).catch(() => {});
+    }
+  }, [isCatalogOpen]);
 
   // Detailed room popup states
   const [selectedRoomForDetail, setSelectedRoomForDetail] = useState<Room | null>(null);
@@ -356,12 +387,28 @@ export default function Home({}: HomeProps) {
     setSettings(sett);
     setTenants(tenantsData || []);
     setSurveys(surveysData || []);
+    setContractExtensions(contractExtensionsData || []);
+
+    // Keep active selection states synchronized with live database changes
+    setActiveProperty(prev => {
+      if (!prev) return null;
+      return filteredProps.find(p => p.id === prev.id) || prev;
+    });
+
+    setActiveRoom(prev => {
+      if (!prev) return null;
+      return filteredRooms.find(r => r.id === prev.id) || prev;
+    });
+
+    setSelectedRoomForDetail(prev => {
+      if (!prev) return null;
+      return filteredRooms.find(r => r.id === prev.id) || prev;
+    });
     
     if (filteredProps && filteredProps.length > 0) {
-      const maxPriceVal = Math.max(...filteredProps.map(p => p.price));
-      setPriceRange(Math.max(5000000, maxPriceVal));
+      setPriceRange(5000000);
     }
-  }, [propertiesData, roomsData, couponsData, settingsData, tenantsData, surveysData]);
+  }, [propertiesData, roomsData, couponsData, settingsData, tenantsData, surveysData, contractExtensionsData]);
 
   useEffect(() => {
     if (!hooksLoading) {
@@ -377,12 +424,14 @@ export default function Home({}: HomeProps) {
         const result = await database.autoReleaseExpiredLeases();
         if (result.releasedRooms > 0) {
           console.log(`[Home Auto-Release] Released ${result.releasedRooms} expired rooms.`);
-          const [freshRooms, freshTenants] = await Promise.all([
+          const [freshRooms, freshTenants, freshExtensions] = await Promise.all([
             database.fetchRooms(),
-            database.fetchTenants()
+            database.fetchTenants(),
+            database.fetchContractExtensions()
           ]);
           if (freshRooms && freshRooms.length > 0) setRooms(freshRooms);
           if (freshTenants) setTenants(freshTenants);
+          if (freshExtensions) setContractExtensions(freshExtensions);
         }
       } catch (e) {
         console.warn('[Home] Auto release check:', e);
@@ -613,7 +662,13 @@ export default function Home({}: HomeProps) {
       occupantName: '',
       occupantPhone: '',
       occupantEmail: '',
-      occupantNik: ''
+      occupantNik: '',
+      isMarried: false,
+      marriageCertificateUrl: '',
+      spouseName: '',
+      spouseNik: '',
+      spousePhone: '',
+      spouseRelation: 'istri'
     });
     setSurveyForm(prev => ({
       ...prev,
@@ -841,19 +896,68 @@ export default function Home({}: HomeProps) {
               occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
               occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
               occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
-              signature_url: signatureUrl
+              signature_url: signatureUrl,
+              is_married: bookingForm.isMarried,
+              marriage_certificate_url: bookingForm.isMarried ? bookingForm.marriageCertificateUrl : undefined,
+              spouse_name: bookingForm.isMarried ? bookingForm.spouseName : undefined,
+              spouse_nik: bookingForm.isMarried ? bookingForm.spouseNik : undefined,
+              spouse_phone: bookingForm.isMarried ? bookingForm.spousePhone : undefined,
+              spouse_relation: bookingForm.isMarried ? (bookingForm.spouseRelation || 'istri') : undefined
             };
             const savedBooking = await database.saveBooking(bookingRecord);
             if (savedBooking && savedBooking.id && activeRoom?.id) {
               await database.holdRoomAtomic(activeRoom.id, savedBooking.id, 15);
+              // Server-side lock room as reserved to prevent double booking by others
+              fetch('/api/rooms/lock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  room_id: activeRoom.id,
+                  status: 'reserved',
+                  tenant_name: bookingForm.fullName
+                })
+              }).catch(() => {});
+              // Immediately update local rooms state so it locks visually
+              setRooms(prev => prev.map(r => r.id === activeRoom.id ? { ...r, status: 'reserved' } : r));
             }
           }
         } catch (dbErr) {
           console.warn('Silent database pre-save warning:', dbErr);
         }
 
+        let isSettled = false;
+        let pollTimer: any = null;
+
+        const checkOrderStatus = async () => {
+          if (isSettled) return;
+          try {
+            const resp = await fetch(`/api/midtrans/status/${orderId}`);
+            if (resp.ok) {
+              const resData = await resp.json();
+              const txStatus = resData?.midtrans?.transaction_status;
+              if (txStatus === 'settlement' || txStatus === 'capture') {
+                isSettled = true;
+                if (pollTimer) clearInterval(pollTimer);
+                handleSandboxPaymentSuccess({
+                  transactionId: resData.midtrans.transaction_id || `mid-${Date.now()}`,
+                  paymentMethod: resData.midtrans.payment_type || 'Midtrans SNAP',
+                  settlementTime: resData.midtrans.settlement_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
+                }, currentCtx);
+              }
+            }
+          } catch (e) {
+            // Polling check silent fallback
+          }
+        };
+
+        // Poll every 2.5 seconds so as soon as user pays (e.g. BCA VA, QRIS), room locks and email sends automatically!
+        pollTimer = setInterval(checkOrderStatus, 2500);
+        setTimeout(() => { if (pollTimer) clearInterval(pollTimer); }, 180000);
+
         (window as any).snap.pay(chargeResult.token, {
           onSuccess: (result: any) => {
+            isSettled = true;
+            if (pollTimer) clearInterval(pollTimer);
             fetch('/api/midtrans/logs', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -892,9 +996,11 @@ export default function Home({}: HomeProps) {
               paymentMethod: result.payment_type || 'Midtrans SNAP',
               settlementTime: result.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
             }, currentCtx);
-            alert('Pembayaran Anda pending/menunggu penyelesaian di portal Midtrans.');
+            // Trigger check immediately in case payment already occurred
+            checkOrderStatus();
           },
           onError: (result: any) => {
+            if (pollTimer) clearInterval(pollTimer);
             fetch('/api/midtrans/logs', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -910,7 +1016,28 @@ export default function Home({}: HomeProps) {
 
             alert('Pembayaran Midtrans gagal diproses.');
           },
-          onClose: () => {
+          onClose: async () => {
+            // Immediate check: User may have paid in m-Banking or external simulator before closing popup
+            try {
+              const resp = await fetch(`/api/midtrans/status/${orderId}`);
+              if (resp.ok) {
+                const resData = await resp.json();
+                const txStatus = resData?.midtrans?.transaction_status;
+                if (txStatus === 'settlement' || txStatus === 'capture') {
+                  isSettled = true;
+                  if (pollTimer) clearInterval(pollTimer);
+                  handleSandboxPaymentSuccess({
+                    transactionId: resData.midtrans.transaction_id || `mid-${Date.now()}`,
+                    paymentMethod: resData.midtrans.payment_type || 'Midtrans SNAP',
+                    settlementTime: resData.midtrans.settlement_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
+                  }, currentCtx);
+                  return;
+                }
+              }
+            } catch (e) {}
+
+            if (pollTimer) clearInterval(pollTimer);
+
             fetch('/api/midtrans/logs', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -918,12 +1045,10 @@ export default function Home({}: HomeProps) {
                 orderId,
                 status: 'closed',
                 type: 'client_event',
-                message: 'Customer manually closed the Midtrans Snap popup window.',
+                message: 'Customer closed the Midtrans Snap popup window.',
                 amount: calculatedTotal
               })
             }).catch(() => {});
-
-            alert('Pemesan menutup popup pembayaran Midtrans sebelum selesai.');
           }
         });
       } else {
@@ -1293,18 +1418,75 @@ export default function Home({}: HomeProps) {
         occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
         occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
         occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
-        signature_url: finalBookingSigUrl
+        signature_url: finalBookingSigUrl,
+        is_married: bookingForm.isMarried,
+        marriage_certificate_url: bookingForm.isMarried ? bookingForm.marriageCertificateUrl : undefined,
+        spouse_name: bookingForm.isMarried ? bookingForm.spouseName : undefined,
+        spouse_nik: bookingForm.isMarried ? bookingForm.spouseNik : undefined,
+        spouse_phone: bookingForm.isMarried ? bookingForm.spousePhone : undefined,
+        spouse_relation: bookingForm.isMarried ? (bookingForm.spouseRelation || 'istri') : undefined
       };
 
       // Set room status to occupied if direct booking
+      const effectiveOccupantName = bookingForm.isForOther ? (bookingForm.occupantName || bookingForm.fullName) : bookingForm.fullName;
       const updatedRoom: Room = { 
         ...activeRoom, 
         status: 'occupied', 
-        current_tenant_name: bookingForm.isForOther ? (bookingForm.occupantName || bookingForm.fullName) : bookingForm.fullName 
+        current_tenant_name: effectiveOccupantName 
       };
       await database.saveRoom(updatedRoom);
 
+      // IMMEDIATELY update local state so catalog & all UI views show "TERISI" and "UNIT SUDAH TERISI PENGHUNI" instantly!
+      setRooms(prev => prev.map(r => r.id === activeRoom.id ? updatedRoom : r));
+      database.fetchRooms().then(fresh => {
+        if (fresh && fresh.length > 0) setRooms(fresh);
+      }).catch(() => {});
+
       const saved = await database.saveBooking(bookingRecord);
+
+      // Register or update complete tenant record so admin and owner see all tenant data including spouse in real-time
+      try {
+        const tenantRecord = {
+          full_name: effectiveOccupantName,
+          phone: bookingForm.isForOther ? (bookingForm.occupantPhone || bookingForm.phone) : bookingForm.phone,
+          email: bookingForm.isForOther ? (bookingForm.occupantEmail || bookingForm.email) : bookingForm.email,
+          nik: bookingForm.isForOther ? (bookingForm.occupantNik || bookingForm.nik) : bookingForm.nik,
+          property_id: activeProperty.id,
+          room_number: activeRoom.room_number,
+          start_date: bookingCheckInDate,
+          duration_months: isDaily ? 0 : bookingPeriodMonths,
+          payment_status: 'paid' as const,
+          status: 'active' as const,
+          avatar_initials: effectiveOccupantName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+          avatar_color: 'bg-teal-600',
+          is_married: bookingForm.isMarried,
+          marriage_certificate_url: bookingForm.isMarried ? bookingForm.marriageCertificateUrl : undefined,
+          spouse_name: bookingForm.isMarried ? bookingForm.spouseName : undefined,
+          spouse_nik: bookingForm.isMarried ? bookingForm.spouseNik : undefined,
+          spouse_phone: bookingForm.isMarried ? bookingForm.spousePhone : undefined,
+          spouse_relation: bookingForm.isMarried ? (bookingForm.spouseRelation || 'istri') : undefined
+        };
+        await database.saveTenant(tenantRecord);
+      } catch (tenantErr) {
+        console.warn('[Home] Auto-registering tenant error (non-blocking):', tenantErr);
+      }
+
+      // Call server settlement API to ensure atomic lock, clearing entry, and double-entry accounting
+      try {
+        fetch('/api/midtrans/settle-booking', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            order_id: currentOrderId,
+            transaction_id: details.transactionId,
+            payment_type: details.paymentMethod || 'Midtrans SNAP',
+            gross_amount: currentGrossAmount,
+            booking_data: bookingRecord
+          })
+        }).catch(err => console.warn('[Home] Direct settle API background warning:', err));
+      } catch (err) {
+        console.warn('[Home] Direct settle call warning:', err);
+      }
 
       // Send booking confirmation email
       const ownerSigUrl = settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
@@ -1485,7 +1667,7 @@ export default function Home({}: HomeProps) {
     const matchPrice = p.price <= priceRange;
 
     const pRooms = rooms.filter(r => r.property_id === p.id);
-    const matchAvailability = !onlyAvailable || pRooms.some(r => r.status === 'available' || r.status === 'reserved' || !r.status);
+    const matchAvailability = !onlyAvailable || pRooms.some(r => isRoomAvailable(r));
 
     // Advanced facilities filters (connected to master facilities list from Supabase)
     const matchFacilities = selectedRoomFacilities.length === 0 ||
@@ -1512,7 +1694,7 @@ export default function Home({}: HomeProps) {
 
     const matchType = selectedType === 'all' || parentProperty.type === selectedType;
     const matchPrice = r.price <= priceRange;
-    const matchAvailability = !onlyAvailable || (r.status === 'available' || r.status === 'reserved' || !r.status);
+    const matchAvailability = !onlyAvailable || isRoomAvailable(r);
 
     // Advanced facilities filters (connected to master facilities list from Supabase)
     const matchFacilities = selectedRoomFacilities.length === 0 || 
@@ -1752,7 +1934,7 @@ export default function Home({}: HomeProps) {
         <div className="flex items-center gap-3 md:gap-4">
           <div className="hidden sm:flex items-center gap-2 text-brand-beige/85 font-mono text-[10px]">
             <Sparkles size={12} className="text-brand-beige animate-pulse" />
-            <span>{lang === 'id' ? 'GARANSI HARGA ALL-IN JUJUR' : 'HONEST ALL-IN PRICE GUARANTEE'}</span>
+            <span>{lang === 'id' ? 'GARANSI HARGA ALL-IN ' : 'HONEST ALL-IN PRICE GUARANTEE'}</span>
           </div>
 
           {/* Translation Toggle Switcher (Indonesia / English) */}
@@ -1927,28 +2109,30 @@ export default function Home({}: HomeProps) {
           </div>
 
           {/* Fasilitas Standar Setiap Cabang */}
-          <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-8">
-            <h2 className="text-2xl md:text-3xl font-black text-brand-primary font-display tracking-tight text-left">
-              {lang === 'id' ? 'Fasilitas Standar Setiap Cabang' : 'Standard Amenities in Every Branch'}
-            </h2>
-            
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-4">
-              {standardFacilities.map((fac, idx) => (
-                <div 
-                  key={idx} 
-                  className="bg-white border border-brand-beige/85 rounded-3xl p-5 text-center flex flex-col items-center justify-center space-y-3 shadow-sm hover:shadow-md hover:border-emerald-600/30 transition-all duration-300"
-                >
-                  <div className="w-12 h-12 rounded-full bg-[#EEF7F0] flex items-center justify-center shadow-inner">
-                    {renderSettingIcon(fac.icon)}
+          {standardFacilities && standardFacilities.length > 0 && (
+            <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-8">
+              <h2 className="text-2xl md:text-3xl font-black text-brand-primary font-display tracking-tight text-left">
+                {lang === 'id' ? 'Fasilitas Standar Setiap Cabang' : 'Standard Amenities in Every Branch'}
+              </h2>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4">
+                {standardFacilities.map((fac, idx) => (
+                  <div 
+                    key={idx} 
+                    className="bg-white border border-brand-beige/85 rounded-3xl p-5 text-center flex flex-col items-center justify-center space-y-3 shadow-sm hover:shadow-md hover:border-emerald-600/30 transition-all duration-300"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-[#EEF7F0] flex items-center justify-center shadow-inner">
+                      {renderSettingIcon(fac.icon)}
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="font-extrabold text-brand-primary text-xs leading-tight tracking-tight">{fac.title}</h4>
+                      <p className="text-[11px] text-brand-steel font-medium">{fac.subtitle}</p>
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <h4 className="font-extrabold text-brand-primary text-xs leading-tight tracking-tight">{fac.title}</h4>
-                    <p className="text-[11px] text-brand-steel font-medium">{fac.subtitle}</p>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Rekomendasi Properti Terpopuler */}
           <div id="cabang-samara-stay-section" className="max-w-6xl mx-auto px-4 space-y-12 py-12">
@@ -1964,7 +2148,7 @@ export default function Home({}: HomeProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-10">
               {properties.slice(0, 4).map((p, idx) => {
                 const pRooms = rooms.filter(r => r.property_id === p.id);
-                const availableCount = pRooms.filter(r => r.status === 'available' || r.status === 'reserved' || !r.status).length;
+                const availableCount = pRooms.filter(r => isRoomAvailable(r)).length;
                 
                 // Check if property is Kost Atikah Kemayoran (strictly excluding Tiara/Cempaka/Ciputra)
                 const nameLower = p.name.toLowerCase();
@@ -1980,22 +2164,15 @@ export default function Home({}: HomeProps) {
                   ? 'bg-[#205D41] hover:bg-[#164731] text-white' 
                   : 'bg-[#374457] hover:bg-[#273241] text-white';
 
-                // Determine taglines & descriptions
-                const tagLine = isAtikah
-                  ? (lang === 'id' ? "Hunian Kos Eksklusif & Kamar Harian di Pusat Kota" : "Exclusive Boarding & Daily Rooms in City Center")
-                  : (p.id === 1 
-                      ? (lang === 'id' ? "Hunian Tenang di Jantung Jakarta Pusat" : "Peaceful Living in the Heart of Central Jakarta")
-                      : p.description?.split('.')[0] || (lang === 'id' ? "Hunian Nyaman, Strategis & Aman" : "Comfortable, Strategic & Secure Living"));
-
-                const detailedDesc = isAtikah
-                  ? (lang === 'id' 
-                      ? "Terletak sangat strategis di pusat kota, menghadirkan konsep hunian kos modern serta opsi sewa kamar harian fully furnished yang nyaman, tenang, dan praktis."
-                      : "Strategically located in the city center, offering modern boarding concepts and fully furnished daily room rentals that are comfortable, quiet, and convenient.")
-                  : (p.id === 1
+                const detailedDesc = (p.description && p.description.trim() && p.description !== '(test)')
+                  ? p.description
+                  : (isAtikah
                       ? (lang === 'id' 
-                          ? "Terletak di kawasan residensial yang asri dan tenang, Samara Stay Cempaka Putih menawarkan pengalaman tinggal premium dengan sentuhan alam yang menenangkan."
-                          : "Located in a lush and serene residential area, Samara Stay Cempaka Putih offers a premium living experience with a relaxing touch of nature.")
-                      : p.description?.split('.').slice(1).join('.').trim() || p.address);
+                          ? "Terletak sangat strategis di pusat kota Kemayoran, menghadirkan konsep hunian kos modern serta opsi sewa kamar harian fully furnished yang nyaman, tenang, dan praktis."
+                          : "Strategically located in the city center, offering modern boarding concepts and fully furnished daily room rentals that are comfortable, quiet, and convenient.")
+                      : (lang === 'id' 
+                          ? "Terletak di kawasan Kemayoran yang strategis dan tenang, menawarkan pengalaman tinggal premium dengan fasilitas lengkap dan aman."
+                          : "Located in a serene residential area in Kemayoran, offering a premium living experience with complete amenities."));
 
                 return (
                   <div 
@@ -2025,7 +2202,7 @@ export default function Home({}: HomeProps) {
                         
                         <div className="flex items-start gap-1.5 text-brand-steel text-xs">
                           <MapPin size={15} className="text-brand-taupe shrink-0 mt-0.5" />
-                          <span className="font-medium text-[#64748B]">{tagLine}</span>
+                          <span className="font-medium text-[#64748B] leading-relaxed">{p.address}</span>
                         </div>
                         
                         <p className="text-brand-steel text-xs font-light leading-relaxed">
@@ -2454,7 +2631,7 @@ export default function Home({}: HomeProps) {
               setSelectedType('all');
               setSearchDurationType('monthly');
               setSelectedRoomFacilities([]);
-              setPriceRange(15000000);
+              setPriceRange(5000000);
               setOnlyAvailable(false);
             }}
           />
@@ -2468,7 +2645,7 @@ export default function Home({}: HomeProps) {
                 filteredProperties.length > 0 ? (
                   filteredProperties.map(p => {
                     const pRooms = rooms.filter(r => r.property_id === p.id);
-                    const availableCount = pRooms.filter(r => r.status === 'available' || r.status === 'reserved' || !r.status).length;
+                    const availableCount = pRooms.filter(r => isRoomAvailable(r)).length;
                     return (
                       <div
                         key={p.id}
@@ -2581,16 +2758,18 @@ export default function Home({}: HomeProps) {
                           />
                           <div className="absolute top-2.5 left-2.5">
                             {(() => {
-                              const isAvail = r.status === 'available' || r.status === 'reserved' || !r.status;
+                              const isAvail = isRoomAvailable(r);
                               return (
                                 <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase font-mono border shadow-sm ${
                                   isAvail 
                                     ? 'bg-emerald-600 text-white border-emerald-700' 
-                                    : r.status === 'occupied' 
-                                      ? 'bg-amber-600 text-white border-amber-700' 
-                                      : 'bg-rose-600 text-white border-rose-700'
+                                    : r.status === 'reserved'
+                                      ? 'bg-amber-600 text-white border-amber-700'
+                                      : r.status === 'occupied' 
+                                        ? 'bg-slate-700 text-white border-slate-800' 
+                                        : 'bg-rose-600 text-white border-rose-700'
                                 }`}>
-                                  {isAvail ? 'KOSONG' : r.status === 'occupied' ? 'TERISI' : 'PERBAIKAN'}
+                                  {isAvail ? 'KOSONG' : r.status === 'reserved' ? 'DIRESERVASI' : r.status === 'occupied' ? 'TERISI' : 'PERBAIKAN'}
                                 </span>
                               );
                             })()}
@@ -2635,7 +2814,7 @@ export default function Home({}: HomeProps) {
                             </div>
 
                             <div className="flex gap-1.5 shrink-0 items-center">
-                              {(r.status === 'available' || r.status === 'reserved' || !r.status) && (
+                              {isRoomAvailable(r) && (
                                 <button
                                   type="button"
                                   onClick={() => setSelectedRoomForDetail(r)}
@@ -2657,19 +2836,19 @@ export default function Home({}: HomeProps) {
                               </button>
                               <button
                                 type="button"
-                                disabled={!(r.status === 'available' || r.status === 'reserved' || !r.status)}
+                                disabled={!isRoomAvailable(r)}
                                 onClick={() => {
                                   setActiveProperty(p);
                                   setActiveRoom(r);
                                   setCheckoutFlow('monthly');
                                 }}
                                 className={`font-extrabold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
-                                  (r.status === 'available' || r.status === 'reserved' || !r.status)
+                                  isRoomAvailable(r)
                                     ? 'bg-[#2E6F40] hover:bg-[#1f4b2b] text-white' 
                                     : 'bg-slate-100 text-[#64748B] border border-slate-200 cursor-not-allowed shadow-none'
                                 }`}
                               >
-                                Pesan Sekarang
+                                {isRoomAvailable(r) ? 'Pesan Sekarang' : r.status === 'reserved' ? 'Sedang Dipesan' : 'Sudah Terisi'}
                               </button>
                             </div>
                           </div>
@@ -2900,7 +3079,7 @@ export default function Home({}: HomeProps) {
                   </span>
                 </div>
 
-                <h1 className="text-3xl font-black text-[#3A444D] font-display uppercase tracking-tight">{activeProperty.name}</h1>
+                <h1 className="text-3xl font-black text-[#3A444D] font-display tracking-tight">{activeProperty.name}</h1>
                 
                 <div className="flex items-center gap-1.5 text-[#64748B] text-sm font-medium">
                   <MapPin size={15} className="text-[#2E6F40] shrink-0" />
@@ -2934,6 +3113,258 @@ export default function Home({}: HomeProps) {
 
                 <p className="text-[10px] text-[#64748B] font-medium">Lihat semua tipe & harga kamar tersedia</p>
               </div>
+
+              {/* DAFTAR KAMAR & KETERSEDIAAN UNIT LANGSUNG TERPADU (SUPABASE REALTIME SYNC) */}
+              {(() => {
+                const propertyRooms = rooms.filter(r => r.property_id === activeProperty.id);
+                const availableRoomsList = propertyRooms.filter(r => isRoomAvailable(r));
+                const occupiedRoomsList = propertyRooms.filter(r => !isRoomAvailable(r));
+                
+                // Available floors
+                const floors: number[] = Array.from(new Set<number>(propertyRooms.map(r => Number(r.floor)).filter(f => !isNaN(f) && f > 0))).sort((a: number, b: number) => a - b);
+
+                // Filtered rooms based on tabs & floor
+                let displayRooms = propertyRooms;
+                if (detailRoomTab === 'available') {
+                  displayRooms = availableRoomsList;
+                } else if (detailRoomTab === 'occupied') {
+                  displayRooms = occupiedRoomsList;
+                }
+
+                if (detailRoomFloor !== 'all') {
+                  displayRooms = displayRooms.filter(r => r.floor === detailRoomFloor);
+                }
+
+                return (
+                  <div className="bg-white border border-[#E2E8F0] p-6 sm:p-7 rounded-[24px] space-y-6 shadow-xs text-left">
+                    {/* Header Section */}
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-[#F1F5F9] pb-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full"></span>
+                          <h3 className="text-sm sm:text-base font-black text-[#3A444D] uppercase tracking-tight font-display">
+                            Daftar Kamar & Ketersediaan Unit
+                          </h3>
+                        </div>
+                        <p className="text-[11px] text-[#64748B] font-medium mt-1">
+                          Data ketersediaan kamar tersinkronisasi otomatis dengan database Supabase. Unit tanpa perpanjangan kontrak otomatis kembali tersedia.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="px-3 py-1 rounded-full text-[10px] font-extrabold uppercase font-mono bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          {availableRoomsList.length} Unit Tersedia
+                        </span>
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-100 text-slate-600 border border-slate-200">
+                          {propertyRooms.length} Total
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Filter Tabs & Floor Selection */}
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      {/* Tabs */}
+                      <div className="flex flex-wrap gap-1.5 bg-[#F8FAFC] p-1 rounded-xl border border-[#E2E8F0]">
+                        <button
+                          type="button"
+                          onClick={() => setDetailRoomTab('all')}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                            detailRoomTab === 'all'
+                              ? 'bg-[#2E6F40] text-white shadow-2xs'
+                              : 'text-[#64748B] hover:text-[#1E293B]'
+                          }`}
+                        >
+                          Semua Unit ({propertyRooms.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDetailRoomTab('available')}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                            detailRoomTab === 'available'
+                              ? 'bg-[#2E6F40] text-white shadow-2xs'
+                              : 'text-emerald-700 hover:text-emerald-800'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                          Tersedia ({availableRoomsList.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDetailRoomTab('occupied')}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                            detailRoomTab === 'occupied'
+                              ? 'bg-[#2E6F40] text-white shadow-2xs'
+                              : 'text-[#64748B] hover:text-[#1E293B]'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+                          Terisi ({occupiedRoomsList.length})
+                        </button>
+                      </div>
+
+                      {/* Floor Filter */}
+                      {floors.length > 1 && (
+                        <div className="flex items-center gap-1.5 text-[11px]">
+                          <span className="text-[#64748B] font-medium">Lantai:</span>
+                          <select
+                            value={detailRoomFloor}
+                            onChange={(e) => setDetailRoomFloor(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                            className="bg-white border border-[#E2E8F0] rounded-lg px-2.5 py-1 text-xs font-semibold text-[#3A444D] focus:outline-none focus:border-[#2E6F40] cursor-pointer"
+                          >
+                            <option value="all">Semua Lantai</option>
+                            {floors.map(f => (
+                              <option key={f} value={f}>Lantai {f}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Rooms Grid */}
+                    {displayRooms.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {displayRooms.map(r => {
+                          const isAvail = isRoomAvailable(r);
+                          const isSelected = activeRoom?.id === r.id;
+
+                          return (
+                            <div
+                              key={r.id}
+                              className={`p-4 rounded-2xl border flex flex-col justify-between gap-3.5 transition-all duration-300 ${
+                                !isAvail 
+                                  ? 'bg-[#F8FAFC]/60 border-[#E2E8F0] opacity-75' 
+                                  : isSelected
+                                    ? 'border-[#2E6F40] bg-[#2E6F40]/5 shadow-sm ring-1 ring-[#2E6F40]/30'
+                                    : 'border-[#E2E8F0] bg-white hover:border-[#2E6F40] hover:shadow-sm'
+                              }`}
+                            >
+                              <div className="space-y-3">
+                                {/* Room Photo */}
+                                <div 
+                                  className="w-full h-40 rounded-xl overflow-hidden bg-slate-900 border border-[#E2E8F0] relative group cursor-pointer"
+                                  onClick={() => setSelectedRoomForDetail(r)}
+                                  title="Klik untuk melihat foto & galeri unit ini"
+                                >
+                                  <img 
+                                    src={r.image_url || 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80'} 
+                                    alt={`Kamar ${r.room_number}`} 
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                    referrerPolicy="no-referrer"
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
+                                    }}
+                                  />
+                                  <div className="absolute top-2 left-2 bg-black/75 px-2 py-0.5 rounded text-[8px] font-bold text-white tracking-wide uppercase">
+                                    LANTAI {r.floor}
+                                  </div>
+                                  <div className="absolute bottom-2 right-2 bg-black/80 px-2 py-0.5 rounded text-[9px] font-semibold text-white">
+                                    {r.size_sqm || 16} m²
+                                  </div>
+                                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <span className="text-[10px] text-white font-bold bg-black/70 px-2.5 py-1 rounded-lg">
+                                      Lihat Galeri Foto
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Room Title & Status */}
+                                <div className="space-y-1">
+                                  <div className="flex justify-between items-start">
+                                    <div className="font-extrabold text-[#3A444D] text-sm font-display flex items-center gap-1.5 flex-wrap">
+                                      Unit {r.room_number}
+                                      <span className="text-[8px] font-extrabold text-[#2E6F40] bg-[#2E6F40]/10 border border-[#2E6F40]/20 px-2 py-0.5 rounded font-sans uppercase">
+                                        {r.room_type || 'Standard'}
+                                      </span>
+                                    </div>
+
+                                    <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono border flex items-center gap-1 ${
+                                      isAvail 
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                                    }`}>
+                                      {isAvail ? (
+                                        <>
+                                          <CheckCircle size={10} className="text-emerald-600" />
+                                          Tersedia
+                                        </>
+                                      ) : (
+                                        'Terisi'
+                                      )}
+                                    </span>
+                                  </div>
+
+                                  {/* Facilities */}
+                                  <div className="flex flex-wrap gap-1 pt-1">
+                                    {(r.facilities || []).slice(0, 4).map((f: any, idx) => (
+                                      <span key={f.id || idx} className="text-[9px] bg-[#F8FAFC] border border-[#E2E8F0] text-[#64748B] px-2 py-0.5 rounded-md font-medium">
+                                        {f.name}
+                                      </span>
+                                    ))}
+                                    {(r.facilities || []).length > 4 && (
+                                      <span className="text-[9px] text-[#64748B] px-1 py-0.5 font-medium">
+                                        +{(r.facilities || []).length - 4} lainnya
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Price */}
+                                <div className="border-t border-[#F1F5F9] pt-2">
+                                  <div className="text-[10px] text-[#64748B] font-medium">Tarif Sewa</div>
+                                  <div className="text-base font-extrabold text-[#1E293B]">
+                                    {formatRupiah(r.price)} <span className="text-[11px] text-[#64748B] font-normal">/ bulan</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Action CTAs */}
+                              <div className="pt-2 border-t border-[#F1F5F9] flex items-center gap-2">
+                                {isAvail ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveRoom(r);
+                                        setCheckoutFlow('monthly');
+                                        window.scrollTo({ top: 1200, behavior: 'smooth' });
+                                      }}
+                                      className="flex-1 py-2 px-3 bg-[#2E6F40] hover:bg-[#235531] text-white text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center shadow-2xs"
+                                    >
+                                      Pesan Unit Ini
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveRoom(r);
+                                        setCheckoutFlow('survey');
+                                      }}
+                                      className="py-2 px-3 bg-[#F8FAFC] hover:bg-emerald-50 text-[#2E6F40] border border-[#E2E8F0] hover:border-[#2E6F40] text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center"
+                                      title="Jadwalkan survey untuk unit ini"
+                                    >
+                                      Survey
+                                    </button>
+                                  </>
+                                ) : (
+                                  <div className="w-full py-2 px-3 bg-slate-100 text-slate-500 rounded-xl text-[11px] font-medium text-center border border-slate-200">
+                                    Unit Sedang Terisi
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="py-12 px-4 border border-dashed border-[#E2E8F0] rounded-2xl text-center space-y-2">
+                        <Bed size={32} className="text-[#64748B] mx-auto opacity-50" />
+                        <p className="text-xs text-[#64748B] font-medium">
+                          Tidak ada kamar yang sesuai dengan filter yang dipilih.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Deskripsi Hunian */}
               <div className="bg-white border border-[#E2E8F0] p-6 rounded-[24px] space-y-3.5 shadow-xs text-left">
@@ -3260,7 +3691,7 @@ export default function Home({}: HomeProps) {
                   <div className="space-y-4">
                     <div className="border-b border-[#F1F5F9] pb-3">
                       <span className="text-[10px] text-[#2E6F40] font-mono font-bold uppercase tracking-wider block">PEMESANAN INSTAN</span>
-                      <h3 className="text-sm font-black text-white uppercase tracking-tight">Samara Booking Center</h3>
+                      <h3 className="text-sm font-black text-[#3A444D] uppercase tracking-tight">Samara Booking Center</h3>
                       <p className="text-[11px] text-[#64748B] font-medium mt-0.5">Gunakan platform online terpercaya untuk memesan kamar Anda langsung:</p>
                     </div>
 
@@ -3360,13 +3791,13 @@ export default function Home({}: HomeProps) {
                 <p className="text-[11px] text-[#64748B] font-medium mt-0.5">Pilih kamar terbaik yang sesuai dengan budget dan kenyamanan Anda</p>
               </div>
               <span className="text-[11px] font-extrabold font-mono text-[#0D9488] bg-[#0D9488]/10 px-2.5 py-1 rounded-lg">
-                {rooms.filter(r => r.property_id === activeProperty.id && (r.status === 'available' || !r.status)).length} UNIT KOSONG
+                {rooms.filter(r => r.property_id === activeProperty.id && isRoomAvailable(r)).length} UNIT KOSONG
               </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {rooms.filter(r => r.property_id === activeProperty.id).map(r => {
-                const isAvailable = r.status === 'available' || !r.status;
+                const isAvailable = isRoomAvailable(r);
                 const isSelected = activeRoom?.id === r.id;
                 return (
                   <div
@@ -3438,9 +3869,11 @@ export default function Home({}: HomeProps) {
                             <span className={`px-2 py-0.5 rounded-full text-[8px] font-extrabold uppercase font-mono border ${
                               isAvailable 
                                 ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
-                                : 'bg-slate-100 text-[#64748B] border-slate-200'
+                                : r.status === 'reserved'
+                                  ? 'bg-amber-500/10 text-amber-700 border-amber-500/20'
+                                  : 'bg-slate-100 text-[#64748B] border-slate-200'
                             }`}>
-                              {isAvailable ? 'Tersedia' : 'Terisi'}
+                              {isAvailable ? 'Tersedia' : r.status === 'reserved' ? 'Direservasi' : 'Terisi'}
                             </span>
                           </div>
                         </div>
@@ -3490,7 +3923,7 @@ export default function Home({}: HomeProps) {
                         </div>
                       ) : (
                         <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl py-2 text-center text-[#64748B] font-extrabold text-xs uppercase font-sans">
-                          Unit Sudah Terisi Penghuni
+                          {r.status === 'reserved' ? 'Unit Sedang Dalam Pembayaran' : 'Unit Sudah Terisi Penghuni'}
                         </div>
                       )}
                     </div>

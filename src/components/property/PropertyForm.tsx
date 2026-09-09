@@ -406,9 +406,10 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           required
           value={formData.name}
           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          placeholder="Contoh: Samara Premium Ciputra"
-          className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 uppercase font-semibold text-[11px]"
+          placeholder="Contoh: Kos Tiara Kemayoran"
+          className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 font-semibold text-[11px]"
         />
+        <span className="text-[10px] text-slate-500 block">Penulisan huruf besar dan kecil akan tersimpan dan tampil sesuai yang Anda ketikkan.</span>
       </div>
 
       <div className="space-y-1">

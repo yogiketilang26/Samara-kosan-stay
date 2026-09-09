@@ -1,8 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Room, Property, Coupon, Survey } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
-import { Calendar, Tag, ShieldAlert, Clock, Lock, CheckCircle2, Info } from 'lucide-react';
+import { 
+  Calendar, Tag, ShieldAlert, Clock, Lock, CheckCircle2, Info, 
+  Heart, Upload, FileText, X, Eye, RefreshCw, AlertCircle, FileCheck
+} from 'lucide-react';
 import { SignaturePad } from './SignaturePad';
+import { uploadToSupabaseStorage } from '../../utils/storageUploader';
 
 export const SURVEY_SLOTS = [
   { value: '09:00 - 11:00', label: 'Pagi', time: '09:00 - 11:00 WIB' },
@@ -49,6 +53,12 @@ interface BookingFormProps {
     occupantPhone?: string;
     occupantEmail?: string;
     occupantNik?: string;
+    isMarried?: boolean;
+    marriageCertificateUrl?: string;
+    spouseName?: string;
+    spouseNik?: string;
+    spousePhone?: string;
+    spouseRelation?: 'istri' | 'suami' | string;
   };
   setBookingForm: (val: any) => void;
   onProceedToPayment: (calculatedTotal: number) => void;
@@ -85,6 +95,10 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   setSignatureUrl
 }) => {
   const [sigError, setSigError] = useState('');
+  const [isUploadingCert, setIsUploadingCert] = useState(false);
+  const [certUploadError, setCertUploadError] = useState('');
+  const [previewCertModal, setPreviewCertModal] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Check if a specific time slot is already locked/booked by another active survey
   const isSlotLocked = (slotValue: string) => {
@@ -96,6 +110,73 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       s.survey_time_slot === slotValue &&
       (s.status === 'survey_confirmed' || s.status === 'pending_payment')
     );
+  };
+
+  // Upload handler for marriage book/card proof
+  const handleCertFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate size (max 15MB)
+    if (file.size > 15 * 1024 * 1024) {
+      setCertUploadError('Ukuran file maksimal 15MB.');
+      return;
+    }
+
+    setIsUploadingCert(true);
+    setCertUploadError('');
+    setSigError('');
+
+    try {
+      const cleanOwnerName = (bookingForm.fullName || 'pasutri').replace(/[^a-zA-Z0-9]/g, '_');
+      const uploadResult = await uploadToSupabaseStorage(
+        file,
+        'documents',
+        `nikah_${cleanOwnerName}`,
+        { maxFileSizeMB: 15 }
+      );
+
+      if (uploadResult && uploadResult.publicUrl) {
+        setBookingForm({
+          ...bookingForm,
+          marriageCertificateUrl: uploadResult.publicUrl
+        });
+      } else {
+        throw new Error('Gagal mendapatkan tautan berkas dokumen.');
+      }
+    } catch (err: any) {
+      console.error('[BookingForm] Upload buku nikah failed:', err);
+      // Fallback: convert file to data URL so the user is never blocked
+      try {
+        const reader = new FileReader();
+        reader.onload = (loadEvt) => {
+          const dataUrl = loadEvt.target?.result as string;
+          if (dataUrl) {
+            setBookingForm({
+              ...bookingForm,
+              marriageCertificateUrl: dataUrl
+            });
+            setCertUploadError('');
+          }
+        };
+        reader.readAsDataURL(file);
+      } catch (readErr) {
+        setCertUploadError('Gagal mengunggah berkas. Mohon coba file lain.');
+      }
+    } finally {
+      setIsUploadingCert(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleRemoveCert = () => {
+    setBookingForm({
+      ...bookingForm,
+      marriageCertificateUrl: ''
+    });
+    setCertUploadError('');
   };
 
   // Auto-switch to first available slot if currently selected slot is locked on the selected date
@@ -149,6 +230,25 @@ export const BookingForm: React.FC<BookingFormProps> = ({
     if (checkoutFlow === 'survey' && isSlotLocked(surveyForm.slot)) {
       setSigError(`Slot jam kunjungan ${surveyForm.slot} pada tanggal ${surveyForm.date} telah dipesan oleh pengunjung lain. Mohon pilih slot jam lain yang masih tersedia.`);
       return;
+    }
+
+    if (checkoutFlow !== 'survey' && bookingForm.isMarried) {
+      if (!bookingForm.spouseName?.trim()) {
+        setSigError('Bagi penyewa berstatus menikah (Pasutri), Nama Lengkap Pasangan wajib diisi.');
+        return;
+      }
+      if (!bookingForm.spousePhone?.trim()) {
+        setSigError('Bagi penyewa berstatus menikah (Pasutri), No. WhatsApp Pasangan wajib diisi.');
+        return;
+      }
+      if (!bookingForm.spouseNik?.trim()) {
+        setSigError('Bagi penyewa berstatus menikah (Pasutri), NIK KTP Pasangan wajib diisi.');
+        return;
+      }
+      if (!bookingForm.marriageCertificateUrl) {
+        setSigError('Bagi penyewa berstatus menikah (Pasutri), wajib mengunggah bukti Foto Buku Nikah atau Kartu Nikah resmi.');
+        return;
+      }
     }
 
     if (!isAgreed) {
@@ -496,6 +596,242 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             )}
           </div>
 
+          {/* Status Pernikahan / Pasutri Form & Bukti Buku Nikah */}
+          <div className="bg-slate-50 p-4 rounded-2xl border border-[#E2E8F0] space-y-3">
+            <div className="flex items-start gap-2.5">
+              <input 
+                id="booking-married-checkbox"
+                type="checkbox"
+                checked={!!bookingForm.isMarried}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setBookingForm({
+                    ...bookingForm,
+                    isMarried: checked,
+                    spouseRelation: bookingForm.spouseRelation || 'istri'
+                  });
+                  setSigError('');
+                }}
+                className="w-4 h-4 mt-0.5 rounded border-[#CBD5E1] bg-white text-[#2E6F40] focus:ring-0 cursor-pointer accent-[#2E6F40]"
+              />
+              <label htmlFor="booking-married-checkbox" className="cursor-pointer select-none">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-[11px] text-[#1E293B]">
+                    Status Menikah (Pasangan Suami Istri / Pasutri)
+                  </span>
+                  <span className="bg-emerald-100 text-emerald-800 text-[9px] font-bold px-1.5 py-0.2 rounded-md font-mono">
+                    Wajib Dokumen
+                  </span>
+                </div>
+                <p className="text-[10px] text-[#64748B] mt-0.5 leading-relaxed">
+                  Penyewa yang sudah menikah wajib melampirkan foto/scan bukti <strong>Buku Nikah</strong> atau <strong>Kartu Nikah</strong> resmi serta mengisi identitas pasangan.
+                </p>
+              </label>
+            </div>
+
+            {bookingForm.isMarried && (
+              <div className="pt-3 border-t border-[#E2E8F0] space-y-3.5">
+                <div className="bg-emerald-50/90 text-emerald-950 p-3 rounded-xl text-[10px] leading-relaxed border border-emerald-200 flex gap-2">
+                  <Heart size={14} className="shrink-0 text-emerald-700 mt-0.5" />
+                  <div>
+                    <strong className="block font-bold text-emerald-900 mb-0.5">Kebijakan Hunian Pasutri Resmi:</strong>
+                    <span>Untuk menjaga kenyamanan, keamanan, dan ketertiban seluruh penghuni, data pasangan dan bukti buku/kartu nikah akan diverifikasi oleh Admin/Owner secara tertutup dan aman.</span>
+                  </div>
+                </div>
+
+                {/* Hubungan Pasangan Toggle */}
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">
+                    Identitas Pasangan Yang Tinggal Bersama
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBookingForm({ ...bookingForm, spouseRelation: 'istri' })}
+                      className={`flex-1 py-2 px-3 rounded-xl text-[10px] font-bold uppercase transition-all cursor-pointer text-center border ${
+                        bookingForm.spouseRelation === 'istri' || !bookingForm.spouseRelation
+                          ? 'bg-[#2E6F40] border-[#2E6F40] text-white shadow-xs font-black'
+                          : 'bg-white border-[#E2E8F0] text-[#64748B] hover:bg-slate-100'
+                      }`}
+                    >
+                      👰 Istri Pemesan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBookingForm({ ...bookingForm, spouseRelation: 'suami' })}
+                      className={`flex-1 py-2 px-3 rounded-xl text-[10px] font-bold uppercase transition-all cursor-pointer text-center border ${
+                        bookingForm.spouseRelation === 'suami'
+                          ? 'bg-[#2E6F40] border-[#2E6F40] text-white shadow-xs font-black'
+                          : 'bg-white border-[#E2E8F0] text-[#64748B] hover:bg-slate-100'
+                      }`}
+                    >
+                      🤵 Suami Pemesan
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">
+                      Nama Lengkap Pasangan <span className="text-red-500">*</span>
+                    </label>
+                    <input 
+                      type="text" required={bookingForm.isMarried}
+                      value={bookingForm.spouseName || ''}
+                      onChange={(e) => setBookingForm({ ...bookingForm, spouseName: e.target.value })}
+                      placeholder={bookingForm.spouseRelation === 'suami' ? 'Nama lengkap suami' : 'Nama lengkap istri'}
+                      className="w-full bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] focus:border-[#2E6F40] focus:ring-1 focus:ring-[#2E6F40]/20 outline-none capitalize transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">
+                      No. WhatsApp Pasangan <span className="text-red-500">*</span>
+                    </label>
+                    <input 
+                      type="tel" required={bookingForm.isMarried}
+                      value={bookingForm.spousePhone || ''}
+                      onChange={(e) => setBookingForm({ ...bookingForm, spousePhone: e.target.value })}
+                      placeholder="Contoh: 0812..."
+                      className="w-full bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">
+                    Nomor NIK KTP Pasangan (16 digit) <span className="text-red-500">*</span>
+                  </label>
+                  <input 
+                    type="text" required={bookingForm.isMarried} maxLength={16}
+                    value={bookingForm.spouseNik || ''}
+                    onChange={(e) => setBookingForm({ ...bookingForm, spouseNik: e.target.value })}
+                    placeholder="Contoh: 3174..."
+                    className="w-full bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
+                  />
+                </div>
+
+                {/* File Upload Section for Buku Nikah */}
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                      <FileCheck size={12} className="text-[#2E6F40]" />
+                      Upload Bukti Buku Nikah / Kartu Nikah <span className="text-red-500">* (Wajib)</span>
+                    </label>
+                    {bookingForm.marriageCertificateUrl && (
+                      <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono">
+                        <CheckCircle2 size={10} /> Terunggah
+                      </span>
+                    )}
+                  </div>
+
+                  {bookingForm.marriageCertificateUrl ? (
+                    <div className="bg-white border-2 border-emerald-500/40 rounded-2xl p-3 flex items-center justify-between gap-3 shadow-xs">
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        {bookingForm.marriageCertificateUrl.startsWith('data:image') || bookingForm.marriageCertificateUrl.includes('http') ? (
+                          <img 
+                            src={bookingForm.marriageCertificateUrl} 
+                            alt="Bukti Buku Nikah"
+                            className="w-14 h-14 object-cover rounded-xl border border-emerald-200 shrink-0 bg-slate-50"
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0 text-emerald-700">
+                            <FileText size={22} />
+                          </div>
+                        )}
+                        <div className="text-left truncate">
+                          <p className="font-bold text-[11px] text-[#1E293B] truncate">
+                            Bukti Buku/Kartu Nikah Terlampir
+                          </p>
+                          <p className="text-[9px] text-[#64748B] font-mono mt-0.5">
+                            Format siap diverifikasi oleh Admin
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewCertModal(true)}
+                          className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-[#2E6F40] border border-emerald-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-all"
+                          title="Lihat Dokumen"
+                        >
+                          <Eye size={12} />
+                          <span className="hidden sm:inline">Lihat</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={isUploadingCert}
+                          className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#3A444D] border border-slate-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-all"
+                          title="Ganti Dokumen"
+                        >
+                          <RefreshCw size={12} className={isUploadingCert ? 'animate-spin' : ''} />
+                          <span className="hidden sm:inline">Ganti</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRemoveCert}
+                          className="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-[10px] font-bold cursor-pointer transition-all"
+                          title="Hapus Dokumen"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div 
+                      onClick={() => !isUploadingCert && fileInputRef.current?.click()}
+                      className={`border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-all group ${
+                        isUploadingCert 
+                          ? 'border-[#2E6F40] bg-emerald-50/40' 
+                          : 'border-[#CBD5E1] bg-white hover:border-[#2E6F40] hover:bg-emerald-50/20'
+                      }`}
+                    >
+                      <input 
+                        ref={fileInputRef}
+                        type="file" 
+                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        onChange={handleCertFileSelect}
+                        className="hidden"
+                      />
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        {isUploadingCert ? (
+                          <>
+                            <div className="w-10 h-10 rounded-full bg-emerald-100 text-[#2E6F40] flex items-center justify-center animate-spin">
+                              <RefreshCw size={18} />
+                            </div>
+                            <p className="text-[11px] font-bold text-[#2E6F40]">Sedang memproses & mengunggah dokumen...</p>
+                            <p className="text-[9px] text-[#64748B] font-mono">Mohon tunggu sebentar</p>
+                          </>
+                        ) : (
+                          <>
+                            <div className="w-10 h-10 rounded-full bg-emerald-50 text-[#2E6F40] group-hover:bg-emerald-100 flex items-center justify-center transition-colors">
+                              <Upload size={18} />
+                            </div>
+                            <div>
+                              <p className="text-[11px] font-bold text-[#1E293B] group-hover:text-[#2E6F40] transition-colors">
+                                Klik untuk upload Foto Buku Nikah atau Kartu Nikah
+                              </p>
+                              <p className="text-[9px] text-[#64748B] mt-0.5">
+                                Format: JPG, PNG, WEBP, atau PDF (Maks. 15MB)
+                              </p>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {certUploadError && (
+                    <p className="text-[9px] text-red-500 font-mono flex items-center gap-1 mt-1">
+                      <AlertCircle size={11} /> {certUploadError}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Rencana Check-In</label>
@@ -627,6 +963,48 @@ export const BookingForm: React.FC<BookingFormProps> = ({
           ? 'Konfirmasi Jadwal Survey Gratis' 
           : 'Bayar Online Sekarang via Midtrans SNAP'}
       </button>
+
+      {/* Lightbox / Preview Modal for Marriage Certificate */}
+      {previewCertModal && bookingForm.marriageCertificateUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-200">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
+              <div className="flex items-center gap-2">
+                <FileCheck size={16} className="text-[#2E6F40]" />
+                <h4 className="font-bold text-xs uppercase tracking-wide text-[#1E293B]">
+                  Bukti Buku Nikah / Kartu Nikah
+                </h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewCertModal(false)}
+                className="p-1.5 rounded-full hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-4 flex items-center justify-center bg-slate-900/5 max-h-[70vh] overflow-auto">
+              <img 
+                src={bookingForm.marriageCertificateUrl} 
+                alt="Dokumen Buku Nikah"
+                className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-xs"
+              />
+            </div>
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-[10px]">
+              <span className="text-slate-500 font-mono truncate max-w-[200px]">
+                Pasangan: {bookingForm.spouseName || 'Data Pasangan'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPreviewCertModal(false)}
+                className="px-4 py-1.5 bg-[#2E6F40] text-white font-bold rounded-xl text-[10px] hover:bg-[#1e4b2b] transition-colors cursor-pointer"
+              >
+                Tutup Pratinjau
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 };

@@ -27,10 +27,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const res = await fetch('/api/auth/me');
+        const savedToken = typeof window !== 'undefined'
+          ? (localStorage.getItem('samara_access_token') || localStorage.getItem('sb-access-token'))
+          : null;
+        const savedRefreshToken = typeof window !== 'undefined'
+          ? (localStorage.getItem('samara_refresh_token') || localStorage.getItem('sb-refresh-token'))
+          : null;
+
+        const headers: Record<string, string> = {};
+        if (savedToken) {
+          headers['Authorization'] = `Bearer ${savedToken}`;
+          headers['x-access-token'] = savedToken;
+        }
+        if (savedRefreshToken) {
+          headers['x-refresh-token'] = savedRefreshToken;
+        }
+
+        const res = await fetch('/api/auth/me', {
+          headers,
+          credentials: 'include'
+        });
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.user) {
+            if (data.access_token) {
+              localStorage.setItem('samara_access_token', data.access_token);
+              localStorage.setItem('sb-access-token', data.access_token);
+            }
+            if (data.refresh_token) {
+              localStorage.setItem('samara_refresh_token', data.refresh_token);
+              localStorage.setItem('sb-refresh-token', data.refresh_token);
+            }
             if (data.access_token && data.refresh_token) {
               await supabase.auth.setSession({
                 access_token: data.access_token,
@@ -62,6 +89,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({
           email: email.trim(),
           password: password.trim()
@@ -74,6 +102,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (data.user) {
+        if (data.access_token) {
+          localStorage.setItem('samara_access_token', data.access_token);
+          localStorage.setItem('sb-access-token', data.access_token);
+        }
+        if (data.refresh_token) {
+          localStorage.setItem('samara_refresh_token', data.refresh_token);
+          localStorage.setItem('sb-refresh-token', data.refresh_token);
+        }
         if (data.access_token && data.refresh_token) {
           await supabase.auth.setSession({
             access_token: data.access_token,
@@ -98,6 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({
           email: email.trim(),
           password: password.trim(),
@@ -112,6 +149,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (data.user) {
+        if (data.access_token) {
+          localStorage.setItem('samara_access_token', data.access_token);
+          localStorage.setItem('sb-access-token', data.access_token);
+        }
+        if (data.refresh_token) {
+          localStorage.setItem('samara_refresh_token', data.refresh_token);
+          localStorage.setItem('sb-refresh-token', data.refresh_token);
+        }
         if (data.access_token && data.refresh_token) {
           await supabase.auth.setSession({
             access_token: data.access_token,
@@ -134,10 +179,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+      const savedToken = typeof window !== 'undefined' ? localStorage.getItem('samara_access_token') : null;
+      const headers: Record<string, string> = {};
+      if (savedToken) {
+        headers['Authorization'] = `Bearer ${savedToken}`;
+      }
+      await fetch('/api/auth/logout', { method: 'POST', headers, credentials: 'include' }).catch(() => {});
       await supabase.auth.signOut().catch(() => {});
     } catch (e) {
       console.error('[AUTH] Logout request error:', e);
+    }
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('samara_access_token');
+      localStorage.removeItem('samara_refresh_token');
+      localStorage.removeItem('sb-access-token');
+      localStorage.removeItem('sb-refresh-token');
     }
     setUser(null);
   };

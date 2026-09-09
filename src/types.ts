@@ -77,6 +77,8 @@ export interface Tenant {
   full_name: string;
   phone: string;
   email: string;
+  nik?: string;
+  ktp_image?: string;
   job?: string;
   avatar_initials: string;
   avatar_color: string;
@@ -88,6 +90,13 @@ export interface Tenant {
   emergency_contact?: string;
   created_at?: string;
   status?: 'active' | 'checkout';
+  // Status Pasutri / Menikah
+  is_married?: boolean;
+  marriage_certificate_url?: string;
+  spouse_name?: string;
+  spouse_nik?: string;
+  spouse_phone?: string;
+  spouse_relation?: 'istri' | 'suami' | string;
 }
 
 export interface ContractExtension {
@@ -153,6 +162,13 @@ export interface Booking {
   owner_signed_at?: string;
   owner_signer_name?: string;
   owner_notes?: string;
+  // Status Pasutri / Menikah
+  is_married?: boolean;
+  marriage_certificate_url?: string;
+  spouse_name?: string;
+  spouse_nik?: string;
+  spouse_phone?: string;
+  spouse_relation?: 'istri' | 'suami' | string;
   created_at?: string;
 }
 
@@ -302,9 +318,10 @@ export interface FinancialAuditLog {
 }
 
 export interface StandardFacility {
+  id?: number;
   icon: string;
   title: string;
-  subtitle: string;
+  subtitle?: string;
 }
 
 export interface FAQItem {

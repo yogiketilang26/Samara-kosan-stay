@@ -177,8 +177,8 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
       <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
         <div className="flex items-center gap-2 text-[#1E293B]">
           <FileText size={15} className="text-[#2E6F40]" />
-          <span className="font-extrabold text-[11px] uppercase tracking-wide">
-            PERSETUJUAN & TATATERTIB {property.name}
+          <span className="font-extrabold text-[11px] tracking-wide">
+            <span className="uppercase">PERSETUJUAN & TATATERTIB</span> {property.name}
           </span>
         </div>
         <span className="text-[9px] font-mono font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">

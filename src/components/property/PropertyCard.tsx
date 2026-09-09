@@ -46,7 +46,7 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({ property, onSelect }
 
       <div className="p-4 flex-1 flex flex-col justify-between space-y-3 font-sans">
         <div>
-          <h3 className="text-slate-100 font-bold text-xs font-display tracking-tight hover:text-amber-500 transition-colors uppercase line-clamp-1">{property.name}</h3>
+          <h3 className="text-slate-100 font-bold text-xs font-display tracking-tight hover:text-amber-500 transition-colors line-clamp-1">{property.name}</h3>
           <p className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5" title={property.address}>
             <MapPin size={11} className="text-amber-500 shrink-0" />
             <span className="truncate">{property.address}</span>

@@ -9,7 +9,7 @@ import {
   UserSystem, ActivityLog, Survey, AccountCOA, FinancialTransaction, 
   JournalEntry, SystemSettings, Coupon, PettyCashRequest, FixedAsset,
   Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, Facility,
-  MidtransClearingTransaction, BankReconciliationMatch, NearbyAmenity
+  MidtransClearingTransaction, BankReconciliationMatch, NearbyAmenity, StandardFacility
 } from '../types';
 import { INITIAL_NEARBY_AMENITIES } from '../data/nearbyAmenities';
 import { sanitizePropertyCoordinates } from '../utils/mapCoordinates';
@@ -27,10 +27,55 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
     'Content-Type': 'application/json'
   };
   try {
-    const sessionRes = await supabase.auth.getSession();
-    const token = sessionRes.data.session?.access_token;
+    let token: string | null = null;
+    let refreshToken: string | null = null;
+
+    // 1. Try active Supabase client session
+    try {
+      const sessionRes = await supabase.auth.getSession();
+      token = sessionRes.data.session?.access_token || null;
+      refreshToken = sessionRes.data.session?.refresh_token || null;
+    } catch (e) {}
+
+    // 2. Comprehensive client localStorage fallback
+    if (!token && typeof window !== 'undefined') {
+      token = localStorage.getItem('samara_access_token') || 
+              localStorage.getItem('sb-access-token') || 
+              localStorage.getItem('access_token');
+      refreshToken = localStorage.getItem('samara_refresh_token') || 
+                     localStorage.getItem('sb-refresh-token');
+
+      if (!token) {
+        // Scan standard Supabase storage keys (sb-*-auth-token)
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && (key.includes('-auth-token') || key.includes('supabase.auth.token'))) {
+            try {
+              const raw = localStorage.getItem(key);
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed?.access_token) {
+                  token = parsed.access_token;
+                  refreshToken = parsed.refresh_token || null;
+                  break;
+                } else if (parsed?.currentSession?.access_token) {
+                  token = parsed.currentSession.access_token;
+                  refreshToken = parsed.currentSession.refresh_token || null;
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+        }
+      }
+    }
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+      headers['x-access-token'] = token;
+    }
+    if (refreshToken) {
+      headers['x-refresh-token'] = refreshToken;
     }
   } catch (e) {}
   return headers;
@@ -65,6 +110,8 @@ class SupabaseRealtimeManager {
   private client: any = null;
   private isConfigured = false;
   private globalChannel: any = null;
+  private tabBroadcastChannel: BroadcastChannel | null = null;
+  private tabId: string = Math.random().toString(36).substring(2, 9);
   private listeners: Map<string, Set<RealtimeCallback>> = new Map();
   private connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' = 'DISCONNECTED';
   private retryTimeout: any = null;
@@ -96,10 +143,92 @@ class SupabaseRealtimeManager {
     this.isConfigured = isConfigured;
     this.cleanupAll();
     this.setupNetworkLifecycleListeners();
+    this.setupTabBroadcastChannel();
     
     if (this.isConfigured && this.client) {
       this.connectionStatus = 'DISCONNECTED';
       this.establishGlobalChannel();
+    }
+  }
+
+  private setupTabBroadcastChannel() {
+    if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+      try {
+        if (!this.tabBroadcastChannel) {
+          this.tabBroadcastChannel = new BroadcastChannel('samara_stay_realtime_bus');
+          this.tabBroadcastChannel.onmessage = (event) => {
+            const msg = event?.data;
+            if (msg && msg.table && msg.sourceTabId !== this.tabId) {
+              console.log(`[REALTIME MANAGER] Inter-tab sync received for table ${msg.table}:`, msg);
+              this.dispatchLocalEvent(msg.table, {
+                eventType: msg.eventType || 'UPDATE',
+                new: msg.data,
+                old: msg.data,
+                fromTabBroadcast: true
+              });
+            }
+          };
+        }
+      } catch (e) {
+        console.warn('[REALTIME MANAGER] BroadcastChannel initialization notice:', e);
+      }
+    }
+  }
+
+  public dispatchLocalEvent(tableName: string, payload: any) {
+    this.lastEventTime = new Date().toLocaleTimeString();
+    this.recentEvents.unshift({
+      timestamp: new Date().toLocaleTimeString(),
+      table: tableName,
+      eventType: payload?.eventType || 'UPDATE',
+      id: payload?.new?.id || payload?.old?.id || '-'
+    });
+    if (this.recentEvents.length > 50) this.recentEvents.pop();
+
+    const tableListeners = this.listeners.get(tableName);
+    if (tableListeners) {
+      tableListeners.forEach((cb) => {
+        try { cb(payload); } catch (e) { console.error('[REALTIME MANAGER] Listener callback error:', e); }
+      });
+    }
+  }
+
+  public broadcastMutation(tableName: string, eventType: 'INSERT' | 'UPDATE' | 'DELETE' = 'UPDATE', data?: any) {
+    console.log(`[REALTIME MANAGER] Proactively broadcasting mutation for table '${tableName}' (${eventType})`);
+    
+    // 1. Immediately trigger all local listeners in this tab
+    this.dispatchLocalEvent(tableName, { eventType, new: data, old: data });
+
+    // 2. Broadcast to other open tabs on this browser instance (0ms latency)
+    if (this.tabBroadcastChannel) {
+      try {
+        this.tabBroadcastChannel.postMessage({
+          table: tableName,
+          eventType,
+          data,
+          sourceTabId: this.tabId
+        });
+      } catch (e) {
+        console.warn('[REALTIME MANAGER] Inter-tab broadcast failed:', e);
+      }
+    }
+
+    // 3. Broadcast across internet to other remote clients via Supabase Realtime WebSocket
+    if (this.globalChannel && this.connectionStatus === 'CONNECTED') {
+      try {
+        this.globalChannel.send({
+          type: 'broadcast',
+          event: 'db_mutation',
+          payload: {
+            table: tableName,
+            eventType,
+            data,
+            sourceTabId: this.tabId
+          }
+        });
+      } catch (e) {
+        console.warn('[REALTIME MANAGER] WebSocket remote broadcast failed:', e);
+      }
     }
   }
 
@@ -163,25 +292,20 @@ class SupabaseRealtimeManager {
       this.globalChannel = channel
         .on('postgres_changes', { event: '*', schema: 'public' }, (payload: any) => {
           console.log('[REALTIME MANAGER] Realtime change event received:', payload);
-          
-          this.lastEventTime = new Date().toLocaleTimeString();
-          this.recentEvents.unshift({
-            timestamp: new Date().toLocaleTimeString(),
-            table: payload?.table || 'unknown',
-            eventType: payload?.eventType || 'UNKNOWN',
-            id: payload?.new?.id || payload?.old?.id || '-'
-          });
-          if (this.recentEvents.length > 50) this.recentEvents.pop();
-
-          this.triggerLog('DEBUG', `Database mutation in table ${payload?.table || 'unknown'}: ${payload?.eventType || 'UNKNOWN'}`);
-
           if (payload && payload.table) {
-            const tableListeners = this.listeners.get(payload.table);
-            if (tableListeners) {
-              tableListeners.forEach((cb) => {
-                try { cb(payload); } catch (e) { console.error('[REALTIME MANAGER] Listener callback error:', e); }
-              });
-            }
+            this.dispatchLocalEvent(payload.table, payload);
+          }
+        })
+        .on('broadcast', { event: 'db_mutation' }, (payload: any) => {
+          console.log('[REALTIME MANAGER] Realtime remote broadcast received:', payload);
+          const msg = payload?.payload || payload;
+          if (msg && msg.table && msg.sourceTabId !== this.tabId) {
+            this.dispatchLocalEvent(msg.table, {
+              eventType: msg.eventType || 'UPDATE',
+              new: msg.data,
+              old: msg.data,
+              fromRealtimeBroadcast: true
+            });
           }
         })
         .subscribe((status: string, err?: any) => {
@@ -351,6 +475,14 @@ class SupabaseRealtimeManager {
 
 export const realtimeManager = new SupabaseRealtimeManager();
 
+export function notifyRealtimeMutation(table: string, eventType: 'INSERT' | 'UPDATE' | 'DELETE' = 'UPDATE', data?: any) {
+  try {
+    realtimeManager.broadcastMutation(table, eventType, data);
+  } catch (e) {
+    console.warn('[RealtimeMutation] Broadcast failed:', e);
+  }
+}
+
 export function initializeSupabaseRealtime() {
   realtimeManager.init(supabase, isSupabaseConfigured);
 }
@@ -408,9 +540,10 @@ const tableSchemas: Record<string, string[]> = {
     'discount_percent', 'discount_until', 'is_daily_enabled', 'daily_price', 'created_at'
   ],
   tenants: [
-    'id', 'user_id', 'full_name', 'phone', 'email', 'job', 'avatar_initials',
+    'id', 'user_id', 'full_name', 'phone', 'email', 'job', 'nik', 'avatar_initials',
     'avatar_color', 'property_id', 'room_number', 'start_date', 'duration_months',
-    'payment_status', 'emergency_contact', 'created_at', 'status'
+    'payment_status', 'emergency_contact', 'created_at', 'status',
+    'is_married', 'marriage_certificate_url', 'spouse_name', 'spouse_nik', 'spouse_phone', 'spouse_relation'
   ],
   bookings: [
     'id', 'tenant_name', 'phone', 'email', 'property_id', 'room_number', 'duration_months',
@@ -420,7 +553,8 @@ const tableSchemas: Record<string, string[]> = {
     'dp_amount', 'coupon_code', 'discount_amount', 'is_for_other', 'occupant_name',
     'occupant_phone', 'occupant_email', 'occupant_nik', 'occupant_ktp_image',
     'is_occupant_verified', 'occupant_arrival_status', 'signature_url',
-    'hold_expires_at', 'owner_signature_url', 'owner_signed_at', 'owner_signer_name', 'owner_notes', 'created_at'
+    'hold_expires_at', 'owner_signature_url', 'owner_signed_at', 'owner_signer_name', 'owner_notes', 'created_at',
+    'is_married', 'marriage_certificate_url', 'spouse_name', 'spouse_nik', 'spouse_phone', 'spouse_relation'
   ],
   payments: [
     'id', 'tenant_name', 'property_id', 'amount', 'method', 'status', 'payment_date',
@@ -488,39 +622,179 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
     let result: any;
     if (id !== undefined && id !== null) {
       result = await supabase.from(table).update(activePayload).eq('id', id).select();
-      if (result.error && result.error.message?.includes('Could not find the')) {
+      let updateRetries = 0;
+      while (result.error && result.error.message?.includes('Could not find the') && updateRetries < 10) {
         const match = result.error.message.match(/Could not find the '([^']+)' column/);
         if (match && match[1]) {
           const badCol = match[1];
           console.warn(`[SUPABASE SHIELD] Column '${badCol}' missing in remote '${table}' table. Stripping and retrying update...`);
           delete activePayload[badCol];
           result = await supabase.from(table).update(activePayload).eq('id', id).select();
+          updateRetries++;
+        } else {
+          break;
         }
       }
       if (!result.data || result.data.length === 0) {
         // Fallback: if update affected 0 rows, the row with this ID doesn't exist yet (e.g. settings ID 1). Insert it.
         result = await supabase.from(table).insert({ ...activePayload, id }).select();
-        if (result.error && result.error.message?.includes('Could not find the')) {
+        let fallbackInsertRetries = 0;
+        while (result.error && result.error.message?.includes('Could not find the') && fallbackInsertRetries < 10) {
           const match = result.error.message.match(/Could not find the '([^']+)' column/);
           if (match && match[1]) {
             const badCol = match[1];
             console.warn(`[SUPABASE SHIELD] Column '${badCol}' missing in remote '${table}' table. Stripping and retrying insert...`);
             delete activePayload[badCol];
             result = await supabase.from(table).insert({ ...activePayload, id }).select();
+            fallbackInsertRetries++;
+          } else {
+            break;
           }
         }
+      }
+      // If RLS blocked client-side anon update on admin tables, proxy through secure server admin endpoint
+      if (result.error && (result.error.code === '42501' || result.error.message?.includes('row-level security'))) {
+        if (table === 'rooms') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/rooms/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('rooms', id ? 'UPDATE' : 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for rooms update:', serverErr);
+          }
+        } else if (table === 'properties') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/properties/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('properties', id ? 'UPDATE' : 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for properties update:', serverErr);
+          }
+        } else if (table === 'settings') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/settings/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('settings', id ? 'UPDATE' : 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for settings update:', serverErr);
+          }
+        }
+      }
+      if (result && !result.error && result.data && result.data.length > 0) {
+        notifyRealtimeMutation(table, 'UPDATE', result.data[0]);
       }
       return result;
     } else {
       result = await supabase.from(table).insert(activePayload).select();
-      if (result.error && result.error.message?.includes('Could not find the')) {
+      let insertRetries = 0;
+      while (result.error && result.error.message?.includes('Could not find the') && insertRetries < 10) {
         const match = result.error.message.match(/Could not find the '([^']+)' column/);
         if (match && match[1]) {
           const badCol = match[1];
           console.warn(`[SUPABASE SHIELD] Column '${badCol}' missing in remote '${table}' table. Stripping and retrying insert...`);
           delete activePayload[badCol];
           result = await supabase.from(table).insert(activePayload).select();
+          insertRetries++;
+        } else {
+          break;
         }
+      }
+      // If RLS blocked client-side anon insert/update on admin tables, proxy through secure server admin endpoint
+      if (result.error && (result.error.code === '42501' || result.error.message?.includes('row-level security'))) {
+        if (table === 'rooms') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/rooms/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('rooms', 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for rooms:', serverErr);
+          }
+        } else if (table === 'properties') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/properties/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('properties', 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for properties:', serverErr);
+          }
+        } else if (table === 'settings') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/settings/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('settings', 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for settings:', serverErr);
+          }
+        }
+      }
+      if (result && !result.error && result.data && result.data.length > 0) {
+        notifyRealtimeMutation(table, 'INSERT', result.data[0]);
       }
       return result;
     }
@@ -531,8 +805,14 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
 }
 
 function logSupabaseError(context: string, error: any, isException = false) {
-  if (error && (error.code === 'PGRST205' || error.message?.includes('Could not find the table') || error.message?.includes('schema cache'))) {
-    console.warn(`[SUPABASE NOTICE] [${context}] Table or endpoint not provisioned in remote schema cache:`, error.message || error);
+  if (error && (
+    error.code === 'PGRST205' || 
+    error.code === '42501' || 
+    error.message?.includes('Could not find the table') || 
+    error.message?.includes('schema cache') ||
+    error.message?.includes('permission denied for table')
+  )) {
+    console.warn(`[SUPABASE NOTICE] [${context}] Table or endpoint permission restricted:`, error.message || error);
     return;
   }
   console.error(`[SUPABASE ERROR] [${context}]`, error);
@@ -625,6 +905,35 @@ export const database = {
   async saveProperty(prop: Partial<Property> & { facilities?: Facility[] | number[] | any[] }): Promise<Property> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      // Primary Route: Use the secure server-side endpoint with Service Role Key
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch('/api/admin/properties/save', {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify(prop)
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.data) {
+            return json.data as Property;
+          }
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          if (res.status === 400 || res.status === 403) {
+            throw new Error(errJson.error || `Gagal menyimpan properti: Status ${res.status}`);
+          }
+          console.warn('[saveProperty] Server API returned non-200, attempting client fallback:', res.status, errJson);
+        }
+      } catch (apiErr: any) {
+        if (apiErr.message && !apiErr.message.includes('attempting client fallback') && !apiErr.message.includes('fetch')) {
+          throw apiErr;
+        }
+        console.warn('[saveProperty] Server endpoint unreachable, falling back to direct safeSupabaseUpsert:', apiErr.message);
+      }
+
+      // Secondary Route: Client fallback
       const id = prop.id;
       const payload = { ...prop };
       
@@ -714,12 +1023,35 @@ export const database = {
   async deleteProperty(id: number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      // Primary: Secure server-side endpoint
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`/api/admin/properties/${id}`, {
+          method: 'DELETE',
+          headers,
+          credentials: 'include'
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success) return true;
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          if (res.status === 403 || res.status === 400 || res.status === 401) {
+            throw new Error(errJson.error || `Gagal menghapus properti: Status ${res.status}`);
+          }
+        }
+      } catch (apiErr: any) {
+        if (apiErr.message && !apiErr.message.includes('fetch')) throw apiErr;
+      }
+
+      // Secondary: Client fallback
       const { error } = await supabase.from('properties').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteProperty', error);
         throw new Error(`Gagal menghapus properti: ${error.message}`);
       }
       await this.logActivity("System", "DELETE_PROPERTY", `Menghapus properti ID: ${id}`);
+      notifyRealtimeMutation('properties', 'DELETE', { id });
       return true;
     } catch (err: any) {
       console.error('deleteProperty failed:', err);
@@ -974,7 +1306,97 @@ export const database = {
 
   async saveRoom(room: Partial<Room> & { facilities?: Facility[] | number[] | any[] }): Promise<Room> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+
+    // 0. Status-Only Shortcut: If only changing status/tenant_name (e.g. from customer booking flow or occupant arrival),
+    // route directly to the secure /api/rooms/lock endpoint which bypasses RLS and does not require admin authentication.
+    const isStatusOnly = Boolean(
+      room.id &&
+      room.status &&
+      !room.price &&
+      !room.room_type &&
+      !room.floor &&
+      !room.size_sqm &&
+      (!room.facilities || room.facilities.length === 0)
+    );
+
+    if (isStatusOnly && room.id) {
+      try {
+        const lockRes = await fetch('/api/rooms/lock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            room_id: room.id,
+            status: room.status,
+            tenant_name: room.current_tenant_name || null
+          })
+        });
+        if (lockRes.ok) {
+          const lockJson = await lockRes.json();
+          if (lockJson.success && lockJson.room) {
+            notifyRealtimeMutation('rooms', 'UPDATE', lockJson.room);
+            return lockJson.room as Room;
+          }
+        }
+      } catch (lockErr) {
+        console.warn('[saveRoom] Status lock endpoint notice:', lockErr);
+      }
+    }
+
     try {
+      // Primary Route: Use the secure server-side endpoint with Service Role Key (bypasses RLS)
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch('/api/admin/rooms/save', {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify(room)
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.data) {
+            return json.data as Room;
+          }
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          // Only throw if 400 (bad user payload) or 403 (explicit permission denied by property access)
+          if (res.status === 400 || res.status === 403) {
+            throw new Error(errJson.error || `Gagal menyimpan kamar: Status ${res.status}`);
+          }
+          console.warn('[saveRoom] Server API returned non-200 status, attempting client fallback:', res.status, errJson);
+        }
+      } catch (apiErr: any) {
+        if (apiErr.message && !apiErr.message.includes('attempting client fallback') && !apiErr.message.includes('fetch') && !apiErr.message.includes('Status 401') && !apiErr.message.includes('Akses ditolak')) {
+          throw apiErr;
+        }
+        console.warn('[saveRoom] Server endpoint unreachable or unauthenticated, falling back to direct safeSupabaseUpsert:', apiErr.message);
+      }
+
+      // If room status update and server admin API was 401, also attempt /api/rooms/lock before client upsert
+      if (room.id && room.status) {
+        try {
+          const lockRes = await fetch('/api/rooms/lock', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              room_id: room.id,
+              status: room.status,
+              tenant_name: room.current_tenant_name || null
+            })
+          });
+          if (lockRes.ok) {
+            const lockJson = await lockRes.json();
+            if (lockJson.success && lockJson.room) {
+              notifyRealtimeMutation('rooms', 'UPDATE', lockJson.room);
+              return lockJson.room as Room;
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Secondary Route: Fallback to direct client upsert
       const id = room.id;
       const payload = { ...room };
       
@@ -1050,6 +1472,28 @@ export const database = {
   async deleteRoom(id: number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      // Primary: Secure server-side endpoint
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`/api/admin/rooms/${id}`, {
+          method: 'DELETE',
+          headers,
+          credentials: 'include'
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success) return true;
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          if (res.status === 403 || res.status === 400 || res.status === 401) {
+            throw new Error(errJson.error || `Gagal menghapus kamar: Status ${res.status}`);
+          }
+        }
+      } catch (apiErr: any) {
+        if (apiErr.message && !apiErr.message.includes('fetch')) throw apiErr;
+      }
+
+      // Secondary: Client fallback
       const { data: targeted } = await supabase.from('rooms').select('property_id').eq('id', id).maybeSingle();
       const { error } = await supabase.from('rooms').delete().eq('id', id);
       if (error) {
@@ -1060,6 +1504,7 @@ export const database = {
         await this.syncPropertyRoomCount(targeted.property_id);
       }
       await this.logActivity("System", "DELETE_ROOM", `Menghapus unit ID: ${id}`);
+      notifyRealtimeMutation('rooms', 'DELETE', { id });
       return true;
     } catch (err: any) {
       console.error('deleteRoom failed:', err);
@@ -1234,37 +1679,74 @@ export const database = {
   },
 
   // Otomatisasi Pelepasan Kamar (Auto-Release Expired Leases):
-  // Jika durasi sewa sudah 0 dan telah melewati batas toleransi 24 jam, kamar otomatis menjadi available
-  // dan dapat dibooking kembali oleh end user lain.
+  // Memastikan data kamar yang tersedia di tampilan end-user sinkron dengan Supabase.
+  // Setiap kamar yang sudah habis kontrak tanpa ada perpanjangan kontrak otomatis berstatus available.
   async autoReleaseExpiredLeases(): Promise<{ releasedRooms: number; checkedOutTenants: number }> {
+    // 1. Coba panggil endpoint server-side backend yang memiliki service-role permissions
+    try {
+      const resp = await fetch('/api/system/sync-expired-leases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success) {
+          return {
+            releasedRooms: json.releasedRooms ?? 0,
+            checkedOutTenants: json.checkedOutTenants ?? 0
+          };
+        }
+      }
+    } catch (apiErr) {
+      // Fallback ke direct client Supabase jika API route offline
+    }
+
     if (!isSupabaseConfigured) return { releasedRooms: 0, checkedOutTenants: 0 };
     try {
       const now = new Date();
       let releasedRoomsCount = 0;
       let checkedOutTenantsCount = 0;
+      const affectedPropertyIds = new Set<number>();
+
+      // Ambil tenants aktif, contract extensions yang sudah paid, dan approved bookings
+      const [
+        { data: activeTenants },
+        paidExtensions,
+        { data: approvedBookings },
+        { data: allRooms }
+      ] = await Promise.all([
+        supabase.from('tenants').select('*').neq('status', 'checkout'),
+        database.fetchContractExtensions({ status: 'paid' }),
+        supabase.from('bookings').select('*').eq('status', 'approved'),
+        supabase.from('rooms').select('*')
+      ]);
 
       // 1. Periksa seluruh penyewa aktif di tabel 'tenants'
-      const { data: activeTenants } = await supabase
-        .from('tenants')
-        .select('*')
-        .neq('status', 'checkout');
-
       if (activeTenants && activeTenants.length > 0) {
         for (const tenant of activeTenants) {
           if (!tenant.start_date) continue;
           const startDate = new Date(tenant.start_date);
           if (isNaN(startDate.getTime())) continue;
 
-          const endDate = new Date(startDate);
-          const months = Math.max(1, tenant.duration_months || 1);
-          endDate.setMonth(endDate.getMonth() + months);
+          // Periksa apakah ada perpanjangan kontrak (contract_extensions)
+          const exts = (paidExtensions || []).filter((e: any) => e.tenant_id === tenant.id);
+          const totalExtMonths = exts.reduce((sum: number, e: any) => sum + (Number(e.extension_months) || 0), 0);
+          const totalMonths = (Number(tenant.duration_months) || 1) + totalExtMonths;
 
-          const diffMs = endDate.getTime() - now.getTime();
-          const diffHours = diffMs / (1000 * 60 * 60);
+          const computedEnd = new Date(startDate);
+          computedEnd.setMonth(computedEnd.getMonth() + totalMonths);
 
-          // Jika durasi sewa sudah habis (0) dan melewati batas 24 jam
-          if (diffHours <= -24) {
-            console.log(`[AUTO-RELEASE] Penyewa ${tenant.full_name} (Kamar ${tenant.room_number}) telah habis masa sewanya (>24 jam). Mengosongkan kamar.`);
+          let finalEndDate = computedEnd;
+          if (tenant.lease_end_date) {
+            const lDate = new Date(tenant.lease_end_date);
+            if (!isNaN(lDate.getTime()) && lDate.getTime() > finalEndDate.getTime()) {
+              finalEndDate = lDate;
+            }
+          }
+
+          // Jika durasi sewa sudah berakhir (now >= finalEndDate) tanpa ada perpanjangan
+          if (now.getTime() >= finalEndDate.getTime()) {
+            console.log(`[AUTO-RELEASE] Penyewa ${tenant.full_name} (Kamar ${tenant.room_number}) telah habis kontrak tanpa perpanjangan. Mengosongkan kamar.`);
             
             // Tandai tenant status menjadi checkout
             await supabase
@@ -1281,6 +1763,7 @@ export const database = {
             
             if (tenant.property_id) {
               roomQuery = roomQuery.eq('property_id', tenant.property_id);
+              affectedPropertyIds.add(tenant.property_id);
             }
             await roomQuery;
             releasedRoomsCount++;
@@ -1297,19 +1780,14 @@ export const database = {
               await this.logActivity(
                 "System", 
                 "AUTO_RELEASE_EXPIRED_LEASE", 
-                `Otomatis mengosongkan Kamar ${tenant.room_number} (${tenant.full_name}) karena masa sewa telah habis dan melewati toleransi 24 jam.`
+                `Otomatis mengosongkan Kamar ${tenant.room_number} (${tenant.full_name}) karena masa sewa telah habis dan tidak ada perpanjangan kontrak.`
               );
             } catch (e) {}
           }
         }
       }
 
-      // 2. Periksa juga booking berstatus 'approved' yang mungkin belum memiliki record di tabel tenant
-      const { data: approvedBookings } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('status', 'approved');
-
+      // 2. Periksa juga booking berstatus 'approved'
       if (approvedBookings && approvedBookings.length > 0) {
         for (const booking of approvedBookings) {
           const startStr = booking.check_in_date || booking.booking_date;
@@ -1325,11 +1803,8 @@ export const database = {
             endDate.setMonth(endDate.getMonth() + months);
           }
 
-          const diffMs = endDate.getTime() - now.getTime();
-          const diffHours = diffMs / (1000 * 60 * 60);
-
-          if (diffHours <= -24) {
-            console.log(`[AUTO-RELEASE] Booking ID ${booking.id} (Kamar ${booking.room_number}) telah kadaluarsa (>24 jam). Mengubah status checkout.`);
+          if (now.getTime() >= endDate.getTime()) {
+            console.log(`[AUTO-RELEASE] Booking ID ${booking.id} (Kamar ${booking.room_number}) telah berakhir. Mengubah status checkout.`);
             await supabase
               .from('bookings')
               .update({ status: 'checkout' })
@@ -1350,8 +1825,51 @@ export const database = {
               }
               await rQuery;
             }
+
+            if (booking.property_id) affectedPropertyIds.add(booking.property_id);
+            releasedRoomsCount++;
           }
         }
+      }
+
+      // 3. Periksa kamar dengan status 'occupied' di database yang tidak memiliki tenant aktif / booking aktif
+      if (allRooms && allRooms.length > 0) {
+        const activeTenantRoomKeys = new Set(
+          (activeTenants || [])
+            .filter((t: any) => t.status !== 'checkout')
+            .map((t: any) => `${t.property_id || ''}_${t.room_number}`)
+        );
+        const activeBookingRoomKeys = new Set(
+          (approvedBookings || [])
+            .filter((b: any) => b.status === 'approved')
+            .map((b: any) => `${b.property_id || ''}_${b.room_number}`)
+        );
+
+        for (const room of allRooms) {
+          if (room.status === 'occupied') {
+            const key = `${room.property_id || ''}_${room.room_number}`;
+            if (!activeTenantRoomKeys.has(key) && !activeBookingRoomKeys.has(key)) {
+              await supabase
+                .from('rooms')
+                .update({ status: 'available', current_tenant_name: null })
+                .eq('id', room.id);
+              releasedRoomsCount++;
+              if (room.property_id) affectedPropertyIds.add(room.property_id);
+            }
+          }
+        }
+      }
+
+      // 4. Sinkronisasi jumlah kamar pada properti yang terpengaruh
+      for (const propId of affectedPropertyIds) {
+        try {
+          const { data: pRooms } = await supabase.from('rooms').select('*').eq('property_id', propId);
+          if (pRooms) {
+            const total = pRooms.length;
+            const avail = pRooms.filter((r: any) => r.status === 'available' || r.status === 'reserved' || !r.status).length;
+            await supabase.from('properties').update({ total_rooms: total, available_rooms: avail }).eq('id', propId);
+          }
+        } catch (syncErr) {}
       }
 
       return { releasedRooms: releasedRoomsCount, checkedOutTenants: checkedOutTenantsCount };
@@ -1530,6 +2048,7 @@ export const database = {
         logSupabaseError('deleteCoupon', error);
         throw new Error(`Gagal menghapus kupon: ${error.message}`);
       }
+      notifyRealtimeMutation('coupons', 'DELETE', { id });
       return true;
     } catch (err: any) {
       console.error('deleteCoupon failed:', err);
@@ -1747,21 +2266,34 @@ export const database = {
         settingsObj.owner_signature_url = DEFAULT_OWNER_SIGNATURE;
       }
 
-      // Dynamically load from facilities table to maintain a single source of truth
-      const { data: facData, error: facError } = await supabase
-        .from('facilities')
-        .select('*')
-        .order('id', { ascending: true });
+      // Check if Admin has configured front-end facilities in settings
+      let hasValidStandard = false;
+      if (settingsObj.standard_facilities) {
+        try {
+          const parsed = JSON.parse(settingsObj.standard_facilities);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            hasValidStandard = true;
+          }
+        } catch (e) {}
+      }
 
-      if (!facError && facData) {
-        const mappedFacilities = facData.map(f => ({
-          id: f.id,
-          icon: f.icon || 'Sparkles',
-          title: f.name,
-          subtitle: f.description || '',
-          category: f.category || 'general'
-        }));
-        settingsObj.standard_facilities = JSON.stringify(mappedFacilities);
+      // If Admin hasn't customized standard_facilities yet, fallback to seed from facilities table
+      if (!hasValidStandard) {
+        const { data: facData, error: facError } = await supabase
+          .from('facilities')
+          .select('*')
+          .order('id', { ascending: true });
+
+        if (!facError && facData && facData.length > 0) {
+          const mappedFacilities = facData.map(f => ({
+            id: f.id,
+            icon: f.icon || 'Sparkles',
+            title: f.name,
+            subtitle: f.description || '',
+            category: f.category || 'general'
+          }));
+          settingsObj.standard_facilities = JSON.stringify(mappedFacilities);
+        }
       }
       return settingsObj;
     } catch (err) {
@@ -1773,12 +2305,40 @@ export const database = {
   async saveSettings(settings: SystemSettings): Promise<SystemSettings> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     
-    // We only save the actual settings columns, ignoring standard_facilities to avoid duplication
+    // Primary: Secure server-side endpoint
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/settings/save', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          booking_rules: settings.booking_rules,
+          survey_rules: settings.survey_rules,
+          why_choose_us: settings.why_choose_us,
+          faqs: settings.faqs,
+          standard_facilities: settings.standard_facilities,
+          owner_signature_url: settings.owner_signature_url || DEFAULT_OWNER_SIGNATURE
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          await this.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey, sewa, why-choose-us, fasilitas beranda, dan FAQ berhasil disimpan.");
+          return { ...settings, ...json.data };
+        }
+      }
+    } catch (apiErr: any) {
+      if (apiErr.message && !apiErr.message.includes('fetch')) throw apiErr;
+    }
+
+    // Secondary: Direct safe Supabase Upsert
     const { error: upsertErr } = await safeSupabaseUpsert('settings', {
       booking_rules: settings.booking_rules,
       survey_rules: settings.survey_rules,
       why_choose_us: settings.why_choose_us,
       faqs: settings.faqs,
+      standard_facilities: settings.standard_facilities,
       owner_signature_url: settings.owner_signature_url || DEFAULT_OWNER_SIGNATURE
     }, 1);
 
@@ -1787,9 +2347,38 @@ export const database = {
       throw new Error(`Gagal menyimpan pengaturan sistem: ${upsertErr.message || JSON.stringify(upsertErr)}`);
     }
 
-    await this.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey, sewa, why-choose-us, dan FAQ berhasil disimpan.");
+    await this.logActivity("System", "UPDATE_SETTINGS", "Perubahan tata tertib survey, sewa, why-choose-us, fasilitas beranda, dan FAQ berhasil disimpan.");
     
     return settings;
+  },
+
+  async saveStandardFacilities(facilities: StandardFacility[]): Promise<boolean> {
+    if (!isSupabaseConfigured) return false;
+    const jsonStr = JSON.stringify(facilities);
+    try {
+      // Primary: Server-side dedicated endpoint
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/settings/facilities', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ standard_facilities: jsonStr })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          await this.logActivity("System", "UPDATE_HOMEPAGE_FACILITIES", `Memperbarui ${facilities.length} fasilitas tampilan beranda.`);
+          return true;
+        }
+      }
+    } catch (apiErr: any) {
+      if (apiErr.message && !apiErr.message.includes('fetch')) throw apiErr;
+    }
+
+    // Secondary: Update through saveSettings
+    const current = await this.fetchSettings();
+    await this.saveSettings({ ...current, standard_facilities: jsonStr });
+    return true;
   },
 
   // --- FACILITIES & ASSIGNMENTS (ID-BASED CRUD) ---
@@ -2131,6 +2720,7 @@ export const database = {
         throw new Error(`Gagal menghapus tenant: ${error.message}`);
       }
       await this.logActivity("System", "DELETE_TENANT", `Menghapus data tenant ID: ${id}`);
+      notifyRealtimeMutation('tenants', 'DELETE', { id });
       return true;
     } catch (err: any) {
       console.error('deleteTenant failed:', err);
@@ -2139,16 +2729,45 @@ export const database = {
   },
 
   // --- CONTRACT EXTENSIONS ---
-  async fetchContractExtensions(options?: { limit?: number; offset?: number }): Promise<ContractExtension[]> {
-    if (!isSupabaseConfigured) return [];
+  async fetchContractExtensions(options?: { limit?: number; offset?: number; status?: string; tenant_id?: string }): Promise<ContractExtension[]> {
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
+    const statusParam = options?.status ? `&status=${encodeURIComponent(options.status)}` : '';
+    const tenantParam = options?.tenant_id ? `&tenant_id=${encodeURIComponent(options.tenant_id)}` : '';
+
+    // 1. Prioritize Server-Side API endpoint (Bypasses PostgreSQL anon 42501 permission restrictions)
     try {
-      const { data, error } = await supabase
+      const headers = await getAuthHeaders();
+      const resp = await fetch(`/api/contract-extensions?limit=${limit}&offset=${offset}${statusParam}${tenantParam}`, {
+        headers,
+        signal: AbortSignal.timeout(5000)
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success && Array.isArray(json.data)) {
+          return json.data as ContractExtension[];
+        }
+      }
+    } catch (apiErr) {
+      // Fall through to direct Supabase client if server endpoint unavailable
+    }
+
+    if (!isSupabaseConfigured) return [];
+    try {
+      let query = supabase
         .from('contract_extensions')
         .select('*')
         .order('id', { ascending: false })
         .range(offset, offset + limit - 1);
+
+      if (options?.status) {
+        query = query.eq('status', options.status);
+      }
+      if (options?.tenant_id) {
+        query = query.eq('tenant_id', options.tenant_id);
+      }
+
+      const { data, error } = await query;
       if (error) {
         logSupabaseError('fetchContractExtensions', error);
         return [];
@@ -2161,6 +2780,25 @@ export const database = {
   },
 
   async saveContractExtension(ext: Partial<ContractExtension>): Promise<ContractExtension> {
+    // 1. Try server-side endpoint first (Service role avoids permission denied)
+    try {
+      const headers = await getAuthHeaders();
+      const resp = await fetch('/api/contract-extensions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(ext),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success && json.data) {
+          return json.data as ContractExtension;
+        }
+      }
+    } catch (apiErr) {
+      // Fall through to direct client
+    }
+
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = ext.id;
@@ -2225,6 +2863,7 @@ export const database = {
         throw new Error(`Gagal menghapus survey: ${error.message}`);
       }
       await this.logActivity("System", "DELETE_SURVEY", `Menghapus data survey ID: ${id}`);
+      notifyRealtimeMutation('surveys', 'DELETE', { id });
       return true;
     } catch (err: any) {
       console.error('deleteSurvey failed:', err);
@@ -2241,6 +2880,7 @@ export const database = {
         throw new Error(`Gagal menghapus booking: ${error.message}`);
       }
       await this.logActivity("System", "DELETE_BOOKING", `Menghapus data booking ID: ${id}`);
+      notifyRealtimeMutation('bookings', 'DELETE', { id });
       return true;
     } catch (err: any) {
       console.error('deleteBooking failed:', err);

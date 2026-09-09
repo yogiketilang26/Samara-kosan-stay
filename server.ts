@@ -15,6 +15,7 @@ declare global {
   namespace Express {
     interface Request {
       authProfile?: any;
+      authUser?: any;
     }
   }
 }
@@ -619,12 +620,17 @@ async function startServer() {
           accessToken = parts[1];
         }
       }
+      if (!accessToken && req.headers['x-access-token']) {
+        const raw = req.headers['x-access-token'];
+        accessToken = Array.isArray(raw) ? raw[0] : raw;
+      }
 
       if (!accessToken) {
-        const refreshToken = getCookie(req, 'sb-refresh-token');
+        const rawRefresh = req.headers['x-refresh-token'];
+        const refreshToken = getCookie(req, 'sb-refresh-token') || (Array.isArray(rawRefresh) ? rawRefresh[0] : rawRefresh);
         if (refreshToken) {
           const freshClient = getSupabaseServerClient();
-          const { data, error } = await freshClient.auth.refreshSession({ refresh_token: refreshToken });
+          const { data, error } = await freshClient.auth.refreshSession({ refresh_token: String(refreshToken) });
           if (!error && data.session) {
             accessToken = data.session.access_token;
             setAuthCookies(res, data.session.access_token, data.session.refresh_token, data.session.expires_in);
@@ -637,10 +643,24 @@ async function startServer() {
       }
 
       const client = getSupabaseServerClient(accessToken);
-      const { data: { user }, error } = await client.auth.getUser(accessToken);
+      let { data: { user }, error } = await client.auth.getUser(accessToken);
 
+      // If token expired, try refreshing
       if (error || !user) {
-        return res.status(401).json({ success: false, error: 'Sesi tidak valid atau telah kadaluarsa.' });
+        const refreshToken = getCookie(req, 'sb-refresh-token') || req.headers['x-refresh-token'];
+        if (refreshToken) {
+          const freshClient = getSupabaseServerClient();
+          const { data: refData, error: refErr } = await freshClient.auth.refreshSession({ refresh_token: String(refreshToken) });
+          if (!refErr && refData.session?.user) {
+            user = refData.session.user;
+            accessToken = refData.session.access_token;
+            setAuthCookies(res, refData.session.access_token, refData.session.refresh_token, refData.session.expires_in);
+          } else {
+            return res.status(401).json({ success: false, error: 'Sesi tidak valid atau telah kadaluarsa.' });
+          }
+        } else {
+          return res.status(401).json({ success: false, error: 'Sesi tidak valid atau telah kadaluarsa.' });
+        }
       }
 
       let profileRole: string | null = null;
@@ -654,7 +674,9 @@ async function startServer() {
       }
 
       const userData = await getOrMigrateUserProfile(client, user);
-      const effectiveRole = profileRole || userData?.role || 'user';
+      const isSuper = isSuperAdminEmail(user.email || '');
+      const isOwner = isOwnerEmail(user.email || '');
+      const effectiveRole = profileRole || userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
       const isAuthorized = ['admin', 'super', 'super_admin', 'finance', 'staff', 'owner'].includes(effectiveRole);
 
       if (!isAuthorized) {
@@ -1410,6 +1432,624 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // ADMIN API: SECURE ROOMS & PROPERTIES MANAGEMENT (SERVICE ROLE BYPASS RLS)
+  // =========================================================================
+
+  // POST /api/admin/rooms/save
+  app.post('/api/admin/rooms/save', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const { property_id, room_number } = payload;
+
+      if (!property_id || !room_number) {
+        return res.status(400).json({ success: false, error: 'property_id dan room_number wajib diisi.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Verify authorization for target property
+      const propAccess = checkPropertyAccess(req.authProfile, property_id);
+      if (!propAccess.allowed) {
+        return res.status(403).json({ success: false, error: propAccess.reason || 'Akses ditolak ke properti ini.' });
+      }
+
+      const rawId = payload.id;
+      const roomId = rawId ? Number(rawId) : null;
+      const facilitiesToSync = payload.facilities;
+
+      // Extract only valid columns for 'rooms' table
+      const allowedCols = [
+        'property_id', 'room_number', 'room_type', 'price', 'size_sqm', 'floor',
+        'status', 'current_tenant_name', 'image_url', 'images', 'discount_percent',
+        'discount_until', 'is_daily_enabled', 'daily_price'
+      ];
+
+      const cleanData: any = {};
+      for (const col of allowedCols) {
+        if (payload[col] !== undefined) {
+          cleanData[col] = payload[col];
+        }
+      }
+
+      // Enforce room_type check constraint in remote DB ('Standard', 'Deluxe', 'Premium')
+      const allowedRoomTypes = ['Standard', 'Deluxe', 'Premium'];
+      if (cleanData.room_type && !allowedRoomTypes.includes(cleanData.room_type)) {
+        cleanData.room_type = 'Premium';
+      }
+
+      // Ensure proper numeric types
+      if (cleanData.property_id !== undefined) cleanData.property_id = Number(cleanData.property_id);
+      if (cleanData.price !== undefined) cleanData.price = Number(cleanData.price);
+      if (cleanData.size_sqm !== undefined) cleanData.size_sqm = Number(cleanData.size_sqm);
+      if (cleanData.floor !== undefined) cleanData.floor = Number(cleanData.floor);
+      if (cleanData.daily_price !== undefined) cleanData.daily_price = Number(cleanData.daily_price);
+      if (cleanData.discount_percent !== undefined && cleanData.discount_percent !== null) {
+        cleanData.discount_percent = Number(cleanData.discount_percent);
+      }
+
+      let savedRoomId: number;
+      let isUpdate = false;
+
+      if (roomId) {
+        isUpdate = true;
+        // Check existence
+        const { data: existingRoom, error: checkErr } = await supabaseAdmin
+          .from('rooms')
+          .select('id, property_id')
+          .eq('id', roomId)
+          .maybeSingle();
+
+        if (checkErr || !existingRoom) {
+          return res.status(404).json({ success: false, error: 'Kamar tidak ditemukan di database.' });
+        }
+
+        // Also verify existing room property access if property changed
+        const existingPropAccess = checkPropertyAccess(req.authProfile, existingRoom.property_id);
+        if (!existingPropAccess.allowed) {
+          return res.status(403).json({ success: false, error: existingPropAccess.reason || 'Akses ditolak.' });
+        }
+
+        const { data: updated, error: updateErr } = await supabaseAdmin
+          .from('rooms')
+          .update(cleanData)
+          .eq('id', roomId)
+          .select()
+          .single();
+
+        if (updateErr) {
+          console.error('[Admin API saveRoom update error]:', updateErr);
+          return res.status(400).json({ success: false, error: `Gagal memperbarui kamar: ${updateErr.message}` });
+        }
+        savedRoomId = updated.id;
+      } else {
+        const { data: inserted, error: insertErr } = await supabaseAdmin
+          .from('rooms')
+          .insert(cleanData)
+          .select()
+          .single();
+
+        if (insertErr) {
+          console.error('[Admin API saveRoom insert error]:', insertErr);
+          return res.status(400).json({ success: false, error: `Gagal menambahkan kamar: ${insertErr.message}` });
+        }
+        savedRoomId = inserted.id;
+      }
+
+      // Synchronize room_facilities join table
+      if (facilitiesToSync !== undefined && Array.isArray(facilitiesToSync)) {
+        const targetFacilityIds: number[] = [];
+        for (const item of facilitiesToSync) {
+          if (typeof item === 'number') {
+            targetFacilityIds.push(item);
+          } else if (item && typeof item === 'object') {
+            const fid = item.id || item.facility_id;
+            if (fid) targetFacilityIds.push(Number(fid));
+          }
+        }
+
+        const { data: currentAssociations } = await supabaseAdmin
+          .from('room_facilities')
+          .select('facility_id')
+          .eq('room_id', savedRoomId);
+
+        const currentFacilityIds = (currentAssociations || []).map((a: any) => Number(a.facility_id));
+        const toDelete = currentFacilityIds.filter(fid => !targetFacilityIds.includes(fid));
+        const toInsert = targetFacilityIds.filter(fid => !currentFacilityIds.includes(fid));
+
+        if (toDelete.length > 0) {
+          await supabaseAdmin
+            .from('room_facilities')
+            .delete()
+            .eq('room_id', savedRoomId)
+            .in('facility_id', toDelete);
+        }
+
+        if (toInsert.length > 0) {
+          const insertPayloads = toInsert.map(fid => ({
+            room_id: savedRoomId,
+            facility_id: fid
+          }));
+          await supabaseAdmin
+            .from('room_facilities')
+            .insert(insertPayloads);
+        }
+      }
+
+      // Recalculate property room counts atomically
+      try {
+        const targetPropId = Number(cleanData.property_id || property_id);
+        const { data: propRooms } = await supabaseAdmin
+          .from('rooms')
+          .select('id, status')
+          .eq('property_id', targetPropId);
+
+        const totalRooms = propRooms ? propRooms.length : 0;
+        const availableRooms = propRooms ? propRooms.filter((r: any) => r.status === 'available' || r.status === 'reserved' || !r.status).length : 0;
+
+        await supabaseAdmin
+          .from('properties')
+          .update({ total_rooms: totalRooms, available_rooms: availableRooms })
+          .eq('id', targetPropId);
+      } catch (countErr) {
+        console.warn('[Admin API saveRoom] Property count sync notice:', countErr);
+      }
+
+      // Fetch final populated room
+      const { data: finalRoomData } = await supabaseAdmin
+        .from('rooms')
+        .select(`
+          *,
+          room_facilities (
+            facility_id,
+            facilities (
+              id,
+              name,
+              icon,
+              category,
+              description
+            )
+          )
+        `)
+        .eq('id', savedRoomId)
+        .maybeSingle();
+
+      let finalRoom = finalRoomData;
+      if (finalRoom) {
+        const resolvedFacilities = (finalRoom.room_facilities || [])
+          .map((rf: any) => rf?.facilities)
+          .filter(Boolean);
+        finalRoom = {
+          ...finalRoom,
+          facilities: resolvedFacilities
+        };
+        delete finalRoom.room_facilities;
+      }
+
+      // Log activity
+      try {
+        await supabaseAdmin.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authUser?.email || 'Admin',
+          action: isUpdate ? 'UPDATE_ROOM' : 'CREATE_ROOM',
+          detail: `Unit ${cleanData.room_number || ''} disimpan oleh ${req.authProfile?.full_name || 'Admin'}`,
+          ip_address: '127.0.0.1'
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({
+        success: true,
+        data: finalRoom,
+        message: 'Kamar berhasil disimpan.'
+      });
+    } catch (err: any) {
+      console.error('[Admin API /api/admin/rooms/save] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan pada server saat menyimpan kamar.' });
+    }
+  });
+
+  // DELETE /api/admin/rooms/:id
+  app.delete('/api/admin/rooms/:id', requireAdminAuth, async (req, res) => {
+    try {
+      const roomId = Number(req.params.id);
+      if (!roomId || isNaN(roomId)) {
+        return res.status(400).json({ success: false, error: 'ID kamar tidak valid.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Verify existence and authorization
+      const { data: targetRoom, error: fetchErr } = await supabaseAdmin
+        .from('rooms')
+        .select('*')
+        .eq('id', roomId)
+        .maybeSingle();
+
+      if (fetchErr || !targetRoom) {
+        return res.status(404).json({ success: false, error: 'Kamar tidak ditemukan.' });
+      }
+
+      const propAccess = checkPropertyAccess(req.authProfile, targetRoom.property_id);
+      if (!propAccess.allowed) {
+        return res.status(403).json({ success: false, error: propAccess.reason || 'Akses ditolak ke properti ini.' });
+      }
+
+      // Delete join table records
+      await supabaseAdmin.from('room_facilities').delete().eq('room_id', roomId);
+
+      // Delete room record
+      const { error: delErr } = await supabaseAdmin.from('rooms').delete().eq('id', roomId);
+      if (delErr) {
+        return res.status(400).json({ success: false, error: `Gagal menghapus kamar: ${delErr.message}` });
+      }
+
+      // Sync property room count
+      try {
+        const { data: propRooms } = await supabaseAdmin
+          .from('rooms')
+          .select('id, status')
+          .eq('property_id', targetRoom.property_id);
+
+        const totalRooms = propRooms ? propRooms.length : 0;
+        const availableRooms = propRooms ? propRooms.filter((r: any) => r.status === 'available' || r.status === 'reserved' || !r.status).length : 0;
+
+        await supabaseAdmin
+          .from('properties')
+          .update({ total_rooms: totalRooms, available_rooms: availableRooms })
+          .eq('id', targetRoom.property_id);
+      } catch (countErr) {
+        console.warn('[Admin API deleteRoom] Property count sync notice:', countErr);
+      }
+
+      try {
+        await supabaseAdmin.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authUser?.email || 'Admin',
+          action: 'DELETE_ROOM',
+          detail: `Menghapus unit ID: ${roomId} (Unit ${targetRoom.room_number})`,
+          ip_address: '127.0.0.1'
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({ success: true, message: 'Kamar berhasil dihapus.' });
+    } catch (err: any) {
+      console.error('[Admin API /api/admin/rooms/:id DELETE] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan pada server saat menghapus kamar.' });
+    }
+  });
+
+  // POST /api/admin/properties/save
+  app.post('/api/admin/properties/save', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const { name, address } = payload;
+
+      if (!name || !address) {
+        return res.status(400).json({ success: false, error: 'Nama dan alamat properti wajib diisi.' });
+      }
+
+      const role = (req.authProfile?.role || '').toLowerCase();
+      if (!['super', 'super_admin', 'owner', 'admin'].includes(role)) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya Administrator atau Owner yang dapat mengelola properti.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const rawId = payload.id;
+      const propId = rawId ? Number(rawId) : null;
+      const facilitiesToSync = payload.facilities;
+
+      const allowedCols = [
+        'name', 'city', 'address', 'lat', 'lng', 'total_rooms', 'available_rooms',
+        'starting_price', 'rating', 'review_count', 'badge', 'image_url', 'images',
+        'is_active', 'manager_name', 'manager_phone', 'description', 'terms', 'regulations',
+        'deposit_amount'
+      ];
+
+      const cleanData: any = {};
+      for (const col of allowedCols) {
+        if (payload[col] !== undefined) {
+          cleanData[col] = payload[col];
+        }
+      }
+
+      if (cleanData.lat !== undefined) cleanData.lat = parseFloat(Number(cleanData.lat).toFixed(6));
+      if (cleanData.lng !== undefined) cleanData.lng = parseFloat(Number(cleanData.lng).toFixed(6));
+
+      if (cleanData.deposit_amount !== undefined && cleanData.deposit_amount !== null) {
+        let termsStr = cleanData.terms || '';
+        if (termsStr.includes('[DEPOSIT:')) {
+          termsStr = termsStr.replace(/\[DEPOSIT:\d+\]/, `[DEPOSIT:${cleanData.deposit_amount}]`);
+        } else {
+          termsStr = termsStr ? `${termsStr}\n[DEPOSIT:${cleanData.deposit_amount}]` : `[DEPOSIT:${cleanData.deposit_amount}]`;
+        }
+        cleanData.terms = termsStr;
+      }
+
+      let savedPropId: number;
+      let isUpdate = false;
+
+      if (propId) {
+        isUpdate = true;
+        const { data: updated, error: updateErr } = await supabaseAdmin
+          .from('properties')
+          .update(cleanData)
+          .eq('id', propId)
+          .select()
+          .single();
+
+        if (updateErr) {
+          return res.status(400).json({ success: false, error: `Gagal memperbarui properti: ${updateErr.message}` });
+        }
+        savedPropId = updated.id;
+      } else {
+        const { data: inserted, error: insertErr } = await supabaseAdmin
+          .from('properties')
+          .insert(cleanData)
+          .select()
+          .single();
+
+        if (insertErr) {
+          return res.status(400).json({ success: false, error: `Gagal menambahkan properti: ${insertErr.message}` });
+        }
+        savedPropId = inserted.id;
+      }
+
+      // Sync property facilities
+      if (facilitiesToSync !== undefined && Array.isArray(facilitiesToSync)) {
+        const targetFacilityIds: number[] = [];
+        for (const item of facilitiesToSync) {
+          if (typeof item === 'number') {
+            targetFacilityIds.push(item);
+          } else if (item && typeof item === 'object') {
+            const fid = item.id || item.facility_id;
+            if (fid) targetFacilityIds.push(Number(fid));
+          }
+        }
+
+        const { data: currentAssoc } = await supabaseAdmin
+          .from('property_facilities')
+          .select('facility_id')
+          .eq('property_id', savedPropId);
+
+        const currentFacilityIds = (currentAssoc || []).map((a: any) => Number(a.facility_id));
+        const toDelete = currentFacilityIds.filter(fid => !targetFacilityIds.includes(fid));
+        const toInsert = targetFacilityIds.filter(fid => !currentFacilityIds.includes(fid));
+
+        if (toDelete.length > 0) {
+          await supabaseAdmin
+            .from('property_facilities')
+            .delete()
+            .eq('property_id', savedPropId)
+            .in('facility_id', toDelete);
+        }
+
+        if (toInsert.length > 0) {
+          await supabaseAdmin
+            .from('property_facilities')
+            .insert(toInsert.map(fid => ({ property_id: savedPropId, facility_id: fid })));
+        }
+      }
+
+      // Fetch updated property
+      const { data: finalProp } = await supabaseAdmin
+        .from('properties')
+        .select(`
+          *,
+          property_facilities (
+            facility_id,
+            facilities (
+              id,
+              name,
+              icon,
+              category,
+              description
+            )
+          )
+        `)
+        .eq('id', savedPropId)
+        .maybeSingle();
+
+      let resultProp = finalProp;
+      if (resultProp) {
+        const resolvedFacilities = (resultProp.property_facilities || [])
+          .map((pf: any) => pf?.facilities)
+          .filter(Boolean);
+        resultProp = { ...resultProp, facilities: resolvedFacilities };
+        delete resultProp.property_facilities;
+      }
+
+      try {
+        await supabaseAdmin.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authUser?.email || 'Admin',
+          action: isUpdate ? 'UPDATE_PROPERTY' : 'CREATE_PROPERTY',
+          detail: `Properti ${cleanData.name || ''} berhasil disimpan.`,
+          ip_address: '127.0.0.1'
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({ success: true, data: resultProp, message: 'Properti berhasil disimpan.' });
+    } catch (err: any) {
+      console.error('[Admin API /api/admin/properties/save] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan pada server saat menyimpan properti.' });
+    }
+  });
+
+  // POST /api/admin/settings/save
+  app.post('/api/admin/settings/save', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const role = (req.authProfile?.role || '').toLowerCase();
+      if (!['super', 'super_admin', 'owner', 'admin'].includes(role)) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya Administrator atau Owner yang dapat mengelola pengaturan sistem.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const updateData: any = {};
+      if (payload.booking_rules !== undefined) updateData.booking_rules = payload.booking_rules;
+      if (payload.survey_rules !== undefined) updateData.survey_rules = payload.survey_rules;
+      if (payload.why_choose_us !== undefined) updateData.why_choose_us = payload.why_choose_us;
+      if (payload.faqs !== undefined) updateData.faqs = payload.faqs;
+      if (payload.owner_signature_url !== undefined) updateData.owner_signature_url = payload.owner_signature_url;
+      if (payload.standard_facilities !== undefined) {
+        updateData.standard_facilities = typeof payload.standard_facilities === 'string'
+          ? payload.standard_facilities
+          : JSON.stringify(payload.standard_facilities);
+      }
+      updateData.updated_at = new Date().toISOString();
+
+      const { data: existing } = await supabaseAdmin.from('settings').select('id').eq('id', 1).maybeSingle();
+      let resultData: any = null;
+      if (existing) {
+        const { data, error } = await supabaseAdmin.from('settings').update(updateData).eq('id', 1).select().single();
+        if (error) throw error;
+        resultData = data;
+      } else {
+        const { data, error } = await supabaseAdmin.from('settings').insert({ id: 1, ...updateData }).select().single();
+        if (error) throw error;
+        resultData = data;
+      }
+
+      try {
+        await supabaseAdmin.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authUser?.email || 'Admin',
+          action: 'UPDATE_SETTINGS',
+          detail: 'Pengaturan sistem & fasilitas beranda diperbarui oleh admin.',
+          ip_address: '127.0.0.1'
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({ success: true, data: resultData, message: 'Pengaturan berhasil disimpan.' });
+    } catch (err: any) {
+      console.error('[Admin API /api/admin/settings/save] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan server saat menyimpan pengaturan.' });
+    }
+  });
+
+  // POST /api/admin/settings/facilities - Dedicated endpoint to update homepage standard facilities
+  app.post('/api/admin/settings/facilities', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const role = (req.authProfile?.role || '').toLowerCase();
+      if (!['super', 'super_admin', 'owner', 'admin'].includes(role)) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya Administrator atau Owner yang dapat mengatur fasilitas beranda.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      let standardFacilitiesStr = '[]';
+      if (typeof payload.standard_facilities === 'string') {
+        standardFacilitiesStr = payload.standard_facilities;
+      } else if (Array.isArray(payload.facilities)) {
+        standardFacilitiesStr = JSON.stringify(payload.facilities);
+      } else if (payload.facilities) {
+        standardFacilitiesStr = JSON.stringify(payload.facilities);
+      }
+
+      const { data: existing } = await supabaseAdmin.from('settings').select('id').eq('id', 1).maybeSingle();
+      if (existing) {
+        const { error } = await supabaseAdmin
+          .from('settings')
+          .update({ standard_facilities: standardFacilitiesStr, updated_at: new Date().toISOString() })
+          .eq('id', 1);
+        if (error) throw error;
+      } else {
+        const { error } = await supabaseAdmin
+          .from('settings')
+          .insert({ id: 1, standard_facilities: standardFacilitiesStr, updated_at: new Date().toISOString() });
+        if (error) throw error;
+      }
+
+      try {
+        await supabaseAdmin.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authUser?.email || 'Admin',
+          action: 'UPDATE_HOMEPAGE_FACILITIES',
+          detail: `Fasilitas beranda diperbarui oleh admin.`,
+          ip_address: '127.0.0.1'
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({ success: true, message: 'Fasilitas tampilan beranda berhasil diperbarui.' });
+    } catch (err: any) {
+      console.error('[Admin API /api/admin/settings/facilities] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan server saat memperbarui fasilitas beranda.' });
+    }
+  });
+
+  // DELETE /api/admin/properties/:id
+  app.delete('/api/admin/properties/:id', requireAdminAuth, async (req, res) => {
+    try {
+      const propId = Number(req.params.id);
+      if (!propId || isNaN(propId)) {
+        return res.status(400).json({ success: false, error: 'ID properti tidak valid.' });
+      }
+
+      const role = (req.authProfile?.role || '').toLowerCase();
+      if (!['super', 'super_admin', 'owner'].includes(role)) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya Super Admin atau Owner yang dapat menghapus properti.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Delete property associations and rooms
+      await supabaseAdmin.from('property_facilities').delete().eq('property_id', propId);
+      const { data: propRooms } = await supabaseAdmin.from('rooms').select('id').eq('property_id', propId);
+      if (propRooms && propRooms.length > 0) {
+        const roomIds = propRooms.map((r: any) => r.id);
+        await supabaseAdmin.from('room_facilities').delete().in('room_id', roomIds);
+        await supabaseAdmin.from('rooms').delete().eq('property_id', propId);
+      }
+
+      const { error: delErr } = await supabaseAdmin.from('properties').delete().eq('id', propId);
+      if (delErr) {
+        return res.status(400).json({ success: false, error: `Gagal menghapus properti: ${delErr.message}` });
+      }
+
+      try {
+        await supabaseAdmin.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authUser?.email || 'Admin',
+          action: 'DELETE_PROPERTY',
+          detail: `Menghapus properti ID: ${propId}`,
+          ip_address: '127.0.0.1'
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({ success: true, message: 'Properti berhasil dihapus.' });
+    } catch (err: any) {
+      console.error('[Admin API /api/admin/properties/:id DELETE] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan pada server saat menghapus properti.' });
+    }
+  });
+
   app.post('/api/midtrans/charge', apiRateLimiter(60000, 30), async (req, res) => {
     try {
       const { order_id, gross_amount, customer_details, item_details } = req.body;
@@ -1560,7 +2200,8 @@ async function startServer() {
       const res = await fetch('https://api.mailersend.com/v1/domains', {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${apiKey}`
+          'Authorization': `Bearer ${apiKey}`,
+          'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
         }
       });
       if (res.status === 200) {
@@ -1610,7 +2251,7 @@ async function startServer() {
     else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
     apiKey = apiKey.trim();
 
-    const rawFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+    const rawFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
     const rawFromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
     const credentialsCheck = {
@@ -1652,7 +2293,8 @@ async function startServer() {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
         }
       });
 
@@ -1706,7 +2348,8 @@ async function startServer() {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
           }
         });
 
@@ -1809,7 +2452,8 @@ async function startServer() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
+            'Authorization': `Bearer ${apiKey}`,
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
           },
           body: JSON.stringify(payload),
           signal: controller.signal
@@ -1874,7 +2518,7 @@ async function startServer() {
           return;
         }
 
-        const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+        const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
         const fromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
         const fromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
@@ -1893,6 +2537,323 @@ async function startServer() {
       }
     });
   }
+
+  
+  // =========================================================================
+  // AUTOMATED ATOMIC SETTLEMENT & ROOM LOCK ENGINE
+  // =========================================================================
+  async function settleBookingTransaction(
+    supabase: any,
+    orderId: string,
+    paymentType: string = 'Midtrans SNAP',
+    transactionId?: string,
+    grossAmount?: number,
+    feeAmount?: number,
+    clientFallbackData?: any
+  ) {
+    console.log(`[SETTLE BOOKING] Executing automated payment settlement for Order: "${orderId}"`);
+    
+    // 1. Fetch booking by midtrans_order_id or fallback
+    let booking: any = null;
+    const { data: bData, error: fetchErr } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('midtrans_order_id', orderId)
+      .maybeSingle();
+
+    if (fetchErr) {
+      console.error('[SETTLE BOOKING ERROR] Fetch booking error:', fetchErr);
+    }
+    booking = bData;
+
+    // Fallback search by id if provided in client data
+    if (!booking && clientFallbackData) {
+      if (clientFallbackData.id) {
+        const { data: bById } = await supabase
+          .from('bookings')
+          .select('*')
+          .eq('id', clientFallbackData.id)
+          .maybeSingle();
+        booking = bById;
+      }
+      if (!booking) {
+        const newBooking = {
+          ...clientFallbackData,
+          status: 'approved',
+          payment_method: paymentType,
+          midtrans_order_id: orderId
+        };
+        delete newBooking.id;
+        const { data: insData, error: insErr } = await supabase
+          .from('bookings')
+          .insert(newBooking)
+          .select()
+          .single();
+        if (!insErr && insData) {
+          booking = insData;
+        }
+      }
+    }
+
+    if (!booking) {
+      throw new Error(`Data pemesanan dengan Order ID "${orderId}" tidak ditemukan.`);
+    }
+
+    const effectiveTenantName = booking.occupant_name || booking.tenant_name || 'Penghuni';
+
+    // 2. Idempotency Check: if already approved, ensure room is occupied and return
+    if (booking.status === 'approved') {
+      console.log(`[SETTLE BOOKING] Booking "${orderId}" is ALREADY approved. Ensuring room is locked.`);
+      if (booking.room_id) {
+        await supabase
+          .from('rooms')
+          .update({ 
+            status: 'occupied', 
+            current_tenant_name: effectiveTenantName 
+          })
+          .eq('id', booking.room_id);
+        await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
+      }
+      return { 
+        success: true, 
+        already_approved: true, 
+        booking,
+        room_locked: true,
+        room_id: booking.room_id 
+      };
+    }
+
+    let invoiceId = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
+    const effectiveTrxId = transactionId || `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    // 3. Attempt atomic settlement via RPC (Migration 017)
+    const { data: rpcRes, error: settleRpcErr } = await supabase.rpc('settle_booking_payment', {
+      p_booking_id: booking.id,
+      p_order_id: orderId,
+      p_payment_type: paymentType || 'Midtrans SNAP',
+      p_transaction_id: effectiveTrxId
+    });
+
+    if (!settleRpcErr && rpcRes && rpcRes.success) {
+      if (rpcRes.invoice_id) {
+        invoiceId = rpcRes.invoice_id;
+      }
+      if (booking.room_id) {
+        await supabase
+          .from('rooms')
+          .update({ status: 'occupied', current_tenant_name: effectiveTenantName })
+          .eq('id', booking.room_id);
+        await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
+      }
+      console.log(`[SETTLE BOOKING] Atomic settlement RPC succeeded for ${orderId}, invoice: ${invoiceId}`);
+    } else {
+      console.warn('[SETTLE BOOKING] Atomic settlement RPC fallback to manual steps:', settleRpcErr?.message || rpcRes?.error);
+      
+      // Update booking to approved
+      await supabase
+        .from('bookings')
+        .update({ 
+          status: 'approved', 
+          payment_method: paymentType || 'Midtrans SNAP',
+          midtrans_order_id: orderId 
+        })
+        .eq('id', booking.id);
+
+      // Lock room to occupied
+      if (booking.room_id) {
+        await supabase
+          .from('rooms')
+          .update({ 
+            status: 'occupied', 
+            current_tenant_name: effectiveTenantName 
+          })
+          .eq('id', booking.room_id);
+        await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
+      }
+
+      // Upsert/insert tenant
+      const initials = effectiveTenantName ? effectiveTenantName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'TM';
+      await supabase.from('tenants').insert({
+        full_name: effectiveTenantName,
+        phone: booking.occupant_phone || booking.phone || '',
+        email: booking.occupant_email || booking.email || '',
+        avatar_initials: initials,
+        avatar_color: "bg-indigo-600",
+        property_id: booking.property_id,
+        room_number: booking.room_number,
+        start_date: booking.check_in_date || new Date().toISOString().split('T')[0],
+        duration_months: booking.duration_months || 1,
+        payment_status: 'paid'
+      });
+
+      // Insert invoice
+      await supabase.from('payments').insert({
+        id: invoiceId,
+        tenant_name: booking.tenant_name,
+        property_id: booking.property_id,
+        amount: booking.total_price || grossAmount || 0,
+        method: paymentType || 'Midtrans SNAP',
+        status: 'paid',
+        payment_date: new Date().toISOString().split('T')[0],
+        midtrans_order_id: orderId,
+        transaction_id: effectiveTrxId
+      });
+    }
+
+    // Refresh booking
+    const { data: refreshedBooking } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('id', booking.id)
+      .single();
+    if (refreshedBooking) {
+      booking = refreshedBooking;
+    }
+
+    // 4. Record Midtrans Gateway Clearing Item
+    try {
+      const feeAmt = Number(feeAmount || 0);
+      const grossAmt = Number(booking.total_price || grossAmount || 0);
+      await supabase.from('midtrans_clearing_transactions').upsert({
+        midtrans_order_id: orderId,
+        midtrans_transaction_id: effectiveTrxId,
+        payment_id: invoiceId,
+        booking_id: booking.id,
+        gross_amount: grossAmt,
+        fee_amount: feeAmt,
+        net_amount: grossAmt - feeAmt,
+        reconciled_amount: 0,
+        outstanding_amount: grossAmt,
+        clearing_status: 'cleared',
+        property_id: booking.property_id || null,
+        tenant_name: booking.tenant_name,
+        settled_at: new Date().toISOString()
+      }, { onConflict: 'midtrans_order_id' });
+    } catch (clrErr) {
+      console.warn('[SETTLE BOOKING] Midtrans clearing insert warning:', clrErr);
+    }
+
+    // 5. Post double-entry financial transaction
+    try {
+      await verifyAndEnsureCriticalCOA(supabase, true);
+      const trxDate = new Date().toISOString().split('T')[0];
+      const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+      const { error: rpcErr } = await supabase.rpc('post_financial_transaction', {
+        p_transaction_no: trxNo,
+        p_transaction_date: trxDate,
+        p_category: 'Penerimaan Sewa',
+        p_description: `[AUTO-LOCK] Pelunasan Sewa ${booking.tenant_name} Unit ${booking.room_number}`,
+        p_amount: booking.total_price || grossAmount || 0,
+        p_type: 'income',
+        p_reference_type: 'payment',
+        p_reference_id: invoiceId,
+        p_created_by: 'Midtrans Auto Settlement',
+        p_debit_account_id: 1200,
+        p_credit_account_id: 4000,
+        p_property_id: booking?.property_id || null
+      });
+
+      if (rpcErr) {
+        console.warn('[SETTLE BOOKING] post_financial_transaction RPC failed, fallback to journal entries:', rpcErr.message);
+        const { data: insertedTrx, error: ftErr } = await supabase.from('financial_transactions').insert({
+          transaction_no: trxNo,
+          transaction_date: trxDate,
+          category: 'Penerimaan Sewa',
+          description: `[AUTO-LOCK] Pelunasan Sewa ${booking.tenant_name} Unit ${booking.room_number}`,
+          amount: Number(booking.total_price || grossAmount || 0),
+          type: 'income',
+          reference_type: 'payment',
+          reference_id: invoiceId,
+          created_by: 'Midtrans Auto Settlement',
+          property_id: booking?.property_id || null
+        }).select().single();
+
+        if (insertedTrx && !ftErr) {
+          const journalNo = `JRN-${trxDate.replace(/-/g, '')}-${insertedTrx.id}`;
+          await supabase.from('journal_entries').insert([
+            {
+              journal_no: journalNo,
+              transaction_id: insertedTrx.id,
+              account_id: 1200,
+              debit: Number(booking.total_price || grossAmount || 0),
+              credit: 0
+            },
+            {
+              journal_no: journalNo,
+              transaction_id: insertedTrx.id,
+              account_id: 4000,
+              debit: 0,
+              credit: Number(booking.total_price || grossAmount || 0)
+            }
+          ]);
+        }
+      }
+    } catch (finErr: any) {
+      console.error('[SETTLE BOOKING] Financial transaction posting warning:', finErr);
+    }
+
+    // 6. Send confirmation email to tenant
+    const recipientEmails = Array.from(new Set([
+      booking.email,
+      booking.occupant_email,
+      clientFallbackData?.email,
+      clientFallbackData?.occupant_email
+    ].map((e: any) => typeof e === 'string' ? e.trim() : '').filter(e => e && e.includes('@'))));
+
+    if (recipientEmails.length > 0) {
+      try {
+        let property = null;
+        if (booking.property_id) {
+          const { data: prop } = await supabase
+            .from('properties')
+            .select('*')
+            .eq('id', booking.property_id)
+            .maybeSingle();
+          property = prop;
+        }
+        const propertyName = property?.name || 'Samara Stay Premium Residence';
+        const propertyAddress = property?.address || 'Premium Boarding Area';
+        const formattedPrice = 'Rp ' + (booking.total_price || grossAmount || 0).toLocaleString('id-ID');
+        const subject = `[Samara Stay] Konfirmasi & Pelunasan Sewa Kamar - Unit ${booking.room_number}`;
+        const text = `Halo ${booking.tenant_name}, pembayaran sewa kamar Anda di ${propertyName} (Unit ${booking.room_number}) telah lunas dan kamar berhasil dikunci!`;
+        const html = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
+            <h2 style="color: #0D9488; margin-top: 0;">Pembayaran Berhasil & Kamar Terkunci</h2>
+            <p>Halo <strong>${booking.tenant_name}</strong>,</p>
+            <p>Terima kasih! Pembayaran pemesanan kamar Anda telah berhasil diverifikasi secara otomatis melalui <strong>${paymentType}</strong>.</p>
+            <div style="background-color: #f8fafc; padding: 15px; border-radius: 12px; margin: 20px 0; border: 1px solid #e2e8f0;">
+              <p style="margin: 5px 0;"><strong>No. Invoice:</strong> ${invoiceId}</p>
+              <p style="margin: 5px 0;"><strong>Order ID:</strong> ${orderId}</p>
+              <p style="margin: 5px 0;"><strong>Properti:</strong> ${propertyName}</p>
+              <p style="margin: 5px 0;"><strong>Unit Kamar:</strong> Kamar ${booking.room_number}</p>
+              <p style="margin: 5px 0;"><strong>Penghuni:</strong> ${effectiveTenantName}</p>
+              <p style="margin: 5px 0;"><strong>Total Pembayaran:</strong> ${formattedPrice}</p>
+              <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #059669; font-weight: bold;">LUNAS (Kamar Terkunci)</span></p>
+            </div>
+            <div style="font-size: 13px; color: #475569; margin: 15px 0; padding: 12px; background-color: #f1f5f9; border-radius: 8px;">
+              <strong>Alamat Properti:</strong> ${propertyAddress}
+            </div>
+            <p style="color: #64748b; font-size: 13px;">Kamar Anda kini telah terkunci aman di sistem kami dan tidak dapat dipesan oleh siapapun. Silakan tunjukkan invoice atau email ini saat check-in fisik di lokasi.</p>
+          </div>
+        `;
+        for (const recipientEmail of recipientEmails) {
+          console.log(`[SETTLE BOOKING] Dispatching confirmation email to recipient: ${recipientEmail}`);
+          sendServerEmail(recipientEmail, subject, text, html);
+        }
+      } catch (emErr) {
+        console.warn('[SETTLE BOOKING] Email send warning:', emErr);
+      }
+    }
+
+    return {
+      success: true,
+      booking,
+      invoice_id: invoiceId,
+      room_locked: true,
+      room_id: booking.room_id
+    };
+  }
+
 
   // 2. Midtrans Webhook Receiver (With Signature Key Verification)
   app.post('/api/midtrans/webhook', async (req, res) => {
@@ -2026,345 +2987,19 @@ async function startServer() {
         if (paymentStatus === 'paid') {
           if (orderId.startsWith('BOOK-') || orderId.startsWith('BOOKING-')) {
             console.log(`[SUPABASE WEBHOOK SYNC] Processing booking payment settlement for ${orderId}`);
-            
-            // 1. Fetch existing pending booking
-            const { data: booking, error: fetchErr } = await supabase
-              .from('bookings')
-              .select('*')
-              .eq('midtrans_order_id', orderId)
-              .maybeSingle();
-
-            if (fetchErr) {
-              console.error('[SUPABASE WEBHOOK ERROR] Fetch booking error:', fetchErr);
+            try {
+              const settleResult = await settleBookingTransaction(
+                supabase,
+                orderId,
+                paymentType || 'Midtrans SNAP',
+                notification.transaction_id,
+                Number(grossAmount || 0),
+                Number(notification.fee_amount || 0)
+              );
+              console.log(`[SUPABASE WEBHOOK SYNC] Settle completed successfully for ${orderId}:`, settleResult?.invoice_id);
+            } catch (settleErr: any) {
+              console.error(`[SUPABASE WEBHOOK ERROR] Settle booking error for ${orderId}:`, settleErr);
             }
-
-            if (booking) {
-              if (booking.status === 'approved') {
-                console.log(`[SUPABASE WEBHOOK SYNC] Webhook received but booking ${orderId} is ALREADY approved. Skipping duplicate processing for idempotency.`);
-                return res.status(200).json({ status: 'OK', message: 'Booking already approved' });
-              }
-              console.log(`[SUPABASE WEBHOOK SYNC] Booking found: ID ${booking.id}, status: ${booking.status}. Executing settlement...`);
-              
-              // 2. Attempt atomic settlement via RPC (Migration 017)
-              let invoiceId = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
-              const { data: rpcRes, error: settleRpcErr } = await supabase.rpc('settle_booking_payment', {
-                p_booking_id: booking.id,
-                p_order_id: orderId,
-                p_payment_type: paymentType || 'Midtrans SNAP',
-                p_transaction_id: notification.transaction_id || `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`
-              });
-
-              if (!settleRpcErr && rpcRes && rpcRes.success) {
-                if (rpcRes.already_approved) {
-                  console.log(`[SUPABASE WEBHOOK SYNC] Booking ${orderId} already approved via RPC.`);
-                  return res.status(200).json({ status: 'OK', message: 'Booking already approved' });
-                }
-                if (rpcRes.invoice_id) {
-                  invoiceId = rpcRes.invoice_id;
-                }
-                if (booking.room_id) {
-                  await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
-                }
-                console.log(`[SUPABASE WEBHOOK SYNC] Atomic settlement RPC succeeded for ${orderId}, invoice: ${invoiceId}`);
-              } else {
-                console.warn('[SUPABASE WEBHOOK WARNING] Atomic settlement RPC fallback to manual steps:', settleRpcErr?.message || rpcRes?.error);
-                // Fallback manual execution if RPC is not available
-                await supabase
-                  .from('bookings')
-                  .update({ status: 'approved', payment_method: paymentType || 'Midtrans SNAP' })
-                  .eq('id', booking.id);
-
-                if (booking.room_id) {
-                  await supabase
-                    .from('rooms')
-                    .update({ status: 'occupied', current_tenant_name: booking.tenant_name })
-                    .eq('id', booking.room_id);
-                  await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
-                }
-
-                const initials = booking.tenant_name ? booking.tenant_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'TM';
-                await supabase.from('tenants').insert({
-                  full_name: booking.tenant_name,
-                  phone: booking.phone,
-                  email: booking.email || '',
-                  avatar_initials: initials,
-                  avatar_color: "bg-indigo-600",
-                  property_id: booking.property_id,
-                  room_number: booking.room_number,
-                  start_date: booking.check_in_date || new Date().toISOString().split('T')[0],
-                  duration_months: booking.duration_months || 1,
-                  payment_status: 'paid'
-                });
-
-                await supabase.from('payments').insert({
-                  id: invoiceId,
-                  tenant_name: booking.tenant_name,
-                  property_id: booking.property_id,
-                  amount: booking.total_price,
-                  method: paymentType || 'Midtrans',
-                  status: 'paid',
-                  payment_date: new Date().toISOString().split('T')[0],
-                  midtrans_order_id: orderId,
-                  transaction_id: notification.transaction_id || `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`
-                });
-              }
-
-              // Record Midtrans Gateway Clearing Item
-              try {
-                const feeAmt = Number(notification.fee_amount || 0);
-                const grossAmt = Number(booking.total_price || notification.gross_amount || 0);
-                await supabase.from('midtrans_clearing_transactions').upsert({
-                  midtrans_order_id: orderId,
-                  midtrans_transaction_id: notification.transaction_id || null,
-                  payment_id: invoiceId,
-                  booking_id: booking.id,
-                  gross_amount: grossAmt,
-                  fee_amount: feeAmt,
-                  net_amount: grossAmt - feeAmt,
-                  reconciled_amount: 0,
-                  outstanding_amount: grossAmt,
-                  clearing_status: 'cleared',
-                  property_id: booking.property_id || null,
-                  tenant_name: booking.tenant_name,
-                  settled_at: new Date().toISOString()
-                }, { onConflict: 'midtrans_order_id' });
-              } catch (clrErr) {
-                console.warn('[SUPABASE WEBHOOK WARNING] Midtrans clearing insert warning:', clrErr);
-              }
-
-              // 6. Post double-entry financial accounting transaction (DR 1200 Midtrans Clearing, CR 4000 Revenue)
-              try {
-                await verifyAndEnsureCriticalCOA(supabase, true);
-                const trxDate = new Date().toISOString().split('T')[0];
-                const trxNo = `TRX-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
-                const { error: rpcErr } = await supabase.rpc('post_financial_transaction', {
-                  p_transaction_no: trxNo,
-                  p_transaction_date: trxDate,
-                  p_category: 'Penerimaan Sewa',
-                  p_description: `[WEBHOOK] Pelunasan Sewa ${booking.tenant_name} Unit ${booking.room_number}`,
-                  p_amount: booking.total_price,
-                  p_type: 'income',
-                  p_reference_type: 'payment',
-                  p_reference_id: invoiceId,
-                  p_created_by: 'Midtrans Webhook',
-                  p_debit_account_id: 1200,
-                  p_credit_account_id: 4000,
-                  p_property_id: booking?.property_id || null
-                });
-
-                if (rpcErr) {
-                  console.warn('[SUPABASE WEBHOOK] post_financial_transaction RPC failed, using double-entry fallback with journal entries:', rpcErr.message);
-                  // Fallback direct insert into financial_transactions and paired journal_entries
-                  const { data: insertedTrx, error: ftErr } = await supabase.from('financial_transactions').insert({
-                    transaction_no: trxNo,
-                    transaction_date: trxDate,
-                    category: 'Penerimaan Sewa',
-                    description: `[WEBHOOK] Pelunasan Sewa ${booking.tenant_name} Unit ${booking.room_number}`,
-                    amount: Number(booking.total_price || 0),
-                    type: 'income',
-                    reference_type: 'payment',
-                    reference_id: invoiceId,
-                    created_by: 'Midtrans Webhook',
-                    property_id: booking?.property_id || null
-                  }).select().single();
-
-                  if (insertedTrx && !ftErr) {
-                    const journalNo = `JRN-${trxDate.replace(/-/g, '')}-${insertedTrx.id}`;
-                    await supabase.from('journal_entries').insert([
-                      {
-                        journal_no: journalNo,
-                        transaction_id: insertedTrx.id,
-                        account_id: 1200,
-                        debit: Number(booking.total_price || 0),
-                        credit: 0
-                      },
-                      {
-                        journal_no: journalNo,
-                        transaction_id: insertedTrx.id,
-                        account_id: 4000,
-                        debit: 0,
-                        credit: Number(booking.total_price || 0)
-                      }
-                    ]);
-                  } else {
-                    // Record in failed_ledger_postings for financial reconciliation audit
-                    await recordFailedLedgerPosting(supabase, {
-                      transaction_no: trxNo,
-                      reference_type: 'payment',
-                      reference_id: invoiceId,
-                      amount: Number(booking.total_price || 0),
-                      debit_account_id: 1200,
-                      credit_account_id: 4000,
-                      property_id: booking?.property_id || null,
-                      created_by: 'Midtrans Webhook',
-                      error_message: ftErr?.message || rpcErr.message
-                    });
-                  }
-                }
-              } catch (finErr: any) {
-                console.error('[SUPABASE WEBHOOK WARNING] Financial transaction recording warning:', finErr);
-                await recordFailedLedgerPosting(supabase, {
-                  reference_type: 'payment',
-                  reference_id: invoiceId,
-                  amount: Number(booking.total_price || 0),
-                  debit_account_id: 1200,
-                  credit_account_id: 4000,
-                  property_id: booking?.property_id || null,
-                  created_by: 'Midtrans Webhook',
-                  error_message: finErr?.message || 'Exception during financial posting'
-                });
-              }
-
-              // Fetch property info for high fidelity invoice details
-              let property = null;
-              if (booking.property_id) {
-                const { data: prop } = await supabase
-                  .from('properties')
-                  .select('*')
-                  .eq('id', booking.property_id)
-                  .maybeSingle();
-                property = prop;
-              }
-              const propertyName = property?.name || 'Samara Stay Premium Residence';
-              const propertyAddress = property?.address || 'Premium Boarding Area';
-              const paymentMethodName = paymentType || 'Midtrans Snap Gateway';
-              const formattedPrice = 'Rp ' + (booking.total_price || 0).toLocaleString('id-ID');
-
-              // Send premium email notification via MailerSend
-              if (booking.email) {
-                const subject = `[Samara Stay] Invoice Pelunasan Sewa Kamar - Unit ${booking.room_number}`;
-                const text = `Halo ${booking.tenant_name}, pemesanan sewa kamar Anda di ${propertyName} (Unit ${booking.room_number}) telah berhasil dikonfirmasi dan dilunasi!`;
-                const html = `
-                  <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
-                    <!-- Brand Header with Logo -->
-                    <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
-                      <!-- Logo SVG (Combination of House Icon + "SAMARA" Wordmark) -->
-                      <svg width="60" height="60" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style="display: block; margin: 0 auto 10px auto;">
-                        <!-- Upper roof chevron (Dark Slate) -->
-                        <path d="M50 22 L14 50 C14 50 39 39 50 39 C61 39 86 50 86 50 L50 22 Z" fill="#334155" />
-                        <!-- Lower arch/pillars (Dark Slate) -->
-                        <path d="M23 54 L23 72 C23 72 32 64 50 54 C68 64 77 72 77 72 L77 54 C77 54 66 46 50 46 C34 46 23 54 23 54 Z" fill="#334155" />
-                      </svg>
-                      <h1 style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 28px; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; color: #1e293b; margin: 10px 0 2px 0;">SAMARA</h1>
-                      <p style="font-family: 'Courier New', Courier, monospace; font-size: 11px; font-weight: bold; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin: 0;">S T A Y</p>
-                    </div>
-
-                    <!-- Receipt Badge & Title -->
-                    <div style="text-align: center; margin-bottom: 30px;">
-                      <span style="background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 6px 16px; border-radius: 9999px; display: inline-block; margin-bottom: 12px;">LUNAS / PAID</span>
-                      <h2 style="color: #1e293b; margin: 0; font-size: 20px; font-weight: 700;">INVOICE PEMBAYARAN</h2>
-                      <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0; font-family: monospace;">No: ${invoiceId}</p>
-                    </div>
-
-                    <!-- Greeting -->
-                    <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
-                      <p>Halo <strong>${booking.tenant_name}</strong>,</p>
-                      <p>Terima kasih atas pembayaran Anda! Transaksi pemesanan kamar sewa Anda telah berhasil diverifikasi oleh sistem kami secara otomatis. Berikut adalah rincian tagihan lunas Anda:</p>
-                    </div>
-
-                    <!-- Detail Table Card -->
-                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 25px 0;">
-                      <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Transaksi Hunian</h3>
-                      
-                      <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
-                        <tr>
-                          <td style="color: #64748b; width: 45%; font-weight: 500;">Nama Kos / Unit:</td>
-                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${propertyName}</td>
-                        </tr>
-                        <tr>
-                          <td style="color: #64748b; font-weight: 500;">Nomor Kamar:</td>
-                          <td style="color: #1e293b; font-weight: 700; text-align: right; font-size: 14px; color: #334155;">Unit ${booking.room_number}</td>
-                        </tr>
-                        <tr>
-                          <td style="color: #64748b; font-weight: 500;">Tipe Kontrak:</td>
-                          <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: capitalize;">${booking.booking_type === 'daily' ? 'Harian (Daily)' : 'Bulanan (Monthly)'}</td>
-                        </tr>
-                        <tr>
-                          <td style="color: #64748b; font-weight: 500;">Tanggal Check-In:</td>
-                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${booking.check_in_date || '-'}</td>
-                        </tr>
-                        ${booking.booking_type === 'monthly' ? `
-                        <tr>
-                          <td style="color: #64748b; font-weight: 500;">Durasi Sewa:</td>
-                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${booking.duration_months} Bulan</td>
-                        </tr>` : `
-                        <tr>
-                          <td style="color: #64748b; font-weight: 500;">Durasi Sewa:</td>
-                          <td style="color: #1e293b; font-weight: 700; text-align: right;">${booking.duration_days || 1} Hari</td>
-                        </tr>`}
-                        <tr>
-                          <td style="color: #64748b; font-weight: 500;">Metode Pembayaran:</td>
-                          <td style="color: #1e293b; font-weight: 700; text-align: right; text-transform: uppercase;">${paymentMethodName}</td>
-                        </tr>
-                        <tr>
-                          <td style="color: #64748b; font-weight: 500; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px;">Total Bayar:</td>
-                          <td style="color: #047857; font-weight: 900; font-size: 18px; border-top: 1px dashed #cbd5e1; padding-top: 12px; margin-top: 8px; text-align: right;">
-                            ${formattedPrice}
-                          </td>
-                        </tr>
-                      </table>
-                    </div>
-
-                    <!-- Location Info -->
-                    <div style="font-size: 13px; line-height: 1.5; color: #475569; margin: 25px 0; padding: 15px; border-left: 4px solid #334155; background-color: #f8fafc; border-radius: 0 12px 12px 0;">
-                      <strong style="color: #1e293b; display: block; margin-bottom: 4px;">Alamat Hunian:</strong>
-                      ${propertyAddress}
-                    </div>
-
-                    <!-- Persetujuan Kebijakan, Peraturan Kos & Tanda Tangan Digital -->
-                    <div style="margin-top: 25px; border-top: 2px dashed #cbd5e1; padding-top: 20px; background-color: #f8fafc; border-radius: 16px; padding: 20px; border: 1px solid #e2e8f0;">
-                      <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">
-                        PERSETUJUAN KEBIJAKAN & PERATURAN KOS (${propertyName})
-                      </h4>
-                      
-                      <div style="font-size: 12px; color: #334155; line-height: 1.6; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; margin-bottom: 15px;">
-                        <strong style="color: #0f172a; display: block; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">1. Kebijakan & Ketentuan Hunian:</strong>
-                        <p style="margin: 0 0 10px 0; white-space: pre-line; font-size: 11px; color: #475569;">${property?.policies || property?.terms || "1. Wajib menyerahkan identitas diri (KTP/SIM) yang sah.\n2. Pembayaran sewa wajib dilunasi sesuai periode kontrak yang dipilih.\n3. Deposit jaminan dikembalikan saat check-out bilamana unit dalam kondisi baik."}</p>
-
-                        <strong style="color: #0f172a; display: block; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">2. Tata Tertib & Peraturan Kos:</strong>
-                        <p style="margin: 0; white-space: pre-line; font-size: 11px; color: #475569;">${property?.regulations || property?.additional_rules || "1. Menjaga ketenangan dan kerapihan fasilitas bersama.\n2. Tamu berkunjung maksimal pukul 22:00 WIB.\n3. Dilarang membawa barang berbahaya, senjata, atau obat terlarang."}</p>
-                      </div>
-
-                      ${booking.signature_url ? `
-                      <div style="background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 15px; text-align: center;">
-                        <p style="font-size: 10px; color: #047857; font-weight: 800; text-transform: uppercase; margin: 0 0 8px 0; letter-spacing: 0.5px;">
-                          ✓ TELAH DISETUJUI & DITANDATANGANI SECARA DIGITAL OLEH PENYEWA
-                        </p>
-                        <img src="${booking.signature_url}" alt="Tanda Tangan Digital ${booking.tenant_name}" style="max-height: 80px; max-width: 240px; display: block; margin: 0 auto 8px auto; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;" />
-                        <p style="margin: 0; font-size: 12px; font-weight: 800; color: #1e293b;">
-                          ${booking.tenant_name} (${booking.phone || '-'})
-                        </p>
-                        <p style="margin: 2px 0 0 0; font-size: 10px; color: #64748b; font-family: monospace;">
-                          Disetujui secara elektronik pada saat proses reservasi
-                        </p>
-                      </div>
-                      ` : ''}
-                    </div>
-
-                    <!-- Next Steps -->
-                    <div style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 25px;">
-                      <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Petunjuk Check-In:</h4>
-                      <ol style="font-size: 13px; color: #475569; padding-left: 20px; line-height: 1.7; margin: 0;">
-                        <li style="margin-bottom: 8px;">Simpan invoice digital ini sebagai bukti pelunasan yang sah saat serah terima unit.</li>
-                        <li style="margin-bottom: 8px;">Akses smart lock (kunci digital pin) atau kunci fisik kamar beserta kartu akses akan diberikan oleh asisten hunian kami saat Anda tiba di lokasi.</li>
-                        <li>Harap membawa kartu identitas diri asli (KTP / Passport) yang sesuai dengan nama penyewa saat check-in.</li>
-                      </ol>
-                    </div>
-
-                    <!-- Footer -->
-                    <div style="text-align: center; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 25px; font-size: 11px; color: #94a3b8; line-height: 1.6;">
-                      <p style="margin: 0; font-weight: 700; color: #64748b;">Layanan Pengelola Samara Stay Premium Boarding</p>
-                      <p style="margin: 4px 0 0 0;">Email: info@samarastay.com | Whatsapp Pengelola Hunian</p>
-                      <p style="margin: 20px 0 0 0; font-size: 10px; color: #cbd5e1;">&copy; 2026 Samara Stay Residence. Hak Cipta Dilindungi Undang-Undang.</p>
-                    </div>
-                  </div>
-                `;
-                sendServerEmail(booking.email, subject, text, html);
-              }
-            } else {
-              console.warn(`[SUPABASE WEBHOOK SYNC] Booking record not found for ${orderId}`);
-            }
-
           } else if (orderId.startsWith('SRV-')) {
             console.log(`[SUPABASE WEBHOOK SYNC] Processing survey payment settlement for ${orderId}`);
             
@@ -2736,6 +3371,391 @@ async function startServer() {
     }
   });
 
+  
+  // =========================================================================
+  // ENDPOINT: DIRECT BOOKING SETTLEMENT & AUTO-LOCK (FOR CLIENT & REDIRECT)
+  // =========================================================================
+  app.post('/api/midtrans/settle-booking', apiRateLimiter(60000, 60), express.json(), async (req, res) => {
+    try {
+      const { order_id, transaction_id, payment_type, gross_amount, booking_data } = req.body;
+      if (!order_id) {
+        return res.status(400).json({ success: false, error: 'order_id wajib disertakan.' });
+      }
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      const supabase = createClient(supabaseUrl, serviceKey);
+
+      const result = await settleBookingTransaction(
+        supabase,
+        order_id,
+        payment_type || 'Midtrans SNAP',
+        transaction_id,
+        gross_amount,
+        undefined,
+        booking_data
+      );
+
+      return res.status(200).json({ success: true, ...result });
+    } catch (err: any) {
+      console.error('[API Settle Booking Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Gagal memproses settlement booking.' });
+    }
+  });
+
+  // =========================================================================
+  // ENDPOINT: ROOM LOCKING & RESERVATION (SERVICE ROLE BYPASS)
+  // =========================================================================
+  app.post('/api/rooms/lock', apiRateLimiter(60000, 60), express.json(), async (req, res) => {
+    try {
+      const { room_id, status = 'reserved', tenant_name } = req.body;
+      if (!room_id) {
+        return res.status(400).json({ success: false, error: 'room_id wajib disertakan.' });
+      }
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      const supabase = createClient(supabaseUrl, serviceKey);
+
+      const { data: room, error: fetchErr } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('id', room_id)
+        .maybeSingle();
+
+      if (fetchErr || !room) {
+        return res.status(404).json({ success: false, error: 'Kamar tidak ditemukan.' });
+      }
+
+      if (status === 'reserved' && room.status === 'occupied') {
+        return res.status(409).json({ success: false, error: 'Kamar sudah terisi oleh penghuni lain.' });
+      }
+
+      const updatePayload: any = { status };
+      if (tenant_name) {
+        updatePayload.current_tenant_name = tenant_name;
+      } else if (status === 'available') {
+        updatePayload.current_tenant_name = null;
+      }
+
+      const { data: updatedRoom, error: updateErr } = await supabase
+        .from('rooms')
+        .update(updatePayload)
+        .eq('id', room_id)
+        .select()
+        .single();
+
+      if (updateErr) {
+        return res.status(500).json({ success: false, error: updateErr.message });
+      }
+
+      if (room.property_id) {
+        await syncPropertyRoomCountInSupabase(supabase, room.property_id);
+      }
+
+      return res.status(200).json({ success: true, room: updatedRoom });
+    } catch (err: any) {
+      console.error('[API Lock Room Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Gagal mengubah status kamar.' });
+    }
+  });
+
+  // =========================================================================
+  // CORE ENGINE: SYNC EXPIRED CONTRACTS & AUTO-RELEASE ROOMS (SUPABASE PARITY)
+  // =========================================================================
+  async function syncExpiredLeasesCore(supabaseAdmin: any): Promise<{ releasedRooms: number; checkedOutTenants: number }> {
+    const now = new Date();
+    let releasedRoomsCount = 0;
+    let checkedOutTenantsCount = 0;
+    const affectedPropertyIds = new Set<number>();
+
+    // 1. Fetch active tenants, paid extensions, bookings, rooms
+    const [
+      { data: activeTenants },
+      { data: paidExtensions },
+      { data: approvedBookings },
+      { data: allRooms }
+    ] = await Promise.all([
+      supabaseAdmin.from('tenants').select('*').neq('status', 'checkout'),
+      supabaseAdmin.from('contract_extensions').select('*').eq('status', 'paid'),
+      supabaseAdmin.from('bookings').select('*').eq('status', 'approved'),
+      supabaseAdmin.from('rooms').select('*')
+    ]);
+
+    // 2. Evaluate active tenants
+    if (activeTenants && activeTenants.length > 0) {
+      for (const tenant of activeTenants) {
+        if (!tenant.start_date) continue;
+        const startDate = new Date(tenant.start_date);
+        if (isNaN(startDate.getTime())) continue;
+
+        // Sum paid extensions
+        const exts = (paidExtensions || []).filter((e: any) => e.tenant_id === tenant.id);
+        const totalExtMonths = exts.reduce((sum: number, e: any) => sum + (Number(e.extension_months) || 0), 0);
+        const totalMonths = (Number(tenant.duration_months) || 1) + totalExtMonths;
+
+        const computedEnd = new Date(startDate);
+        computedEnd.setMonth(computedEnd.getMonth() + totalMonths);
+
+        let finalEndDate = computedEnd;
+        if (tenant.lease_end_date) {
+          const lDate = new Date(tenant.lease_end_date);
+          if (!isNaN(lDate.getTime()) && lDate.getTime() > finalEndDate.getTime()) {
+            finalEndDate = lDate;
+          }
+        }
+
+        // Contract ended without further extension
+        if (now.getTime() >= finalEndDate.getTime()) {
+          console.log(`[AUTO-RELEASE] Kontrak penyewa ${tenant.full_name} (Kamar ${tenant.room_number}) telah habis tanpa perpanjangan. Mengosongkan kamar.`);
+
+          // Mark tenant checkout
+          await supabaseAdmin.from('tenants').update({ status: 'checkout' }).eq('id', tenant.id);
+          checkedOutTenantsCount++;
+
+          // Release room to available
+          let roomQuery = supabaseAdmin
+            .from('rooms')
+            .update({ status: 'available', current_tenant_name: null })
+            .eq('room_number', tenant.room_number);
+          if (tenant.property_id) {
+            roomQuery = roomQuery.eq('property_id', tenant.property_id);
+            affectedPropertyIds.add(tenant.property_id);
+          }
+          await roomQuery;
+          releasedRoomsCount++;
+
+          // Checkout associated approved bookings
+          await supabaseAdmin
+            .from('bookings')
+            .update({ status: 'checkout' })
+            .eq('room_number', tenant.room_number)
+            .eq('status', 'approved');
+        }
+      }
+    }
+
+    // 3. Evaluate approved bookings (e.g. daily rentals or direct bookings)
+    if (approvedBookings && approvedBookings.length > 0) {
+      for (const booking of approvedBookings) {
+        const startStr = booking.check_in_date || booking.booking_date;
+        if (!startStr) continue;
+        const startDate = new Date(startStr);
+        if (isNaN(startDate.getTime())) continue;
+
+        const endDate = new Date(startDate);
+        if (booking.booking_type === 'daily' && booking.duration_days && booking.duration_days > 0) {
+          endDate.setDate(endDate.getDate() + booking.duration_days);
+        } else {
+          const months = Math.max(1, booking.duration_months || 1);
+          endDate.setMonth(endDate.getMonth() + months);
+        }
+
+        if (now.getTime() >= endDate.getTime()) {
+          console.log(`[AUTO-RELEASE] Booking ID ${booking.id} (Kamar ${booking.room_number}) telah berakhir. Mengosongkan kamar.`);
+          await supabaseAdmin.from('bookings').update({ status: 'checkout' }).eq('id', booking.id);
+
+          if (booking.room_id) {
+            await supabaseAdmin.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('id', booking.room_id);
+          } else if (booking.room_number) {
+            let rQuery = supabaseAdmin.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('room_number', booking.room_number);
+            if (booking.property_id) {
+              rQuery = rQuery.eq('property_id', booking.property_id);
+            }
+            await rQuery;
+          }
+
+          if (booking.property_id) affectedPropertyIds.add(booking.property_id);
+          releasedRoomsCount++;
+        }
+      }
+    }
+
+    // 4. Clean up any orphaned occupied rooms that have no active tenant and no approved booking
+    if (allRooms && allRooms.length > 0) {
+      const activeTenantRoomKeys = new Set(
+        (activeTenants || [])
+          .filter((t: any) => t.status !== 'checkout')
+          .map((t: any) => `${t.property_id || ''}_${t.room_number}`)
+      );
+      const activeBookingRoomKeys = new Set(
+        (approvedBookings || [])
+          .filter((b: any) => b.status === 'approved')
+          .map((b: any) => `${b.property_id || ''}_${b.room_number}`)
+      );
+
+      for (const room of allRooms) {
+        if (room.status === 'occupied') {
+          const key = `${room.property_id || ''}_${room.room_number}`;
+          if (!activeTenantRoomKeys.has(key) && !activeBookingRoomKeys.has(key)) {
+            console.log(`[AUTO-RELEASE] Kamar ${room.room_number} status 'occupied' tanpa data penyewa aktif. Mengubah ke 'available'.`);
+            await supabaseAdmin.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('id', room.id);
+            releasedRoomsCount++;
+            if (room.property_id) affectedPropertyIds.add(room.property_id);
+          }
+        }
+      }
+    }
+
+    // 5. Resync property room counts
+    for (const propId of affectedPropertyIds) {
+      await syncPropertyRoomCountInSupabase(supabaseAdmin, propId);
+    }
+
+    return { releasedRooms: releasedRoomsCount, checkedOutTenants: checkedOutTenantsCount };
+  }
+
+  // ENDPOINTS FOR EXPIRED LEASE SYNC
+  app.all('/api/system/sync-expired-leases', apiRateLimiter(60000, 60), async (req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase credentials not configured' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+      const result = await syncExpiredLeasesCore(supabaseAdmin);
+      return res.status(200).json({ success: true, ...result });
+    } catch (err: any) {
+      console.error('[SYNC-EXPIRED-LEASES API Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Gagal sinkronisasi kamar habis kontrak' });
+    }
+  });
+
+  // ENDPOINTS FOR CONTRACT EXTENSIONS (Bypasses PostgreSQL anon 42501 permission restrictions)
+  app.get('/api/contract-extensions', apiRateLimiter(60000, 180), async (req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase credentials not configured', data: [] });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const limit = Number(req.query.limit) || 1000;
+      const offset = Number(req.query.offset) || 0;
+      const status = req.query.status as string;
+      const tenantId = req.query.tenant_id as string;
+      const orderId = req.query.order_id as string;
+
+      let query = supabaseAdmin
+        .from('contract_extensions')
+        .select('*')
+        .order('id', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (status) {
+        query = query.eq('status', status);
+      }
+      if (tenantId) {
+        query = query.eq('tenant_id', tenantId);
+      }
+      if (orderId) {
+        query = query.eq('midtrans_order_id', orderId);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        console.warn('[CONTRACT-EXTENSIONS API] Query error:', error.message);
+        return res.status(500).json({ success: false, error: error.message, data: [] });
+      }
+      return res.status(200).json({ success: true, data: data || [] });
+    } catch (err: any) {
+      console.error('[CONTRACT-EXTENSIONS API Error]:', err);
+      return res.status(500).json({ success: false, error: err.message, data: [] });
+    }
+  });
+
+  app.post('/api/contract-extensions', apiRateLimiter(60000, 60), express.json(), async (req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase credentials not configured' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const payload = { ...req.body };
+      const id = payload.id;
+      delete payload.id;
+
+      let resultData = null;
+      if (id) {
+        const { data, error } = await supabaseAdmin
+          .from('contract_extensions')
+          .update(payload)
+          .eq('id', id)
+          .select();
+        if (error) throw error;
+        resultData = data && data[0] ? data[0] : req.body;
+      } else {
+        const { data, error } = await supabaseAdmin
+          .from('contract_extensions')
+          .insert(payload)
+          .select();
+        if (error) throw error;
+        resultData = data && data[0] ? data[0] : req.body;
+      }
+
+      return res.status(200).json({ success: true, data: resultData });
+    } catch (err: any) {
+      console.error('[CONTRACT-EXTENSIONS SAVE API Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // =========================================================================
+  // ENDPOINT: CHECK MIDTRANS TRANSACTION STATUS & AUTO-SETTLE
+  // =========================================================================
+  app.get('/api/midtrans/status/:orderId', apiRateLimiter(60000, 30), async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      let rawServerKey = process.env.MIDTRANS_SERVER_KEY || '';
+      let serverKey = rawServerKey.trim();
+      if (serverKey.startsWith('"') && serverKey.endsWith('"')) serverKey = serverKey.slice(1, -1);
+      else if (serverKey.startsWith("'") && serverKey.endsWith("'")) serverKey = serverKey.slice(1, -1);
+      serverKey = serverKey.trim();
+
+      if (!serverKey || serverKey === 'YOUR_MIDTRANS_SERVER_KEY_HERE') {
+        return res.status(400).json({ success: false, error: 'MIDTRANS_SERVER_KEY belum dikonfigurasi.' });
+      }
+
+      const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true' || process.env.NODE_ENV === 'production';
+      const baseUrl = isProduction ? 'https://api.midtrans.com' : 'https://api.sandbox.midtrans.com';
+      const authHeader = Buffer.from(`${serverKey}:`).toString('base64');
+
+      const response = await fetch(`${baseUrl}/v2/${orderId}/status`, {
+        headers: {
+          'Authorization': `Basic ${authHeader}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+      
+      if (data.transaction_status === 'settlement' || data.transaction_status === 'capture') {
+        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+        const serviceKey = getServiceRoleKeyOrThrow();
+        const supabase = createClient(supabaseUrl, serviceKey);
+        try {
+          await settleBookingTransaction(
+            supabase,
+            orderId,
+            data.payment_type || 'Midtrans SNAP',
+            data.transaction_id,
+            Number(data.gross_amount || 0)
+          );
+        } catch (sErr) {
+          console.warn('[Status Check Auto-Settle Warning]:', sErr);
+        }
+      }
+
+      return res.status(200).json({ success: true, midtrans: data });
+    } catch (err: any) {
+      console.error('[API Midtrans Status Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+
   // =========================================================================
   // DIGITAL SIGNATURE STORAGE & HOSTING API (FOR EMAILS & RECEIVING)
   // =========================================================================
@@ -2777,7 +3797,7 @@ async function startServer() {
         });
       }
 
-      const baseFromEmail = fromEmail || process.env.MAILERSEND_FROM_EMAIL || 'info@trial-3yxj5ljp10zg6o2r.mlsender.net';
+      const baseFromEmail = fromEmail || process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
       const resolvedFromName = fromName || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
@@ -3362,17 +4382,27 @@ async function startServer() {
           accessToken = parts[1];
         }
       }
+      if (!accessToken && req.headers['x-access-token']) {
+        const raw = req.headers['x-access-token'];
+        accessToken = Array.isArray(raw) ? raw[0] : raw;
+      }
+      if (!refreshToken && req.headers['x-refresh-token']) {
+        const raw = req.headers['x-refresh-token'];
+        refreshToken = Array.isArray(raw) ? raw[0] : raw;
+      }
 
       if (!accessToken) {
         if (refreshToken) {
           const client = getSupabaseServerClient();
-          const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
+          const { data, error } = await client.auth.refreshSession({ refresh_token: String(refreshToken) });
           if (!error && data.session) {
             const { session, user } = data;
             setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
             
             const userData = await getOrMigrateUserProfile(client, user);
-            const userRole = userData?.role || 'user';
+            const isSuper = isSuperAdminEmail(user.email || '');
+            const isOwner = isOwnerEmail(user.email || '');
+            const userRole = userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
             
             return res.json({
               success: true,
@@ -3394,19 +4424,21 @@ async function startServer() {
       }
 
       const client = getSupabaseServerClient(accessToken);
-      const { data: { user }, error } = await client.auth.getUser(accessToken);
+      let { data: { user }, error } = await client.auth.getUser(accessToken);
 
       if (error || !user) {
         // Access token might be expired. Try to refresh if we have a refresh token
         if (refreshToken) {
           const freshClient = getSupabaseServerClient();
-          const { data, error: refreshErr } = await freshClient.auth.refreshSession({ refresh_token: refreshToken });
+          const { data, error: refreshErr } = await freshClient.auth.refreshSession({ refresh_token: String(refreshToken) });
           if (!refreshErr && data.session) {
             const { session, user: refreshedUser } = data;
             setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
             
             const userData = await getOrMigrateUserProfile(freshClient, refreshedUser);
-            const userRole = userData?.role || 'user';
+            const isSuper = isSuperAdminEmail(refreshedUser.email || '');
+            const isOwner = isOwnerEmail(refreshedUser.email || '');
+            const userRole = userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
             
             return res.json({
               success: true,
@@ -3436,7 +4468,9 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Akun Anda dinonaktifkan' });
       }
 
-      const userRole = userData?.role || 'user';
+      const isSuper = isSuperAdminEmail(user.email || '');
+      const isOwner = isOwnerEmail(user.email || '');
+      const userRole = userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
       return res.json({
         success: true,
         user: {
@@ -4076,6 +5110,23 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER RUNNING] Express backend listening on http://0.0.0.0:${PORT}`);
+
+    // Auto-release expired leases on server startup and every 60 seconds
+    const runBackgroundExpiredLeaseSync = async () => {
+      try {
+        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+        const serviceKey = getServiceRoleKeyOrThrow();
+        if (supabaseUrl && serviceKey) {
+          const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+          await syncExpiredLeasesCore(supabaseAdmin);
+        }
+      } catch (err: any) {
+        // Silent error for periodic background job
+      }
+    };
+
+    runBackgroundExpiredLeaseSync();
+    setInterval(runBackgroundExpiredLeaseSync, 60000);
   });
 }
 

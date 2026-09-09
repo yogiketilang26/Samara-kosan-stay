@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { realtimeManager } from '../lib/supabase';
 
 export function useRealtimeTable<T>(
@@ -17,8 +17,9 @@ export function useRealtimeTable<T>(
   }, [fetchFn]);
 
   const isFirstLoadRef = useRef(true);
+  const debounceTimerRef = useRef<any>(null);
 
-  const loadData = async (isSilent = false) => {
+  const loadData = useCallback(async (isSilent = false) => {
     try {
       if (!isSilent && isFirstLoadRef.current) {
         setLoading(true);
@@ -34,7 +35,16 @@ export function useRealtimeTable<T>(
         isFirstLoadRef.current = false;
       }
     }
-  };
+  }, []);
+
+  const triggerDebouncedRefetch = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      loadData(true);
+    }, 80);
+  }, [loadData]);
 
   useEffect(() => {
     // Initial fetch
@@ -43,41 +53,56 @@ export function useRealtimeTable<T>(
     const handleRealtimeEvent = (payload: any) => {
       console.log(`[useRealtimeTable Event] Received differential update for ${tableName}:`, payload);
       
-      // Relational tables with joined data must do a full refetch to resolve nested relationships accurately
-      if (['properties', 'rooms', 'settings', 'facilities'].includes(tableName.toLowerCase())) {
-        loadData(true);
-        return;
-      }
+      // Always trigger debounced fresh load to guarantee full consistency with relational queries and sorting
+      triggerDebouncedRefetch();
       
-      setData((currentData) => {
-        const { eventType, new: newRow, old: oldRow } = payload;
-        
-        if (eventType === 'INSERT') {
-          const exists = currentData.some((item: any) => (item as any).id === newRow.id);
-          if (exists) return currentData;
-          return [...currentData, newRow];
+      // Also apply optimistic differential patch if raw row is provided
+      if (payload && payload.new && payload.eventType === 'UPDATE') {
+        setData((currentData) =>
+          currentData.map((item: any) =>
+            (item as any)?.id === payload.new.id ? { ...item, ...payload.new } : item
+          )
+        );
+      } else if (payload && payload.old && payload.eventType === 'DELETE') {
+        const targetId = payload.old?.id || payload.new?.id;
+        if (targetId !== undefined) {
+          setData((currentData) =>
+            currentData.filter((item: any) => (item as any)?.id !== targetId)
+          );
         }
-        
-        if (eventType === 'UPDATE') {
-          return currentData.map((item: any) => (item as any).id === newRow.id ? { ...item, ...newRow } : item);
-        }
-        
-        if (eventType === 'DELETE') {
-          const targetId = oldRow?.id || newRow?.id;
-          return currentData.filter((item: any) => (item as any).id !== targetId);
-        }
-        
-        return currentData;
-      });
+      }
     };
 
     // Subscribe via central manager to prevent duplicate websocket channels and leak-free lifecycle
     const unsubscribe = realtimeManager.subscribe(tableName, {}, handleRealtimeEvent);
 
+    // Dynamic visibility & focus synchronization: whenever user returns to or focuses this tab
+    const handleFocusOrVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        triggerDebouncedRefetch();
+      }
+    };
+
+    window.addEventListener('focus', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
+
+    // Dynamic heartbeat sync (every 6 seconds if document is visible) to guarantee zero-latency drift
+    const heartbeatInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        loadData(true);
+      }
+    }, 6000);
+
     return () => {
       unsubscribe();
+      window.removeEventListener('focus', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+      clearInterval(heartbeatInterval);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
     };
-  }, [tableName, dependencyTrigger]);
+  }, [tableName, dependencyTrigger, loadData, triggerDebouncedRefetch]);
 
   return { data, loading, error, refetch: loadData };
 }

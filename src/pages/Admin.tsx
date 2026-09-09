@@ -1,4 +1,4 @@
-Ôªøimport React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import * as LucideIcons from 'lucide-react';
 import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAULT_OWNER_SIGNATURE, getAuthHeaders } from '../lib/supabase';
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
@@ -13,6 +13,7 @@ import { Modal } from '../components/common/Modal';
 import { BookingSkeletonList, LedgerSkeletonTable, CoaSkeletonList } from '../components/common/Skeleton';
 import PropertyForm from '../components/property/PropertyForm';
 import RoomForm from '../components/room/RoomForm';
+import RoomSelectionList, { RoomStatusType } from '../components/room/RoomSelectionList';
 import AdminMapCoordinateManager from '../components/admin/AdminMapCoordinateManager';
 import CouponList from '../components/coupon/CouponList';
 import InvoiceCard from '../components/transaction/InvoiceCard';
@@ -24,13 +25,14 @@ import { calculateOccupancy, calculateTotalInflow, calculateTotalExpenses, calcu
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { 
   Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, AlertCircle, XCircle,
-  Trash2, Edit2, PlayCircle, Plus, Eye, Check, X, FileSpreadsheet,
+  Trash2, Edit2, PlayCircle, Plus, Eye, EyeOff, Check, X, FileSpreadsheet,
   History, Users, UserPlus, Download, Search, UserCheck, Activity,
   FileText, Printer, ShieldPlus, Trash, UserCog, Terminal, HelpCircle,
   ExternalLink, RefreshCw, Server, Copy, Mail, Play, RotateCw,
   Sparkles, Landmark, Coins, ShoppingBag, Wrench, Wallet, Percent, Shield, ShieldCheck,
   TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle,
-  FileSignature, PenTool, Upload, CheckCircle2, Scale, KeyRound, Key
+  FileSignature, PenTool, Upload, CheckCircle2, Scale, KeyRound, Key,
+  SlidersHorizontal, MonitorCheck, ArrowUp, ArrowDown
 } from 'lucide-react';
 
 interface AdminProps {}
@@ -513,14 +515,39 @@ export default function Admin({}: AdminProps) {
   const [settings, setSettingsState] = useState<SystemSettings | null>(null);
   const [facilitiesList, setFacilitiesList] = useState<{ id: number, icon: string, title: string, subtitle: string, category?: string }[]>([]);
   const [showFacilityModal, setShowFacilityModal] = useState(false);
+  const [showHomepageManagerModal, setShowHomepageManagerModal] = useState(false);
+  const [showHomepagePreview, setShowHomepagePreview] = useState(false);
+  const [tempHomepageList, setTempHomepageList] = useState<{ id?: number, icon: string, title: string, subtitle?: string }[]>([]);
   const [isSavingFacility, setIsSavingFacility] = useState(false);
+  const [isSavingHomepageFacilities, setIsSavingHomepageFacilities] = useState(false);
   const [editingFacilityIndex, setEditingFacilityIndex] = useState<number | null>(null);
   const [facilityForm, setFacilityForm] = useState({
     title: '',
     subtitle: '',
-    icon: 'Sparkles'
+    icon: 'Sparkles',
+    showOnHomepage: true
   });
   const [facilitySearchQuery, setFacilitySearchQuery] = useState('');
+
+  // Memoized list of facilities currently active on front-end homepage
+  const homepageFacilities: { icon: string, title: string, subtitle?: string, id?: number }[] = useMemo(() => {
+    try {
+      if (settings?.standard_facilities) {
+        const parsed = JSON.parse(settings.standard_facilities);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return [];
+  }, [settings?.standard_facilities]);
+
+  const isFacilityOnHomepage = (fac: { id?: number, title: string }) => {
+    return homepageFacilities.some(hf => 
+      (hf.id !== undefined && fac.id !== undefined && hf.id === fac.id) ||
+      hf.title.trim().toLowerCase() === fac.title.trim().toLowerCase()
+    );
+  };
 
   // ERP Finance states
   const [accounts, setAccounts] = useState<AccountCOA[]>([]);
@@ -934,12 +961,23 @@ export default function Admin({}: AdminProps) {
     full_name: '',
     phone: '',
     email: '',
+    nik: '',
     property_id: 0,
     room_number: '',
     start_date: '',
     duration_months: 1,
-    payment_status: 'paid' as 'paid' | 'pending' | 'overdue'
+    payment_status: 'paid' as 'paid' | 'pending' | 'overdue',
+    is_married: false,
+    marriage_certificate_url: '',
+    spouse_name: '',
+    spouse_nik: '',
+    spouse_phone: '',
+    spouse_relation: 'istri'
   });
+  const [selectedTenantForDetail, setSelectedTenantForDetail] = useState<Tenant | null>(null);
+  const [showTenantDetailModal, setShowTenantDetailModal] = useState(false);
+  const [certificatePreviewModal, setCertificatePreviewModal] = useState<string | null>(null);
+  const [isUploadingTenantCert, setIsUploadingTenantCert] = useState(false);
 
   // Property modal triggers
   const [showPropertyModal, setShowPropertyModal] = useState(false);
@@ -1254,10 +1292,10 @@ export default function Admin({}: AdminProps) {
   useEffect(() => {
     if (editingOccupantBooking) {
       setOccupantForm({
-        name: editingOccupantBooking.occupant_name || '',
-        phone: editingOccupantBooking.occupant_phone || '',
-        email: editingOccupantBooking.occupant_email || '',
-        nik: editingOccupantBooking.occupant_nik || ''
+        name: editingOccupantBooking.occupant_name || editingOccupantBooking.tenant_name || '',
+        phone: editingOccupantBooking.occupant_phone || editingOccupantBooking.phone || '',
+        email: editingOccupantBooking.occupant_email || editingOccupantBooking.email || '',
+        nik: editingOccupantBooking.occupant_nik || editingOccupantBooking.nik || ''
       });
     }
   }, [editingOccupantBooking]);
@@ -1268,8 +1306,13 @@ export default function Admin({}: AdminProps) {
 
     setIsSavingOccupant(true);
     try {
-      const updatedBooking = {
+      const isDirectSelfBooking = !editingOccupantBooking.is_for_other;
+      const updatedBooking: Booking = {
         ...editingOccupantBooking,
+        tenant_name: isDirectSelfBooking ? occupantForm.name : editingOccupantBooking.tenant_name,
+        phone: isDirectSelfBooking ? occupantForm.phone : editingOccupantBooking.phone,
+        email: isDirectSelfBooking ? occupantForm.email : editingOccupantBooking.email,
+        nik: isDirectSelfBooking ? occupantForm.nik : editingOccupantBooking.nik,
         occupant_name: occupantForm.name,
         occupant_phone: occupantForm.phone,
         occupant_email: occupantForm.email,
@@ -1278,9 +1321,9 @@ export default function Admin({}: AdminProps) {
 
       await database.saveBooking(updatedBooking);
 
-      // Also update the room's tenant name if it is currently occupied by this booking
+      // Also update the room's current tenant name in rooms
       const room = rooms.find(r => r.id === editingOccupantBooking.room_id);
-      if (room && room.current_tenant_name === editingOccupantBooking.occupant_name) {
+      if (room) {
         const updatedRoom = {
           ...room,
           current_tenant_name: occupantForm.name
@@ -1288,12 +1331,13 @@ export default function Admin({}: AdminProps) {
         await database.saveRoom(updatedRoom);
       }
 
-      database.logActivity("System", "UPDATE_OCCUPANT_DATA", `Mengubah data penghuni untuk kamar ${editingOccupantBooking.room_number}`);
+      database.logActivity("System", "UPDATE_OCCUPANT_DATA", `Mengubah data penghuni untuk kamar ${editingOccupantBooking.room_number} (${occupantForm.name})`);
       setEditingOccupantBooking(null);
       
       startModuleRefresh('bookings');
       startModuleRefresh('rooms');
-      await Promise.all([refetchBookings(), refetchRooms()]);
+      startModuleRefresh('tenants');
+      await Promise.all([refetchBookings(), refetchRooms(), refetchTenants()]);
       showToast('Data penghuni berhasil diperbarui!');
     } catch (err: any) {
       console.error('[Admin] Error saving occupant details:', err);
@@ -1302,6 +1346,7 @@ export default function Admin({}: AdminProps) {
       setIsSavingOccupant(false);
       endModuleRefresh('bookings');
       endModuleRefresh('rooms');
+      endModuleRefresh('tenants');
     }
   };
 
@@ -1442,11 +1487,8 @@ export default function Admin({}: AdminProps) {
               const maxAttempts = 10; // ~20 detik total
               const pollInterval = setInterval(async () => {
                 attempts++;
-                const { data: updatedExt } = await supabase
-                  .from('contract_extensions')
-                  .select('*')
-                  .eq('midtrans_order_id', orderId)
-                  .maybeSingle();
+                const exts = await database.fetchContractExtensions();
+                const updatedExt = exts.find(e => (e as any).midtrans_order_id === orderId);
 
                 if (updatedExt && updatedExt.status === 'paid') {
                   clearInterval(pollInterval);
@@ -1532,6 +1574,75 @@ export default function Admin({}: AdminProps) {
     }
   };
 
+  const handleToggleFacilityHomepage = async (fac: { id?: number, icon: string, title: string, subtitle?: string }, targetState?: boolean) => {
+    const currentlyOn = isFacilityOnHomepage(fac);
+    const shouldAdd = targetState !== undefined ? targetState : !currentlyOn;
+
+    let updatedList: { icon: string, title: string, subtitle?: string, id?: number }[] = [...homepageFacilities];
+
+    if (shouldAdd) {
+      if (!currentlyOn) {
+        updatedList.push({
+          id: fac.id,
+          icon: fac.icon || 'Sparkles',
+          title: fac.title,
+          subtitle: fac.subtitle || ''
+        });
+      }
+    } else {
+      updatedList = updatedList.filter(hf => 
+        !((hf.id !== undefined && fac.id !== undefined && hf.id === fac.id) ||
+          hf.title.trim().toLowerCase() === fac.title.trim().toLowerCase())
+      );
+    }
+
+    // Optimistically update settings state
+    const newJson = JSON.stringify(updatedList);
+    if (settings) {
+      setSettingsState({ ...settings, standard_facilities: newJson });
+    }
+
+    startModuleRefresh('facilities');
+    try {
+      await database.saveStandardFacilities(updatedList);
+      await refetchSettings();
+      showToast(
+        shouldAdd 
+          ? `Fasilitas "${fac.title}" sekarang DITAMPILKAN di halaman depan (Beranda)!`
+          : `Fasilitas "${fac.title}" telah DISEMBUNYIKAN dari halaman depan.`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error("Gagal memperbarui tampilan fasilitas beranda:", err);
+      showToast("Gagal memperbarui tampilan fasilitas beranda: " + (err.message || 'Error'), "error");
+      refetchSettings();
+    } finally {
+      endModuleRefresh('facilities');
+    }
+  };
+
+  const handleSaveCustomHomepageFacilities = async (newList: { id?: number, icon: string, title: string, subtitle?: string }[]) => {
+    setIsSavingHomepageFacilities(true);
+    startModuleRefresh('facilities');
+    try {
+      const newJson = JSON.stringify(newList);
+      if (settings) {
+        setSettingsState({ ...settings, standard_facilities: newJson });
+      }
+      await database.saveStandardFacilities(newList);
+      await refetchSettings();
+      setShowHomepageManagerModal(false);
+      showToast('Susunan fasilitas halaman depan berhasil disimpan!', 'success');
+    } catch (err: any) {
+      console.error("Gagal menyimpan susunan fasilitas beranda:", err);
+      showToast("Gagal menyimpan susunan fasilitas: " + (err.message || 'Error'), "error");
+      refetchSettings();
+    } finally {
+      setIsSavingHomepageFacilities(false);
+      endModuleRefresh('facilities');
+    }
+  };
+
   const handleSaveFacility = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!facilityForm.title.trim()) {
@@ -1548,14 +1659,50 @@ export default function Admin({}: AdminProps) {
         category: facilityForm.title.toLowerCase().includes('ac') || facilityForm.title.toLowerCase().includes('mandi') ? 'room' : 'general'
       };
 
+      let savedFac: any = null;
       if (editingFacilityIndex !== null) {
         const existingFac = facilitiesList[editingFacilityIndex];
-        await database.saveMasterFacility({
+        savedFac = await database.saveMasterFacility({
           id: existingFac.id,
           ...facilityPayload
         });
       } else {
-        await database.saveMasterFacility(facilityPayload);
+        savedFac = await database.saveMasterFacility(facilityPayload);
+      }
+
+      // Synchronize front-end homepage visibility based on checkbox
+      if (facilityForm.showOnHomepage !== undefined) {
+        const facId = savedFac?.id || (editingFacilityIndex !== null ? facilitiesList[editingFacilityIndex]?.id : undefined);
+        let updatedHomepage = [...homepageFacilities];
+        const alreadyInHome = updatedHomepage.some(hf => 
+          (facId && hf.id === facId) || hf.title.trim().toLowerCase() === facilityForm.title.trim().toLowerCase()
+        );
+
+        if (facilityForm.showOnHomepage) {
+          if (alreadyInHome) {
+            updatedHomepage = updatedHomepage.map(hf => 
+              ((facId && hf.id === facId) || hf.title.trim().toLowerCase() === facilityForm.title.trim().toLowerCase())
+                ? { ...hf, id: facId, title: facilityForm.title.trim(), subtitle: facilityForm.subtitle.trim(), icon: facilityForm.icon }
+                : hf
+            );
+          } else {
+            updatedHomepage.push({
+              id: facId,
+              icon: facilityForm.icon,
+              title: facilityForm.title.trim(),
+              subtitle: facilityForm.subtitle.trim()
+            });
+          }
+        } else {
+          if (alreadyInHome) {
+            updatedHomepage = updatedHomepage.filter(hf => 
+              !((facId && hf.id === facId) || hf.title.trim().toLowerCase() === facilityForm.title.trim().toLowerCase())
+            );
+          }
+        }
+
+        await database.saveStandardFacilities(updatedHomepage);
+        await refetchSettings();
       }
       
       setShowFacilityModal(false);
@@ -1582,6 +1729,16 @@ export default function Admin({}: AdminProps) {
         startItemProcessing(facility.id);
         try {
           await database.deleteMasterFacility(facility.id);
+
+          // Also remove from homepage facilities if active
+          const updatedHome = homepageFacilities.filter(hf => 
+            !(hf.id === facility.id || hf.title.trim().toLowerCase() === facility.title.trim().toLowerCase())
+          );
+          if (updatedHome.length !== homepageFacilities.length) {
+            await database.saveStandardFacilities(updatedHome);
+            await refetchSettings();
+          }
+
           startModuleRefresh('facilities');
           await refetchMasterFacilities();
           showToast('Fasilitas berhasil dihapus!');
@@ -2445,6 +2602,7 @@ export default function Admin({}: AdminProps) {
       full_name: tenantForm.full_name,
       phone: tenantForm.phone,
       email: tenantForm.email || 'tenant@samarastay.com',
+      nik: tenantForm.nik || undefined,
       avatar_initials: tenantForm.full_name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(),
       avatar_color: "bg-teal-600",
       property_id: Number(tenantForm.property_id) || properties[0]?.id || 1,
@@ -2452,7 +2610,13 @@ export default function Admin({}: AdminProps) {
       start_date: tenantForm.start_date || new Date().toISOString().split('T')[0],
       duration_months: Number(tenantForm.duration_months) || 1,
       payment_status: tenantForm.payment_status,
-      status: 'active'
+      status: 'active',
+      is_married: tenantForm.is_married,
+      marriage_certificate_url: tenantForm.is_married ? (tenantForm.marriage_certificate_url || undefined) : undefined,
+      spouse_name: tenantForm.is_married ? (tenantForm.spouse_name || undefined) : undefined,
+      spouse_nik: tenantForm.is_married ? (tenantForm.spouse_nik || undefined) : undefined,
+      spouse_phone: tenantForm.is_married ? (tenantForm.spouse_phone || undefined) : undefined,
+      spouse_relation: tenantForm.is_married ? (tenantForm.spouse_relation || 'istri') : undefined
     };
     setIsSavingOccupant(true);
     try {
@@ -2467,11 +2631,18 @@ export default function Admin({}: AdminProps) {
         full_name: '',
         phone: '',
         email: '',
+        nik: '',
         property_id: properties[0]?.id || 1,
         room_number: '',
         start_date: new Date().toISOString().split('T')[0],
         duration_months: 1,
-        payment_status: 'paid'
+        payment_status: 'paid',
+        is_married: false,
+        marriage_certificate_url: '',
+        spouse_name: '',
+        spouse_nik: '',
+        spouse_phone: '',
+        spouse_relation: 'istri'
       });
       startModuleRefresh('tenants');
       await refetchTenants();
@@ -2807,7 +2978,7 @@ export default function Admin({}: AdminProps) {
                 properties.map(p => (
                   <div key={p.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
                     <div>
-                      <h4 className="font-extrabold text-[#3A444D] uppercase font-sans text-sm">{p.name}</h4>
+                      <h4 className="font-extrabold text-[#3A444D] font-sans text-sm">{p.name}</h4>
                       <span className="text-[11px] text-[#64748B] font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln | Deposit Gedung: {formatRupiah(p.deposit_amount ?? 500000)}</span>
                     </div>
                     <div className="flex gap-2 w-full sm:w-auto">
@@ -3005,19 +3176,107 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
               <div>
                 <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Master Fasilitas Layanan</h2>
-                <p className="text-xs text-[#64748B] mt-0.5">Kelola dan kustomisasi daftar fasilitas all-inclusive untuk properti kos dan unit hunian.</p>
+                <p className="text-xs text-[#64748B] mt-0.5">Kelola fasilitas master dan tentukan fasilitas mana saja yang tampil di halaman depan untuk calon penyewa.</p>
               </div>
-              <button 
-                onClick={() => {
-                  setEditingFacilityIndex(null);
-                  setFacilityForm({ title: '', subtitle: '', icon: 'Sparkles' });
-                  setShowFacilityModal(true);
-                }}
-                className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
-              >
-                <Plus size={14} />
-                Tambah Fasilitas
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTempHomepageList([...homepageFacilities]);
+                    setShowHomepageManagerModal(true);
+                  }}
+                  className="bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-800 font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                >
+                  <SlidersHorizontal size={14} className="text-emerald-600" />
+                  Atur Tampilan Beranda ({homepageFacilities.length})
+                </button>
+                <button 
+                  onClick={() => {
+                    setEditingFacilityIndex(null);
+                    setFacilityForm({ title: '', subtitle: '', icon: 'Sparkles', showOnHomepage: true });
+                    setShowFacilityModal(true);
+                  }}
+                  className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
+                >
+                  <Plus size={14} />
+                  Tambah Fasilitas
+                </button>
+              </div>
+            </div>
+
+            {/* Banner Kontrol Fasilitas Halaman Depan */}
+            <div className="bg-gradient-to-br from-[#F0FDF4] to-[#F8FAFC] border border-emerald-200/85 rounded-2xl p-4 sm:p-5 shadow-xs text-left">
+              <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="bg-emerald-600 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider flex items-center gap-1">
+                      <MonitorCheck size={12} />
+                      Kontrol Halaman Depan
+                    </span>
+                    <span className="text-xs font-bold text-emerald-800">
+                      {homepageFacilities.length} Fasilitas Aktif di Beranda
+                    </span>
+                  </div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-[#1E293B]">
+                    Pengaturan Fasilitas Tampilan Depan (End-User)
+                  </h3>
+                  <p className="text-xs text-[#64748B] max-w-2xl leading-relaxed">
+                    Hanya fasilitas yang Anda beri tanda <strong className="text-emerald-700">"TAMPIL DI DEPAN"</strong> yang akan dilihat pengunjung di bagian <span className="font-semibold text-slate-700">"Fasilitas Standar Setiap Cabang"</span>. Anda dapat menyalakan/mematikan langsung lewat tombol kartu di bawah atau atur susunan lewat tombol kelola.
+                  </p>
+                </div>
+                
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setShowHomepagePreview(!showHomepagePreview)}
+                    className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+                  >
+                    <Eye size={13} className="text-emerald-600" />
+                    {showHomepagePreview ? 'Tutup Pratinjau' : 'Pratinjau Tampilan Depan'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTempHomepageList([...homepageFacilities]);
+                      setShowHomepageManagerModal(true);
+                    }}
+                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+                  >
+                    <SlidersHorizontal size={13} />
+                    Kelola & Urutkan ({homepageFacilities.length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Collapsible Mini Live Preview */}
+              {showHomepagePreview && (
+                <div className="mt-4 pt-4 border-t border-emerald-200/60 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-emerald-900">
+                    <span>Pratinjau Langsung (Sesuai Tampilan Pengunjung Beranda):</span>
+                    <span className="text-slate-500 font-normal">{homepageFacilities.length} item aktif</span>
+                  </div>
+                  {homepageFacilities.length === 0 ? (
+                    <div className="p-4 bg-white rounded-xl border border-dashed border-slate-300 text-center text-xs text-slate-500">
+                      Belum ada fasilitas yang dipilih untuk halaman depan. Klik "Tampilkan di Depan" pada salah satu fasilitas di bawah.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5 pt-1">
+                      {homepageFacilities.map((hFac, hIdx) => {
+                        const IconComponent = (LucideIcons as any)[hFac.icon] || LucideIcons.Sparkles;
+                        return (
+                          <div key={hIdx} className="bg-white border border-emerald-100 rounded-2xl p-3 text-center flex flex-col items-center justify-center space-y-1.5 shadow-2xs">
+                            <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                              <IconComponent size={14} />
+                            </div>
+                            <span className="text-[11px] font-extrabold text-slate-800 truncate max-w-full">{hFac.title}</span>
+                            <span className="text-[9px] text-slate-500 truncate max-w-full">{hFac.subtitle || '-'}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Search Input */}
@@ -3040,17 +3299,56 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 .filter(item => item.fac.title.toLowerCase().includes(facilitySearchQuery.toLowerCase()))
                 .map(({ fac, originalIdx }) => {
                   const IconComp = (LucideIcons as any)[fac.icon] || LucideIcons.HelpCircle;
+                  const onHome = isFacilityOnHomepage(fac);
                   return (
-                    <div key={originalIdx} className="bg-white border border-[#E2E8F0] p-4 rounded-[20px] flex flex-col justify-between gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
-                      <div className="flex items-start gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-[#0D9488]/10 text-[#0D9488] flex items-center justify-center shrink-0">
-                          <IconComp size={18} />
+                    <div key={originalIdx} className={`bg-white border p-4 rounded-[20px] flex flex-col justify-between gap-4 text-xs shadow-xs transition-all text-left ${onHome ? 'border-emerald-300 ring-1 ring-emerald-100' : 'border-[#E2E8F0] hover:border-[#0D9488]'}`}>
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${onHome ? 'bg-emerald-100/80 text-emerald-700' : 'bg-[#0D9488]/10 text-[#0D9488]'}`}>
+                            <IconComp size={18} />
+                          </div>
+                          {onHome ? (
+                            <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-[10px] font-extrabold flex items-center gap-1 shrink-0">
+                              <CheckCircle2 size={11} className="text-emerald-600" />
+                              TAMPIL DI DEPAN
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 bg-slate-100 text-slate-500 border border-slate-200 rounded-full text-[10px] font-semibold flex items-center gap-1 shrink-0">
+                              <EyeOff size={11} className="text-slate-400" />
+                              HANYA MASTER
+                            </span>
+                          )}
                         </div>
+
                         <div>
                           <h4 className="font-extrabold text-[#3A444D] text-sm">{fac.title}</h4>
                           <p className="text-xs text-[#64748B] font-medium mt-0.5">{fac.subtitle || 'All-inclusive service'}</p>
                         </div>
                       </div>
+
+                      {/* Quick 1-Click Toggle for Homepage Display */}
+                      <button
+                        type="button"
+                        disabled={refreshingModule['facilities']}
+                        onClick={() => handleToggleFacilityHomepage(fac)}
+                        className={`w-full py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                          onHome 
+                            ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
+                            : 'bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 border-emerald-200'
+                        }`}
+                      >
+                        {onHome ? (
+                          <>
+                            <EyeOff size={13} className="text-amber-700" />
+                            <span>Sembunyikan dari Depan</span>
+                          </>
+                        ) : (
+                          <>
+                            <Eye size={13} className="text-emerald-600" />
+                            <span>Tampilkan di Depan</span>
+                          </>
+                        )}
+                      </button>
 
                       <div className="flex gap-2 border-t border-[#F1F5F9] pt-3">
                         <button
@@ -3060,7 +3358,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             setFacilityForm({
                               title: fac.title,
                               subtitle: fac.subtitle || '',
-                              icon: fac.icon || 'Sparkles'
+                              icon: fac.icon || 'Sparkles',
+                              showOnHomepage: isFacilityOnHomepage(fac)
                             });
                             setShowFacilityModal(true);
                           }}
@@ -5480,221 +5779,6 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                      </div>
                    </div>
                  )}
- 
-               </div>
-             )}
-
-            {/* TAB 6: BRAND COUPONS OR PROMOS */}
-            {activeTab === 'coupons' && (
-          <div className="space-y-4">
-            {refreshingModule['coupons'] && (
-              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
-                <RotateCw size={10} className="animate-spin" />
-                <span>Menyinkronkan data terbaru...</span>
-              </div>
-            )}
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <div>
-                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Kupon Promo & Kampanye Diskon</h2>
-                <p className="text-xs text-[#64748B] mt-0.5">Terbitkan potongan harga sewa eksklusif untuk mendongkrak minat okupansi.</p>
-              </div>
-              <button 
-                onClick={() => {
-                  setCouponForm({
-                    code: '',
-                    discount_type: 'percentage',
-                    discount_value: 15,
-                    max_discount_amount: 150000,
-                    is_active: true,
-                    description: 'Potongan Diskon Akhir Tahun'
-                  });
-                  setShowCouponModal(true);
-                }}
-                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
-              >
-                <Plus size={12} />
-                Terbitkan Kupon
-              </button>
-            </div>
-
-            <CouponList coupons={coupons} onDeleteCoupon={handleDeleteCoupon} />
-          </div>
-        )}
-
-        {activeTab === 'bookings_history' && (
-          <div className="space-y-4">
-            {refreshingModule['bookings'] && (
-              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
-                <RotateCw size={10} className="animate-spin" />
-                <span>Menyinkronkan data terbaru...</span>
-              </div>
-            )}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-3">
-              <div>
-                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Riwayat Transaksi Pemesanan & Kontrak Sewa</h2>
-                <p className="text-xs text-[#64748B] mt-0.5">Pantau settlement pembayaran, unduh lembar spreadsheet, serta lihat & cetak bukti invoice penagihan.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const headers = ['Order ID', 'Penyewa', 'Unit', 'Masa Kontrak', 'Total Tagihan', 'Pembayaran', 'Status', 'Tanggal Settle', 'No WhatsApp'];
-                  const rows = bookings.map(b => [
-                    b.midtrans_order_id || `BOOK-${b.id}`,
-                    b.tenant_name,
-                    `Kamar ${b.room_number}`,
-                    b.duration_months > 0 ? `${b.duration_months} Bulan` : 'Harian',
-                    String(b.total_price),
-                    b.payment_method || 'Midtrans VA/QRIS',
-                    b.status.toUpperCase(),
-                    b.check_in_date || b.booking_date,
-                    b.phone || '-'
-                  ]);
-                  const csvContent = "data:text/csv;charset=utf-8," 
-                    + [headers.join(','), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))].join('\n');
-                  const encodedUri = encodeURI(csvContent);
-                  const link = document.createElement("a");
-                  link.setAttribute("href", encodedUri);
-                  link.setAttribute("download", `riwayat_sewa_samarastay_${new Date().toISOString().split('T')[0]}.csv`);
-                  document.body.appendChild(link);
-                  link.click();
-                  document.body.removeChild(link);
-                  database.logActivity("System", "EXCEL_EXPORT", "Mengunduh file spreadsheet rekap kontrak sewa");
-                }}
-                className="bg-emerald-600 hover:bg-emerald-550 text-white font-extrabold text-[10px] uppercase px-3 py-2 rounded-xl flex items-center gap-1.5 transition-all shadow-md shrink-0 cursor-pointer"
-              >
-                <Download size={12} />
-                Unduh Rekap CSV
-              </button>
-            </div>
-
-            {/* Live Filter Bar */}
-            <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500 pointer-events-none">
-                <Search size={12} />
-              </span>
-              <input
-                type="text"
-                placeholder="Cari nama penyewa atau nomor kamar..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-xs pl-9 pr-4 py-2.5 rounded-2xl outline-none text-[#3A444D] focus:border-[#0D9488] focus:bg-white transition-colors font-medium"
-              />
-            </div>
-
-            <div className="space-y-3">
-              {bookingsLoading ? (
-                <BookingSkeletonList count={4} />
-              ) : (
-                <>
-                  {(bookings || [])
-                    .filter(b => 
-                      b.tenant_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      b.room_number.toLowerCase().includes(searchQuery.toLowerCase())
-                    )
-                    .slice(0, 100)
-                    .map(b => {
-                  const propertyName = properties.find(p => p.id === b.property_id)?.name || 'Properti Kos';
-                  return (
-                    <div key={b.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] space-y-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
-                      <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[9px] font-mono bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg border border-blue-100 font-bold uppercase tracking-wider">
-                              {b.midtrans_order_id || `BOOK-${b.id}`}
-                            </span>
-                            <span className="text-[9px] text-slate-500 font-mono italic">
-                              Masuk: {b.booking_date}
-                            </span>
-                          </div>
-                          <h4 className="font-extrabold text-[#3A444D] uppercase mt-1.5 text-sm">
-                            {b.tenant_name}
-                          </h4>
-                          <p className="text-[11px] text-[#64748B] mt-0.5">
-                            Kamar <strong className="text-[#0D9488] font-bold">{b.room_number}</strong> | {propertyName}
-                          </p>
-                          <p className="text-[11px] text-[#64748B] font-mono mt-1">
-                            Durasi: {b.duration_months > 0 ? `${b.duration_months} Bulan` : 'Sewa Harian'} | Mulai Sewa: {b.check_in_date}
-                          </p>
-                        </div>
-                        <div className="text-left sm:text-right space-y-1.5 shrink-0 self-stretch sm:self-auto flex sm:flex-col justify-between sm:justify-start items-center sm:items-end">
-                          <span className={`text-[8px] font-mono px-2.5 py-0.5 rounded-full border font-bold uppercase block w-fit ${
-                            b.status === 'approved' 
-                              ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
-                              : b.status === 'checkout'
-                                ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                : b.status === 'pending'
-                                  ? 'bg-amber-500/10 text-[#0D9488] font-bold border-amber-500/20 animate-pulse'
-                                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                          }`}>
-                            {b.status === 'approved' ? 'Lunas / Berjalan' : b.status === 'checkout' ? 'Selesai / Checked Out' : b.status === 'pending' ? 'Menunggu Bayar' : 'Dibatalkan'}
-                          </span>
-                          <span className="text-sm font-mono font-bold text-[#3A444D] block">
-                            {formatRupiah(b.total_price)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {(b.is_for_other || !!b.occupant_name) && (
-                        <div className="bg-amber-500/5 border border-amber-500/10 p-3.5 rounded-2xl space-y-2 mt-2">
-                          <div className="flex justify-between items-center flex-wrap gap-2">
-                            <span className="text-[10px] uppercase font-mono font-bold text-amber-600 tracking-wider flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                              Detail Penghuni Utama (Si B) - Pesanan Orang Lain
-                            </span>
-                            <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-lg border uppercase ${
-                              b.occupant_arrival_status === 'checked_in'
-                                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/10'
-                                : 'bg-amber-500/10 text-amber-600 border-amber-500/10 animate-pulse'
-                            }`}>
-                              {b.occupant_arrival_status === 'checked_in' ? '[OK] Sudah Check-In (Settle)' : ' Menunggu Kedatangan'}
-                            </span>
-                          </div>
-                          
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-700 p-2 bg-slate-50/50 rounded-xl border border-slate-100">
-                            <div>
-                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">Nama Lengkap</span>
-                              <strong className="text-slate-800 capitalize">{b.occupant_name || '-'}</strong>
-                            </div>
-                            <div>
-                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">No. WhatsApp</span>
-                              <strong className="text-slate-800 font-mono">{b.occupant_phone || '-'}</strong>
-                            </div>
-                            <div>
-                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">Email</span>
-                              <strong className="text-slate-800">{b.occupant_email || '-'}</strong>
-                            </div>
-                            <div>
-                              <span className="block text-[9px] text-[#64748B] uppercase font-mono">NIK KTP</span>
-                              <strong className="text-slate-800 font-mono">{b.occupant_nik || '-'}</strong>
-                            </div>
-                          </div>
-
-                          <div className="flex gap-2 pt-2 border-t border-slate-100/50">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingOccupantBooking(b);
-                              }}
-                              disabled={processingItems[b.id]}
-                              className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-600 hover:text-white font-extrabold text-[10px] rounded-xl border border-amber-500/20 transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <Edit2 size={11} />
-                              Update Data Penghuni (Si B)
-                            </button>
-                            
-                            {b.occupant_arrival_status !== 'checked_in' && (
-                              <button
-                                type="button"
-                                onClick={() => handleConfirmArrival(b)}
-                                disabled={processingItems[b.id]}
-                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-550 text-white font-extrabold text-[10px] rounded-xl transition-all flex items-center gap-1 cursor-pointer uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {processingItems[b.id] ? (
-                                  <RotateCw size={11} className="animate-spin text-white" />
-                                ) : (
-                                  <CheckCircle size={11} />
-                                )}
-
                   {/* SUBTAB 9: COA INTEGRITY & LEDGER DIAGNOSTICS */}
                   {activeFinanceSubTab === "coa_diag" && (
                     <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-xs space-y-6 animate-fade-in">
@@ -5989,12 +6073,262 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       </div>
                     </div>
                   )}
-                                Konfirmasi Kedatangan (Check-In)
-                              </button>
-                            )}
+ 
+               </div>
+             )}
+
+            {/* TAB 6: BRAND COUPONS OR PROMOS */}
+            {activeTab === 'coupons' && (
+          <div className="space-y-4">
+            {refreshingModule['coupons'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Kupon Promo & Kampanye Diskon</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Terbitkan potongan harga sewa eksklusif untuk mendongkrak minat okupansi.</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setCouponForm({
+                    code: '',
+                    discount_type: 'percentage',
+                    discount_value: 15,
+                    max_discount_amount: 150000,
+                    is_active: true,
+                    description: 'Potongan Diskon Akhir Tahun'
+                  });
+                  setShowCouponModal(true);
+                }}
+                className="bg-amber-500 hover:bg-amber-450 text-black font-extrabold text-[10px] uppercase px-3.5 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
+              >
+                <Plus size={12} />
+                Terbitkan Kupon
+              </button>
+            </div>
+
+            <CouponList coupons={coupons} onDeleteCoupon={handleDeleteCoupon} />
+          </div>
+        )}
+
+        {activeTab === 'bookings_history' && (
+          <div className="space-y-4">
+            {refreshingModule['bookings'] && (
+              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
+                <RotateCw size={10} className="animate-spin" />
+                <span>Menyinkronkan data terbaru...</span>
+              </div>
+            )}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Riwayat Transaksi Pemesanan & Kontrak Sewa</h2>
+                <p className="text-xs text-[#64748B] mt-0.5">Pantau settlement pembayaran, unduh lembar spreadsheet, serta lihat & cetak bukti invoice penagihan.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const headers = ['Order ID', 'Penyewa', 'Unit', 'Masa Kontrak', 'Total Tagihan', 'Pembayaran', 'Status', 'Tanggal Settle', 'No WhatsApp'];
+                  const rows = bookings.map(b => [
+                    b.midtrans_order_id || `BOOK-${b.id}`,
+                    b.tenant_name,
+                    `Kamar ${b.room_number}`,
+                    b.duration_months > 0 ? `${b.duration_months} Bulan` : 'Harian',
+                    String(b.total_price),
+                    b.payment_method || 'Midtrans VA/QRIS',
+                    b.status.toUpperCase(),
+                    b.check_in_date || b.booking_date,
+                    b.phone || '-'
+                  ]);
+                  const csvContent = "data:text/csv;charset=utf-8," 
+                    + [headers.join(','), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))].join('\n');
+                  const encodedUri = encodeURI(csvContent);
+                  const link = document.createElement("a");
+                  link.setAttribute("href", encodedUri);
+                  link.setAttribute("download", `riwayat_sewa_samarastay_${new Date().toISOString().split('T')[0]}.csv`);
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  database.logActivity("System", "EXCEL_EXPORT", "Mengunduh file spreadsheet rekap kontrak sewa");
+                }}
+                className="bg-emerald-600 hover:bg-emerald-550 text-white font-extrabold text-[10px] uppercase px-3 py-2 rounded-xl flex items-center gap-1.5 transition-all shadow-md shrink-0 cursor-pointer"
+              >
+                <Download size={12} />
+                Unduh Rekap CSV
+              </button>
+            </div>
+
+            {/* Live Filter Bar */}
+            <div className="relative">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500 pointer-events-none">
+                <Search size={12} />
+              </span>
+              <input
+                type="text"
+                placeholder="Cari nama penyewa atau nomor kamar..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-xs pl-9 pr-4 py-2.5 rounded-2xl outline-none text-[#3A444D] focus:border-[#0D9488] focus:bg-white transition-colors font-medium"
+              />
+            </div>
+
+            <div className="space-y-3">
+              {bookingsLoading ? (
+                <BookingSkeletonList count={4} />
+              ) : (
+                <>
+                  {(bookings || [])
+                    .filter(b => 
+                      b.tenant_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                      b.room_number.toLowerCase().includes(searchQuery.toLowerCase())
+                    )
+                    .slice(0, 100)
+                    .map(b => {
+                  const propertyName = properties.find(p => p.id === b.property_id)?.name || 'Properti Kos';
+                  return (
+                    <div key={b.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] space-y-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
+                      <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[9px] font-mono bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg border border-blue-100 font-bold uppercase tracking-wider">
+                              {b.midtrans_order_id || `BOOK-${b.id}`}
+                            </span>
+                            <span className="text-[9px] text-slate-500 font-mono italic">
+                              Masuk: {b.booking_date}
+                            </span>
+                          </div>
+                          <h4 className="font-extrabold text-[#3A444D] uppercase mt-1.5 text-sm">
+                            {b.tenant_name}
+                          </h4>
+                          <p className="text-[11px] text-[#64748B] mt-0.5">
+                            Kamar <strong className="text-[#0D9488] font-bold">{b.room_number}</strong> | {propertyName}
+                          </p>
+                          <p className="text-[11px] text-[#64748B] font-mono mt-1">
+                            Durasi: {b.duration_months > 0 ? `${b.duration_months} Bulan` : 'Sewa Harian'} | Mulai Sewa: {b.check_in_date}
+                          </p>
+                        </div>
+                        <div className="text-left sm:text-right space-y-1.5 shrink-0 self-stretch sm:self-auto flex sm:flex-col justify-between sm:justify-start items-center sm:items-end">
+                          <span className={`text-[8px] font-mono px-2.5 py-0.5 rounded-full border font-bold uppercase block w-fit ${
+                            b.status === 'approved' 
+                              ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
+                              : b.status === 'checkout'
+                                ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                : b.status === 'pending'
+                                  ? 'bg-amber-500/10 text-[#0D9488] font-bold border-amber-500/20 animate-pulse'
+                                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          }`}>
+                            {b.status === 'approved' ? 'Lunas / Terverifikasi (Kamar Terkunci)' : b.status === 'checkout' ? 'Selesai / Checked Out' : b.status === 'pending' ? 'Menunggu Bayar' : 'Dibatalkan'}
+                          </span>
+                          <span className="text-sm font-mono font-bold text-[#3A444D] block">
+                            {formatRupiah(b.total_price)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Detail Data Penghuni & Aksi Check-In / Update */}
+                      <div className="bg-slate-50 border border-slate-200/80 p-3.5 rounded-2xl space-y-2.5 mt-2">
+                        <div className="flex justify-between items-center flex-wrap gap-2">
+                          <span className="text-[10px] uppercase font-mono font-bold text-slate-700 tracking-wider flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
+                            {b.is_for_other ? 'Detail Penghuni Utama (Si B) - Pesanan Orang Lain' : 'Detail Data Penghuni Kamar'}
+                          </span>
+                          <span className={`text-[9px] font-mono font-bold px-2.5 py-0.5 rounded-lg border uppercase ${
+                            b.occupant_arrival_status === 'checked_in'
+                              ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                              : 'bg-amber-500/10 text-amber-600 border-amber-500/20 animate-pulse'
+                          }`}>
+                            {b.occupant_arrival_status === 'checked_in' ? '‚úì Sudah Check-In (Settle)' : '‚è≥ Menunggu Kedatangan'}
+                          </span>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-700 p-2.5 bg-white rounded-xl border border-slate-200/60 shadow-2xs">
+                          <div>
+                            <span className="block text-[9px] text-[#64748B] uppercase font-mono">Nama Lengkap</span>
+                            <strong className="text-slate-800 capitalize">{b.occupant_name || b.tenant_name || '-'}</strong>
+                          </div>
+                          <div>
+                            <span className="block text-[9px] text-[#64748B] uppercase font-mono">No. WhatsApp</span>
+                            <strong className="text-slate-800 font-mono">{b.occupant_phone || b.phone || '-'}</strong>
+                          </div>
+                          <div>
+                            <span className="block text-[9px] text-[#64748B] uppercase font-mono">Email</span>
+                            <strong className="text-slate-800 truncate block">{b.occupant_email || b.email || '-'}</strong>
+                          </div>
+                          <div>
+                            <span className="block text-[9px] text-[#64748B] uppercase font-mono">NIK KTP</span>
+                            <strong className="text-slate-800 font-mono">{b.occupant_nik || b.nik || '-'}</strong>
                           </div>
                         </div>
-                      )}
+
+                        {b.is_married && (
+                          <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-2.5 space-y-1 text-xs text-emerald-950">
+                            <div className="flex justify-between items-center flex-wrap gap-2">
+                              <span className="font-bold text-[10px] text-emerald-900 flex items-center gap-1">
+                                üíç Status Pasutri Resmi: {b.spouse_relation === 'suami' ? 'Suami' : 'Istri'} Penyewa
+                              </span>
+                              {b.marriage_certificate_url && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCertificatePreviewModal(b.marriage_certificate_url || null)}
+                                  className="text-[9px] font-bold text-emerald-800 bg-white border border-emerald-300 px-2.5 py-1 rounded-lg hover:bg-emerald-100 transition-colors flex items-center gap-1 cursor-pointer shadow-2xs"
+                                  title="Buka Pratinjau Dokumen Buku Nikah"
+                                >
+                                  <Eye size={11} /> Lihat Buku / Kartu Nikah
+                                </button>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] text-emerald-900 pt-1">
+                              <div>
+                                <span className="text-emerald-700 block text-[9px] uppercase font-mono">Nama Pasangan</span>
+                                <strong>{b.spouse_name || '-'}</strong>
+                              </div>
+                              <div>
+                                <span className="text-emerald-700 block text-[9px] uppercase font-mono">NIK Pasangan</span>
+                                <span className="font-mono font-bold">{b.spouse_nik || '-'}</span>
+                              </div>
+                              <div>
+                                <span className="text-emerald-700 block text-[9px] uppercase font-mono">No. WhatsApp</span>
+                                <span className="font-mono font-bold">{b.spouse_phone || '-'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex gap-2 pt-1.5 border-t border-slate-200/60 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => setEditingOccupantBooking(b)}
+                            disabled={processingItems[b.id]}
+                            className="px-3 py-1.5 bg-amber-50 hover:bg-amber-500 text-amber-700 hover:text-white font-bold text-[10px] rounded-xl border border-amber-200 hover:border-amber-500 transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed shadow-2xs"
+                          >
+                            <Edit2 size={11} />
+                            Update Data Penghuni
+                          </button>
+                          
+                          {b.occupant_arrival_status !== 'checked_in' ? (
+                            <button
+                              type="button"
+                              onClick={() => handleConfirmArrival(b)}
+                              disabled={processingItems[b.id]}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] rounded-xl transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed shadow-2xs"
+                            >
+                              {processingItems[b.id] ? (
+                                <RotateCw size={11} className="animate-spin text-white" />
+                              ) : (
+                                <CheckCircle size={11} />
+                              )}
+                              Konfirmasi Kedatangan (Check-In)
+                            </button>
+                          ) : (
+                            <span className="px-3 py-1 bg-emerald-50 text-emerald-700 font-bold text-[10px] rounded-xl border border-emerald-200 flex items-center gap-1.5 font-mono">
+                              <CheckCircle size={11} className="text-emerald-600" />
+                              Penghuni Telah Check-In
+                            </span>
+                          )}
+                        </div>
+                      </div>
 
                       <div className="flex gap-2 border-t border-[#F1F5F9] pt-3.5 flex-wrap">
                         <button
@@ -6017,7 +6351,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           Lihat & Cetak Invoice (Kwitansi)
                         </button>
 
-                        {b.status === 'pending' && (
+                        {b.status === 'pending' && b.payment_method !== 'Midtrans SNAP' && (
                           <>
                             <button
                               type="button"
@@ -6030,7 +6364,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                               ) : (
                                 <Check size={11} />
                               )}
-                              Setujui Pembayaran
+                              Setujui Pembayaran Manual
                             </button>
                             <button
                               type="button"
@@ -6194,9 +6528,31 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <div className="flex justify-between items-start">
                         <div>
                           <h4 className="font-extrabold text-[#3A444D] text-base tracking-tight truncate capitalize">{t.full_name}</h4>
-                          <p className="text-[10px] text-[#64748B] font-mono font-bold uppercase">{propertyName}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            <p className="text-[10px] text-[#64748B] font-mono font-bold uppercase">{propertyName}</p>
+                            {t.is_married ? (
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                                üíç Pasutri ({t.spouse_relation === 'suami' ? 'Suami' : 'Istri'}: {t.spouse_name || 'Terdata'})
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">
+                                üë§ Lajang
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTenantForDetail(t);
+                              setShowTenantDetailModal(true);
+                            }}
+                            className="p-1.5 text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                            title="Lihat Detail Lengkap Penghuni"
+                          >
+                            <Eye size={13} />
+                          </button>
                           <button
                             type="button"
                             onClick={() => {
@@ -6205,11 +6561,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 full_name: t.full_name,
                                 phone: t.phone,
                                 email: t.email || '',
+                                nik: t.nik || '',
                                 property_id: t.property_id,
                                 room_number: t.room_number,
                                 start_date: t.start_date,
                                 duration_months: t.duration_months || 1,
-                                payment_status: (t.payment_status as any) || 'paid'
+                                payment_status: (t.payment_status as any) || 'paid',
+                                is_married: !!t.is_married,
+                                marriage_certificate_url: t.marriage_certificate_url || '',
+                                spouse_name: t.spouse_name || '',
+                                spouse_nik: t.spouse_nik || '',
+                                spouse_phone: t.spouse_phone || '',
+                                spouse_relation: t.spouse_relation || 'istri'
                               });
                               setShowTenantModal(true);
                             }}
@@ -6231,12 +6594,37 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                       <div className="space-y-1 text-[#64748B] text-[11px]">
                         <p> Kamar Alokasi: <strong className="text-[#0D9488] font-bold font-mono">Kamar {t.room_number}</strong></p>
+                        <p> NIK KTP: <span className="font-mono text-[#3A444D] font-bold">{t.nik || '-'}</span></p>
                         <p> No. WhatsApp: <span className="font-mono text-[#3A444D]">{t.phone}</span></p>
                         <p> Jangka Pemesanan: <span className="font-mono text-[#3A444D] font-bold">{t.duration_months || 1} Bulan</span></p>
                         <p className="text-[10px] text-[#64748B] mt-1">
                           Periode: <span className="font-mono font-bold text-[#64748B]">{t.start_date}</span> s/d <span className="font-mono font-bold text-[#64748B]">{dateEnd}</span>
                         </p>
                       </div>
+
+                      {t.is_married && (
+                        <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-2.5 space-y-1 text-emerald-950 text-[11px]">
+                          <div className="flex justify-between items-center">
+                            <span className="font-bold text-[10px] text-emerald-900 flex items-center gap-1">
+                              üíç Data Pasangan ({t.spouse_relation === 'suami' ? 'Suami' : 'Istri'}): <strong className="text-emerald-950">{t.spouse_name || '-'}</strong>
+                            </span>
+                            {t.marriage_certificate_url && (
+                              <button
+                                type="button"
+                                onClick={() => setCertificatePreviewModal(t.marriage_certificate_url || null)}
+                                className="text-[9px] font-bold text-emerald-800 bg-white border border-emerald-300 px-2 py-0.5 rounded-md hover:bg-emerald-100 transition-colors flex items-center gap-1 cursor-pointer shadow-2xs"
+                                title="Lihat Bukti Buku Nikah"
+                              >
+                                <Eye size={10} /> Lihat Buku Nikah
+                              </button>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-emerald-800">
+                            <span>NIK: <strong className="font-mono">{t.spouse_nik || '-'}</strong></span>
+                            <span>WA: <strong className="font-mono">{t.spouse_phone || '-'}</strong></span>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="flex gap-2 pt-3 border-t border-[#F1F5F9] mt-3 flex-wrap items-center justify-between">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -6311,6 +6699,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                   >
                                     <History size={11} className="text-slate-600" />
                                     Riwayat Bayar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedTenantForDetail(t);
+                                      setShowTenantDetailModal(true);
+                                    }}
+                                    className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                    title="Lihat Data Lengkap Identitas, Pasangan & Kontrak"
+                                  >
+                                    <Eye size={11} className="text-emerald-700" />
+                                    Data Lengkap
                                   </button>
                                 </div>
                               );
@@ -7928,6 +8328,24 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </div>
           </div>
 
+          {/* Checkbox Tampilkan di Halaman Depan */}
+          <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-1 text-left">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={facilityForm.showOnHomepage}
+                onChange={(e) => setFacilityForm({ ...facilityForm, showOnHomepage: e.target.checked })}
+                className="w-4 h-4 text-emerald-600 accent-emerald-600 rounded cursor-pointer"
+              />
+              <span className="text-xs font-extrabold text-emerald-950">
+                Tampilkan fasilitas ini di halaman beranda depan (End-User)
+              </span>
+            </label>
+            <p className="text-[10px] text-emerald-700 pl-6 leading-relaxed">
+              Jika dicentang, fasilitas ini akan langsung disinkronkan dan muncul di bagian "Fasilitas Standar Setiap Cabang" pada beranda website.
+            </p>
+          </div>
+
           <div className="flex gap-2 pt-2">
             <button
               type="button"
@@ -7946,6 +8364,207 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Homepage Facilities Manager & Ordering Modal */}
+      <Modal
+        isOpen={showHomepageManagerModal}
+        onClose={() => setShowHomepageManagerModal(false)}
+        title="Kelola & Urutkan Fasilitas Tampilan Depan (Beranda)"
+      >
+        <div className="space-y-5 font-sans text-xs text-[#3A444D] text-left">
+          <div className="bg-emerald-50/80 border border-emerald-200 p-3.5 rounded-2xl space-y-1">
+            <div className="flex items-center gap-1.5 text-emerald-800 font-extrabold text-xs">
+              <Sparkles size={14} className="text-emerald-600" />
+              <span>Susunan Fasilitas Halaman Depan Calon Penyewa</span>
+            </div>
+            <p className="text-[11px] text-emerald-900/80 leading-relaxed">
+              Daftar di bawah ini menentukan fasilitas apa saja yang tampil di halaman depan beserta urutannya. Gunakan tombol panah untuk memindahkan urutan, sesuaikan label teks jika diinginkan, atau tambahkan fasilitas baru dari daftar master.
+            </p>
+          </div>
+
+          {/* List of currently selected facilities */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] font-bold text-[#64748B] uppercase tracking-wider">
+              <span>Daftar Fasilitas Aktif ({tempHomepageList.length})</span>
+              <span className="text-[10px] lowercase font-normal">Gunakan tombol panah untuk mengatur urutan</span>
+            </div>
+
+            {tempHomepageList.length === 0 ? (
+              <div className="p-6 bg-slate-50 border border-dashed border-slate-300 rounded-2xl text-center space-y-2">
+                <AlertCircle className="mx-auto text-amber-500" size={20} />
+                <p className="text-xs font-bold text-slate-700">Belum Ada Fasilitas yang Ditampilkan di Halaman Depan</p>
+                <p className="text-[10px] text-slate-500">Pilih fasilitas dari daftar master di bawah untuk menambahkannya ke beranda.</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {tempHomepageList.map((item, index) => {
+                  const IconComp = (LucideIcons as any)[item.icon] || LucideIcons.Sparkles;
+                  return (
+                    <div key={index} className="flex items-center gap-2.5 p-2.5 bg-white border border-[#E2E8F0] hover:border-emerald-300 rounded-xl shadow-2xs transition-all">
+                      {/* Order Badge */}
+                      <span className="w-6 h-6 rounded-lg bg-slate-100 text-slate-700 text-[11px] font-extrabold flex items-center justify-center shrink-0">
+                        {index + 1}
+                      </span>
+
+                      {/* Icon */}
+                      <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                        <IconComp size={16} />
+                      </div>
+
+                      {/* Inputs for Title and Subtitle */}
+                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
+                        <input
+                          type="text"
+                          value={item.title}
+                          onChange={(e) => {
+                            const updated = [...tempHomepageList];
+                            updated[index] = { ...updated[index], title: e.target.value };
+                            setTempHomepageList(updated);
+                          }}
+                          placeholder="Nama Fasilitas"
+                          className="bg-[#F8FAFC] border border-[#E2E8F0] px-2.5 py-1.5 rounded-lg text-xs font-bold outline-none focus:border-emerald-600"
+                        />
+                        <input
+                          type="text"
+                          value={item.subtitle || ''}
+                          onChange={(e) => {
+                            const updated = [...tempHomepageList];
+                            updated[index] = { ...updated[index], subtitle: e.target.value };
+                            setTempHomepageList(updated);
+                          }}
+                          placeholder="Subtitle (cth: 24 Jam / Tersedia)"
+                          className="bg-[#F8FAFC] border border-[#E2E8F0] px-2.5 py-1.5 rounded-lg text-xs outline-none focus:border-emerald-600"
+                        />
+                      </div>
+
+                      {/* Move buttons */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          title="Geser ke atas"
+                          disabled={index === 0}
+                          onClick={() => {
+                            if (index === 0) return;
+                            const updated = [...tempHomepageList];
+                            const temp = updated[index];
+                            updated[index] = updated[index - 1];
+                            updated[index - 1] = temp;
+                            setTempHomepageList(updated);
+                          }}
+                          className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ArrowUp size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Geser ke bawah"
+                          disabled={index === tempHomepageList.length - 1}
+                          onClick={() => {
+                            if (index === tempHomepageList.length - 1) return;
+                            const updated = [...tempHomepageList];
+                            const temp = updated[index];
+                            updated[index] = updated[index + 1];
+                            updated[index + 1] = temp;
+                            setTempHomepageList(updated);
+                          }}
+                          className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ArrowDown size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Hapus dari tampilan depan"
+                          onClick={() => {
+                            const updated = tempHomepageList.filter((_, i) => i !== index);
+                            setTempHomepageList(updated);
+                          }}
+                          className="p-1.5 rounded-lg border border-red-100 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white transition cursor-pointer"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Quick Add from Master Facilities */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+            <span className="text-[11px] font-bold text-slate-700 block uppercase tracking-wider">
+              Tambahkan dari Master Fasilitas
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {facilitiesList
+                .filter(fac => !tempHomepageList.some(th => 
+                  (th.id !== undefined && fac.id !== undefined && th.id === fac.id) ||
+                  th.title.trim().toLowerCase() === fac.title.trim().toLowerCase()
+                ))
+                .map(fac => {
+                  const IconComp = (LucideIcons as any)[fac.icon] || LucideIcons.Sparkles;
+                  return (
+                    <button
+                      key={fac.id}
+                      type="button"
+                      onClick={() => {
+                        setTempHomepageList([
+                          ...tempHomepageList,
+                          {
+                            id: fac.id,
+                            icon: fac.icon || 'Sparkles',
+                            title: fac.title,
+                            subtitle: fac.subtitle || ''
+                          }
+                        ]);
+                      }}
+                      className="px-2.5 py-1.5 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded-xl text-xs font-semibold text-slate-700 hover:text-emerald-800 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                    >
+                      <IconComp size={12} className="text-emerald-600" />
+                      <span>+ {fac.title}</span>
+                    </button>
+                  );
+                })}
+              {facilitiesList.filter(fac => !tempHomepageList.some(th => 
+                (th.id !== undefined && fac.id !== undefined && th.id === fac.id) ||
+                th.title.trim().toLowerCase() === fac.title.trim().toLowerCase()
+              )).length === 0 && (
+                <span className="text-[11px] text-slate-400 italic">Semua fasilitas master sudah berada di daftar tampilan depan.</span>
+              )}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-2 border-t border-[#F1F5F9]">
+            <button
+              type="button"
+              disabled={isSavingHomepageFacilities}
+              onClick={() => setShowHomepageManagerModal(false)}
+              className="flex-1 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B] font-bold transition-all cursor-pointer disabled:opacity-50"
+            >
+              Batal
+            </button>
+            <button
+              type="button"
+              disabled={isSavingHomepageFacilities}
+              onClick={() => handleSaveCustomHomepageFacilities(tempHomepageList)}
+              className="flex-1 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-xs disabled:opacity-50"
+            >
+              {isSavingHomepageFacilities ? (
+                <>
+                  <RotateCw size={14} className="animate-spin" />
+                  <span>Menyimpan ke Beranda...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={14} />
+                  <span>Simpan Susunan Beranda</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Third-Party Occupant Editor modal */}
@@ -8490,6 +9109,143 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </div>
           </div>
 
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Nomor Induk Kependudukan (NIK KTP)</label>
+            <input 
+              type="text"
+              maxLength={16}
+              value={tenantForm.nik}
+              onChange={(e) => setTenantForm({ ...tenantForm, nik: e.target.value.replace(/[^0-9]/g, '') })}
+              placeholder="16 Digit NIK KTP Penghuni"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono text-xs focus:border-[#0D9488]"
+            />
+          </div>
+
+          <div className="bg-emerald-50/70 border border-emerald-200/90 rounded-2xl p-3.5 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input 
+                  type="checkbox"
+                  checked={tenantForm.is_married}
+                  onChange={(e) => setTenantForm({ ...tenantForm, is_married: e.target.checked })}
+                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
+                />
+                <div>
+                  <span className="font-extrabold text-xs text-emerald-950 block">Status Menikah (Pasangan Suami Istri)</span>
+                  <span className="text-[10px] text-emerald-700 block">Centang jika kamar ini disewa oleh pasangan pasutri</span>
+                </div>
+              </label>
+              <span className="text-base">üíç</span>
+            </div>
+
+            {tenantForm.is_married && (
+              <div className="space-y-3 pt-2 border-t border-emerald-200/70">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-emerald-900 font-mono">Hubungan Pasangan</label>
+                    <select
+                      value={tenantForm.spouse_relation}
+                      onChange={(e) => setTenantForm({ ...tenantForm, spouse_relation: e.target.value })}
+                      className="w-full bg-white border border-emerald-200 p-2.5 rounded-xl cursor-pointer text-xs font-bold text-emerald-950 focus:border-emerald-500"
+                    >
+                      <option value="istri">Istri Pemesan</option>
+                      <option value="suami">Suami Pemesan</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-emerald-900 font-mono">Nama Lengkap Pasangan</label>
+                    <input 
+                      type="text"
+                      value={tenantForm.spouse_name}
+                      onChange={(e) => setTenantForm({ ...tenantForm, spouse_name: e.target.value })}
+                      placeholder="Nama lengkap suami / istri"
+                      className="w-full bg-white border border-emerald-200 p-2.5 rounded-xl outline-none text-xs font-semibold focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-emerald-900 font-mono">NIK KTP Pasangan</label>
+                    <input 
+                      type="text"
+                      maxLength={16}
+                      value={tenantForm.spouse_nik}
+                      onChange={(e) => setTenantForm({ ...tenantForm, spouse_nik: e.target.value.replace(/[^0-9]/g, '') })}
+                      placeholder="16 Digit NIK Pasangan"
+                      className="w-full bg-white border border-emerald-200 p-2.5 rounded-xl outline-none font-mono text-xs focus:border-emerald-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-emerald-900 font-mono">No. WhatsApp Pasangan</label>
+                    <input 
+                      type="tel"
+                      value={tenantForm.spouse_phone}
+                      onChange={(e) => setTenantForm({ ...tenantForm, spouse_phone: e.target.value })}
+                      placeholder="0812xxxxxxxx"
+                      className="w-full bg-white border border-emerald-200 p-2.5 rounded-xl outline-none font-mono text-xs focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase font-bold text-emerald-900 font-mono flex items-center justify-between">
+                    <span>Unggah Bukti Buku Nikah / Kartu Nikah</span>
+                    {tenantForm.marriage_certificate_url && (
+                      <span className="text-emerald-700 font-normal normal-case">‚úì File terlampir</span>
+                    )}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="file"
+                      accept="image/*,.pdf"
+                      disabled={isUploadingTenantCert}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setIsUploadingTenantCert(true);
+                        try {
+                          const res = await uploadToSupabaseStorage(file, 'samara-documents', 'marriage_certificates');
+                          if (res && res.publicUrl) {
+                            setTenantForm(prev => ({ ...prev, marriage_certificate_url: res.publicUrl }));
+                            showToast('Bukti buku nikah berhasil diunggah!');
+                          } else {
+                            showToast('Gagal mengunggah file berkas', 'error');
+                          }
+                        } catch (err: any) {
+                          showToast(err.message || 'Gagal upload dokumen', 'error');
+                        } finally {
+                          setIsUploadingTenantCert(false);
+                        }
+                      }}
+                      className="text-[11px] text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[10px] file:font-bold file:bg-emerald-700 file:text-white hover:file:bg-emerald-800 cursor-pointer"
+                    />
+                    {isUploadingTenantCert && <RotateCw size={14} className="animate-spin text-emerald-600" />}
+                  </div>
+                  {tenantForm.marriage_certificate_url && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <a 
+                        href={tenantForm.marriage_certificate_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-emerald-800 hover:underline flex items-center gap-1 font-mono font-bold"
+                      >
+                        <ExternalLink size={11} /> Pratinjau Berkas
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => setTenantForm(prev => ({ ...prev, marriage_certificate_url: '' }))}
+                        className="text-rose-600 hover:text-rose-700 text-[10px] font-bold"
+                      >
+                        Hapus
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Pilih Properti Kos</label>
@@ -8580,6 +9336,335 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         </form>
       </Modal>
+
+      {/* Modal Detail Lengkap Penghuni & Legalitas Pasutri */}
+      <Modal
+        isOpen={showTenantDetailModal}
+        onClose={() => {
+          setShowTenantDetailModal(false);
+          setSelectedTenantForDetail(null);
+        }}
+        title="DATA LENGKAP PENGHUNI & LEGALITAS"
+      >
+        {selectedTenantForDetail && (() => {
+          const t = selectedTenantForDetail;
+          const property = properties.find(p => p.id === t.property_id);
+          const leaseInfo = calculateLeaseRemaining(t.start_date, t.duration_months || 1);
+          const dateEnd = leaseInfo.endDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+          const cleanPhone = (t.phone || '').replace(/[^0-9]/g, '').replace(/^0/, '62');
+          const cleanSpousePhone = (t.spouse_phone || '').replace(/[^0-9]/g, '').replace(/^0/, '62');
+
+          return (
+            <div className="space-y-5 text-xs text-[#3A444D] text-left max-h-[80vh] overflow-y-auto pr-1">
+              {/* Profile Header */}
+              <div className="flex items-center gap-3.5 p-4 bg-slate-50 border border-slate-200/80 rounded-2xl">
+                <div className="w-12 h-12 rounded-2xl bg-teal-600 text-white font-extrabold text-base flex items-center justify-center shrink-0 shadow-md">
+                  {t.avatar_initials || t.full_name.slice(0, 2).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-extrabold text-slate-800 tracking-tight capitalize">{t.full_name}</h3>
+                    {t.is_married ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1 font-mono">
+                        üíç PASANGAN PASUTRI
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 border border-slate-300 font-mono">
+                        üë§ LAJANG / SENDIRI
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                    üè¢ {property?.name || 'Cabang Kos'} ‚Ä¢ Alokasi <strong className="text-teal-700 font-bold">Kamar {t.room_number}</strong>
+                  </p>
+                </div>
+              </div>
+
+              {/* Section 1: Identitas Penyewa Utama */}
+              <div className="border border-slate-200 rounded-2xl p-4 bg-white space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <Users size={13} className="text-teal-600" />
+                    Identitas & Kontak Penyewa Utama
+                  </h4>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md font-mono ${
+                    t.status === 'checkout' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                  }`}>
+                    {t.status === 'checkout' ? 'CHECKED OUT' : 'AKTIF BERJALAN'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Nomor Induk Kependudukan (NIK)</span>
+                    <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                      {t.nik || 'Belum diisi'}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Nomor WhatsApp / Telepon</span>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 flex-1">
+                        {t.phone || '-'}
+                      </p>
+                      {cleanPhone && (
+                        <a
+                          href={`https://wa.me/${cleanPhone}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold transition flex items-center gap-1 shrink-0"
+                          title="Hubungi via WhatsApp"
+                        >
+                          <Mail size={11} /> Chat
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Alamat Email</span>
+                    <p className="font-mono text-slate-700 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 truncate">
+                      {t.email || '-'}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Status Pembayaran</span>
+                    <p className="font-mono font-bold text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 uppercase">
+                      {t.payment_status === 'paid' ? '‚úÖ Lunas (Paid)' : t.payment_status === 'overdue' ? '‚ö†Ô∏è Tunggakan (Overdue)' : '‚è≥ Belum Bayar (Pending)'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100 text-[11px]">
+                  <div>
+                    <span className="text-[10px] text-slate-500 font-mono uppercase block">Mulai Sewa</span>
+                    <strong className="text-slate-800 font-mono">{t.start_date || '-'}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 font-mono uppercase block">Durasi Sewa</span>
+                    <strong className="text-slate-800 font-mono">{t.duration_months || 1} Bulan</strong>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 font-mono uppercase block">Selesai Sewa</span>
+                    <strong className="text-slate-800 font-mono">{dateEnd}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 2: Data Pasangan & Dokumen Pernikahan */}
+              <div className="border border-slate-200 rounded-2xl p-4 bg-white space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <span>üíç</span>
+                    Legalitas Keluarga & Data Pasangan
+                  </h4>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md font-mono ${
+                    t.is_married ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                  }`}>
+                    {t.is_married ? 'TERDAFTAR PASUTRI' : 'TIDAK MENIKAH'}
+                  </span>
+                </div>
+
+                {t.is_married ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] text-slate-500 font-mono uppercase">Hubungan Keluarga</span>
+                        <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 capitalize">
+                          {t.spouse_relation === 'suami' ? 'Suami Pemesan' : 'Istri Pemesan'}
+                        </p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] text-slate-500 font-mono uppercase">Nama Lengkap Pasangan</span>
+                        <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                          {t.spouse_name || '-'}
+                        </p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] text-slate-500 font-mono uppercase">NIK KTP Pasangan</span>
+                        <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                          {t.spouse_nik || '-'}
+                        </p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] text-slate-500 font-mono uppercase">No. WhatsApp Pasangan</span>
+                        <div className="flex items-center gap-2">
+                          <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 flex-1">
+                            {t.spouse_phone || '-'}
+                          </p>
+                          {cleanSpousePhone && (
+                            <a
+                              href={`https://wa.me/${cleanSpousePhone}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold transition flex items-center gap-1 shrink-0"
+                              title="Hubungi Pasangan via WhatsApp"
+                            >
+                              <Mail size={11} /> Chat
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Pratinjau Dokumen Buku Nikah */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-700 font-mono uppercase flex items-center gap-1.5">
+                          <FileText size={13} className="text-emerald-700" />
+                          Bukti Buku Nikah / Kartu Nikah
+                        </span>
+                        {t.marriage_certificate_url && (
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setCertificatePreviewModal(t.marriage_certificate_url || null)}
+                              className="text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2.5 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye size={11} /> Perbesar Gambar
+                            </button>
+                            <a
+                              href={t.marriage_certificate_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-2.5 py-1 rounded-lg transition flex items-center gap-1"
+                            >
+                              <ExternalLink size={11} /> Buka Asli
+                            </a>
+                          </div>
+                        )}
+                      </div>
+
+                      {t.marriage_certificate_url ? (
+                        <div 
+                          onClick={() => setCertificatePreviewModal(t.marriage_certificate_url || null)}
+                          className="relative rounded-xl border border-slate-200 overflow-hidden bg-slate-900 group cursor-pointer max-h-56 flex items-center justify-center"
+                        >
+                          <img 
+                            src={t.marriage_certificate_url} 
+                            alt="Buku Nikah / Kartu Nikah" 
+                            className="max-h-56 w-auto object-contain transition-transform group-hover:scale-105"
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white font-bold text-xs gap-2">
+                            <Eye size={16} /> Klik untuk melihat ukuran penuh
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-[11px] flex items-center gap-2">
+                          <AlertCircle size={16} className="shrink-0 text-amber-600" />
+                          <span>Status pasutri dicentang, namun berkas buku nikah / kartu nikah belum diunggah.</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 text-[11px]">
+                    Penghuni ini terdaftar sebagai <strong>Lajang / Perorangan</strong>. Tidak ada kewajiban unggah buku nikah atau data pasangan.
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowTenantDetailModal(false);
+                    setSelectedTenantForDetail(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition text-xs cursor-pointer"
+                >
+                  Tutup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowTenantDetailModal(false);
+                    setActiveTenantEdit(t);
+                    setTenantForm({
+                      full_name: t.full_name,
+                      phone: t.phone,
+                      email: t.email || '',
+                      nik: t.nik || '',
+                      property_id: t.property_id,
+                      room_number: t.room_number,
+                      start_date: t.start_date,
+                      duration_months: t.duration_months || 1,
+                      payment_status: (t.payment_status as any) || 'paid',
+                      is_married: !!t.is_married,
+                      marriage_certificate_url: t.marriage_certificate_url || '',
+                      spouse_name: t.spouse_name || '',
+                      spouse_nik: t.spouse_nik || '',
+                      spouse_phone: t.spouse_phone || '',
+                      spouse_relation: t.spouse_relation || 'istri'
+                    });
+                    setShowTenantModal(true);
+                  }}
+                  className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold transition text-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Edit2 size={12} /> Ubah Data Ini
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Lightbox Modal Pratinjau Buku Nikah / Dokumen Legalitas */}
+      {certificatePreviewModal && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setCertificatePreviewModal(null)}
+        >
+          <div 
+            className="bg-white rounded-3xl max-w-2xl w-full p-5 space-y-4 shadow-2xl relative border border-white/20"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">üíç</span>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-800">BUKTI DOKUMEN BUKU / KARTU NIKAH</h3>
+                  <p className="text-[10px] text-slate-500 font-mono">Dokumen verifikasi pasangan suami istri penghuni Samara Stay</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCertificatePreviewModal(null)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm transition cursor-pointer"
+              >
+                ‚úï
+              </button>
+            </div>
+
+            <div className="bg-slate-950 rounded-2xl overflow-hidden max-h-[70vh] flex items-center justify-center p-2">
+              <img 
+                src={certificatePreviewModal} 
+                alt="Buku Nikah / Dokumen Legalitas" 
+                className="max-h-[65vh] w-auto object-contain rounded-lg"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <a
+                href={certificatePreviewModal}
+                download="buku_nikah_samarastay"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+              >
+                <Download size={13} /> Unduh Berkas
+              </a>
+              <button
+                type="button"
+                onClick={() => setCertificatePreviewModal(null)}
+                className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Tutup Pratinjau
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Custom Confirmation Dialog */}
       <Modal
@@ -8915,13 +10000,151 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <div className="pt-4 border-t border-slate-200 flex justify-between items-end">
                 <div className="text-[9px] text-slate-400">
                   <p className="font-bold text-slate-600">Terverifikasi Sistem Keuangan Samara Stay</p>
-         xúÏY[o⁄H~ÔØπU›5ötìî§¢	ÕVõ§Q Z≠¢äx¿nlœhf\`i˛˚ûÒ|RµR+≠37ü˚˜°‰Í∞„+*§L—I},]ÅÓ:'ˆîptÚ°ãZVÀjÓZñ’i≤„'®puö∂˚E3£hÏa!.±OéIÊ“ì@nîW√z¡pP⁄p{¿ÊQt+	ˆÃ?,Mh Mü4æQœF#èéÔê?2[∆Òm–ª∏Íù£”˜gÔ]ı–ª~—˝ÿi™áhü^êvf∂^!G˝Qnn∂”õHåW ßa`€úÑûá&ô#W_$:¢œ!ÿt≤H2≥´qªØ4ä%˜0ùW.då1I≥‡S∫SGë± ÚÁ&%!$ñƒº5[mõL?j-ã–˘Õe∑ﬂÒÊqø{—ΩÓ¢˛†˚èŒ
-Æ‘kì°¸X¡∞ë°¶òôÌ∆^I⁄Œ(îí%‰Ç¡÷x“(Õ“‡ƒs«wGÀZ#Adﬂ°≥ﬁ\í@∏4∏‚îN.®çΩ⁄{Ç‘ÔK'‰W±ÖpÂ„πó∏?ç·)≥∑¡a˝B¯·höÌY±ü‚_´pçÇ<
-Iê…ƒ3—∫π@„ê MF›†‡Ê¢Æe◊B≤ígbK˝Î.5a3sõŒåÉµ˙Î“ä˚o¥¯‘º}jùÏÓÔ\õ˘ˆi´µ◊€;H™¬ÃÅ¨{¥çÖÉAb5Ò`‚™XmA¨>ËäŒOwˇ%GÀ÷Ó=jñWùâÔPù“Y‡Ql£˜¡Íé…V>,Â\a†”å‚<ÄHOÓñÕ(ö:D◊Ó/∞DWƒ¡ò=OÖÄ¡`ÍÑÅã^4Sü-$”Ä8ê∫BRæàBœüC¶yd,âœæ£<Y†Êjk°¢ı°]ÒÅë‡®‚‡l¨®ÿ£Ç2ªºGìÿ“ïl¸¥Q]=[V)—Pu}@àﬁZú3~°¥∂åâπ0w„pàŸZ∞o%•¡#Y(}≈£ Œ#DÄjíØ;—h;É>mH¶©‚8›ë3BÇ|\Gy6„ò≈Â∑\|ıµﬂŸÕ%´“î‡8Œ∂v§⁄	ﬂ8ﬁ∆®ù¶≥´y+QÄπ–‚?±›–◊‚›íq
- *]"(M5¶Çá5\UFm#Ÿ∂∫v˝MC	âæ~E;gƒÅ˝EÍc"hÁß#$ß0\¥ç‚%∆ÒM‡JTm@$Ñ˛àp∞C|ívul´l†€ñï'IØr$…ó¶•∞ˆoK—eÏpÉ`Ã°ÅrMÈ¡z
-†£x\±ç_ä¸n˘)+¸öˆ¨K9õGà ¿–*ê≠ïnIr<”°Rµíx·CJPßPD1±√∞kÔhπ”¥ŸH|¬±gõ≠4Ã”ï’In¶C/-K‘atVn_ˇÃhÅJ§¯«´™‘8∏È∆ÏpGI˜∂w~së¸.cv{~ $S^TàI Í°á›M·bs9¥aˇñ1πMÀÙÀrÃ◊∫¥˙d»EûŸi∏˙ÃUÒòÈPJÙ"Â;¶π&%ª¶|»–qãS<É°Å¢@¯N∏ z<ˆ”< «QQ2ß*»Ö¡e≠äˆçi $XDπ∏6óRÜê+Í-ŒA#®¡(^˘’IØÔ>Têa
-p-≥#* ¿.
-CIœÈåÖíw”°+ o™kxkV≈ƒfJÕ$©D™X/Ÿ˜∞R>hΩƒµJºµK–9È†ﬂ
-:$„ØãŒj6Aµ¬y ™U◊“~Nd»É”ÀESu˚Ø*˙> vLY2ìÁ;6±K]WEüè}Ázd†B-N¢ˆ~.â“∂9ì»Ph’{É∂6£íC´II±∏%¨‰-ÒBa#ûOñME,q#+FÍ&â)U9ÅRç¬@Üw∞"XêÜi∑°%ëp˙ûÿø¶+{|É´
-g˘xn:ÊÌÀΩ® ´Œl‚A;µàçÀ∏*ÓZaóô‡Ù1´©‹éÍã>àÓ»ËÇ2˜≥• |◊ ,–Â∏¨j“3]%3_nAñìv3C∫UúËõÀ `¨‚‘’&~\‰Œ)æ<”b÷ÅJú&ÙUx=MçZ˝z¨˙I)ç;Xø’Jπõ s+”“∏õñ¥e/%ïÜ¿ä¿@`åxôî∆ÿ@∏ Ô:≤W◊ ^À%å®T$«EÔÚÊÚÏÏ∆(Û™úytAeæØËËXKC«“∆`£@ß!«H⁄Ê~'≤IaÉ“˜Ë-º`’‡†Z¥, ≥aÜÿ!—¥—jÇv<\ﬂhÇäZ∏Ö}’≥TU˜:◊£ÇE&î˚X^áÃ≈NÌ2Íıb&£‡uà}H
-©ËçUØÎ»mı√+ˆnñ`'sSˆÀ7é¿¿Qk÷Ô®êœ6LcÛ≥7s√dΩÆÅu-L$Êo∞@ ˛˛Âs+Óë@@b“üîTŸ¬ä„‡(ÆΩ≈IéÅ±äüæYÚ5d\]Ë˜˙ø`\ImÚ `(§–ÈÈ–®◊3¢ﬁuB∏±·ΩXVµ_îˆ?‘Sò˛RøıÜROr_Øˆo˝1-›@ì∫⁄ﬂÒk‚Vﬂ‚+#'î¿›Ë√÷∫€mï?∂≠Mﬂìn3^y ˙ûﬂˇ})∑º{ˇ˙…ìˇ   ˇˇ ¨S˙$
+                  <p>Posting Otomatis ke Ledger COA 1010/4000</p>
+                </div>
+                <div className="text-center">
+                  <span className="text-[9px] text-teal-700 font-mono font-bold block mb-1">[STEMPEL DIGITAL DITERIMA]</span>
+                  <div className="w-16 h-16 border-2 border-teal-600 rounded-full flex items-center justify-center p-1 text-[8px] font-black text-teal-700 uppercase tracking-tighter text-center mx-auto rotate-[-12deg]">
+                    LUNAS<br/>SAMARA STAY
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowExtensionProofModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold transition-all text-xs cursor-pointer text-center"
+              >
+                Tutup
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.print();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-bold transition-all text-xs cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
+              >
+                <Printer size={14} />
+                Cetak / Download Invoice
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal: Riwayat Pembayaran & Invoice Penghuni */}
+      {showTenantHistoryModal && selectedTenantForHistory && (
+        <Modal
+          isOpen={showTenantHistoryModal}
+          onClose={() => setShowTenantHistoryModal(false)}
+          title={`Riwayat Pembayaran & Invoice - ${selectedTenantForHistory.full_name}`}
+        >
+          <div className="space-y-4 font-sans text-slate-800 text-left">
+            <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4 flex justify-between items-center flex-wrap gap-2">
+              <div>
+                <h4 className="font-extrabold text-teal-900 text-sm">{selectedTenantForHistory.full_name}</h4>
+                <p className="text-xs text-teal-700 font-medium">
+                  {properties.find(p => p.id === selectedTenantForHistory.property_id)?.name || 'Gedung Kos Samara'} - <strong className="font-mono">Unit {selectedTenantForHistory.room_number}</strong>
+                </p>
+                <p className="text-[10px] text-teal-600 font-mono mt-0.5">WhatsApp: {selectedTenantForHistory.phone}</p>
+              </div>
+              <div className="text-right">
+                <span className={`text-[10px] uppercase font-bold px-2.5 py-1 rounded-full font-mono border ${
+                  selectedTenantForHistory.payment_status === 'paid'
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : 'bg-amber-100 text-amber-800 border-amber-300'
+                }`}>
+                  {selectedTenantForHistory.payment_status === 'paid' ? 'STATUS: LUNAS' : 'BELUM LUNAS'}
+                </span>
+                <p className="text-[10px] text-slate-500 font-mono mt-1">Mulai: {selectedTenantForHistory.start_date}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                <History size={14} className="text-[#0D9488]" />
+                Daftar Transaksi Perpanjangan & Invoice Payment
+              </h4>
+
+              {(() => {
+                const tenantExts = contractExtensionsList.filter(ext => ext.tenant_id === selectedTenantForHistory.id || (ext.tenant_name && ext.tenant_name.toLowerCase() === selectedTenantForHistory.full_name.toLowerCase()));
+                const tenantPayments = payments.filter(p => p.tenant_name && p.tenant_name.toLowerCase() === selectedTenantForHistory.full_name.toLowerCase());
+                const totalInvoices = tenantExts.length + tenantPayments.length;
+
+                if (totalInvoices === 0) {
+                  return (
+                    <div className="text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                      <FileText size={28} className="mx-auto text-slate-300 mb-2" />
+                      <p className="text-xs text-slate-500 font-medium">Belum ada riwayat perpanjangan atau pembayaran invoice tercatat untuk penyewa ini.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
+                    {tenantExts.map((ext) => (
+                      <div key={`ext-${ext.id}`} className="bg-white border border-slate-200 rounded-xl p-3 flex justify-between items-center hover:border-teal-300 transition-all text-xs">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-slate-900">Perpanjangan Sewa #{ext.id}</span>
+                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full font-mono ${
+                              ext.payment_status === "paid" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                            }`}>
+                              {ext.payment_status === "paid" ? "LUNAS" : "MENUNGGU"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Durasi: <strong className="font-mono">{ext.extension_months} Bulan</strong> ({ext.new_start_date} s/d {ext.new_end_date})
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-mono font-bold text-teal-700">{formatRupiah(Number(ext.total_amount || 0))}</p>
+                          <p className="text-[10px] text-slate-400 font-mono">{ext.created_at?.substring(0, 10) || "-"}</p>
+                        </div>
+                      </div>
+                    ))}
+
+                    {tenantPayments.map((pmt) => (
+                      <div key={`pmt-${pmt.id}`} className="bg-white border border-slate-200 rounded-xl p-3 flex justify-between items-center hover:border-teal-300 transition-all text-xs">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-slate-900">Pembayaran Sewa #{pmt.id}</span>
+                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full font-mono ${
+                              pmt.status === "approved" || pmt.status === "success" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                            }`}>
+                              {pmt.status === "approved" || pmt.status === "success" ? "LUNAS" : "PROSES"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Metode: <strong className="font-mono">{pmt.payment_method || "Transfer"}</strong>
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-mono font-bold text-teal-700">{formatRupiah(Number(pmt.amount || 0))}</p>
+                          <p className="text-[10px] text-slate-400 font-mono">{pmt.date || "-"}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowTenantHistoryModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
