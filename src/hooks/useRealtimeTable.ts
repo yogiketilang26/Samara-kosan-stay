@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { realtimeManager } from '../lib/supabase';
+import { normalizeCoordinatePair } from '../utils/mapCoordinates';
 
 export function useRealtimeTable<T>(
   tableName: string, 
@@ -58,9 +59,20 @@ export function useRealtimeTable<T>(
       
       // Also apply optimistic differential patch if raw row is provided
       if (payload && payload.new && payload.eventType === 'UPDATE') {
+        let updatedItem = { ...payload.new };
+        if (tableName === 'properties' && (updatedItem.lat !== undefined || updatedItem.latitude !== undefined)) {
+          const norm = normalizeCoordinatePair(
+            updatedItem.lat ?? updatedItem.latitude,
+            updatedItem.lng ?? updatedItem.longitude
+          );
+          if (norm) {
+            updatedItem.lat = norm.lat;
+            updatedItem.lng = norm.lng;
+          }
+        }
         setData((currentData) =>
           currentData.map((item: any) =>
-            (item as any)?.id === payload.new.id ? { ...item, ...payload.new } : item
+            (item as any)?.id === payload.new.id ? { ...item, ...updatedItem } : item
           )
         );
       } else if (payload && payload.old && payload.eventType === 'DELETE') {

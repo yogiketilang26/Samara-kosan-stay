@@ -5,6 +5,7 @@ import {
   AMENITY_CATEGORIES, 
   AmenityCategoryConfig, 
   INITIAL_NEARBY_AMENITIES,
+  getAmenitiesForProperty,
   fetchNearbyAmenitiesFromOSM,
   clearFacilityCache
 } from '../../data/nearbyAmenities';
@@ -19,11 +20,17 @@ import * as LucideIcons from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { 
+  createGoogleMapsRoadmapLayer,
+  createGoogleMapsHybridLayer,
   createOsmStandardTileLayer, 
   createSatelliteTileLayer, 
+  GOOGLE_ATTRIBUTION,
   OSM_ATTRIBUTION,
-  ESRI_SATELLITE_ATTRIBUTION
+  ESRI_SATELLITE_ATTRIBUTION,
+  getGoogleMapsSearchUrl,
+  getGoogleMapsDirectionsUrl
 } from '../../utils/mapTiles';
+import { parseGoogleMapsCoordinates, normalizeCoordinatePair } from '../../utils/mapCoordinates';
 
 interface AdminMapCoordinateManagerProps {
   properties: Property[];
@@ -45,64 +52,6 @@ function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return Math.round(R * c);
-}
-
-// Robust Google Maps Coordinate Parser
-export function parseGoogleMapsCoordinates(input: string): { lat: number; lng: number } | null {
-  if (!input || !input.trim()) return null;
-  const str = input.trim();
-
-  // Pattern 1: URL with @lat,lng
-  const urlAtMatch = str.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
-  if (urlAtMatch) {
-    const lat = parseFloat(urlAtMatch[1]);
-    const lng = parseFloat(urlAtMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
-    }
-  }
-
-  // Pattern 2: URL with query param ?q=lat,lng or ?query=lat,lng or ?ll=lat,lng or /search/lat,lng
-  const urlQueryMatch = str.match(/[?&/](?:q|query|ll|search)(?:=|\/)?(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)/i);
-  if (urlQueryMatch) {
-    const lat = parseFloat(urlQueryMatch[1]);
-    const lng = parseFloat(urlQueryMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
-    }
-  }
-
-  // Pattern 3: Embed !3dlat!4dlng
-  const embedMatch = str.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-  if (embedMatch) {
-    const lat = parseFloat(embedMatch[1]);
-    const lng = parseFloat(embedMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
-    }
-  }
-
-  // Pattern 4: Plain coordinate pair e.g. "-6.195621, 106.848815"
-  const plainMatch = str.match(/(-?\d{1,2}\.\d+)[,\s\t]+(-?\d{1,3}\.\d+)/);
-  if (plainMatch) {
-    const lat = parseFloat(plainMatch[1]);
-    const lng = parseFloat(plainMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
-    }
-  }
-
-  // Pattern 5: DMS notation e.g. 6°11'44.2"S 106°50'55.7"E
-  const dmsMatch = str.match(/(\d+)°(\d+)'([\d.]+)"?([NS])[,\s]+(\d+)°(\d+)'([\d.]+)"?([EW])/i);
-  if (dmsMatch) {
-    let lat = parseInt(dmsMatch[1], 10) + parseInt(dmsMatch[2], 10) / 60 + parseFloat(dmsMatch[3]) / 3600;
-    if (dmsMatch[4].toUpperCase() === 'S') lat = -lat;
-    let lng = parseInt(dmsMatch[5], 10) + parseInt(dmsMatch[6], 10) / 60 + parseFloat(dmsMatch[7]) / 3600;
-    if (dmsMatch[8].toUpperCase() === 'W') lng = -lng;
-    return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
-  }
-
-  return null;
 }
 
 export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps> = ({
@@ -171,9 +120,10 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const propertyLayerRef = useRef<L.LayerGroup | null>(null);
   const amenityLayerRef = useRef<L.LayerGroup | null>(null);
   const tempMarkerLayerRef = useRef<L.LayerGroup | null>(null);
-  const baseLayersRef = useRef<{ osm: L.TileLayer | null; satellite: L.TileLayer | null }>({ osm: null, satellite: null });
+  type AdminMapTileType = 'google-roadmap' | 'google-hybrid' | 'osm' | 'satellite';
+  const baseLayersRef = useRef<{ [key in AdminMapTileType]?: L.TileLayer | null }>({});
   const amenityMarkersRef = useRef<{ [id: string]: L.Marker }>({});
-  const [activeTileType, setActiveTileType] = useState<'osm' | 'satellite'>('osm');
+  const [activeTileType, setActiveTileType] = useState<AdminMapTileType>('google-roadmap');
   const [mapTileError, setMapTileError] = useState<string | null>(null);
 
   // Update active property when selected ID changes or properties list updates
@@ -181,8 +131,9 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     const found = properties.find(p => p.id === selectedPropertyId) || properties[0] || null;
     setActiveProperty(found);
     if (found) {
-      setPropLat(found.lat || -6.195621);
-      setPropLng(found.lng || 106.848815);
+      const norm = normalizeCoordinatePair(found.lat, found.lng);
+      setPropLat(norm ? norm.lat : (found.lat ? -Math.abs(found.lat) : -6.195621));
+      setPropLng(norm ? norm.lng : (found.lng || 106.848815));
       setPropAddress(found.address || '');
       setGmapsPropInput('');
       setPropParseStatus({ status: 'idle' });
@@ -192,19 +143,32 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   // Load amenities for selected property
   const loadAmenities = async (propId: number) => {
     setIsLoadingAmenities(true);
+    const sanitizeUniqueAmenities = (list: NearbyAmenity[]) => {
+      const seenIds = new Set<string>();
+      return list.map((a, idx) => {
+        let uid = a.id;
+        if (!uid || seenIds.has(uid)) {
+          uid = `${a.id || 'amenity'}-${propId}-${idx}`;
+        }
+        seenIds.add(uid);
+        return { ...a, id: uid };
+      });
+    };
+
     try {
       const data = await database.fetchNearbyAmenities(propId);
       if (data && data.length > 0) {
-        setAmenities(data);
+        setAmenities(sanitizeUniqueAmenities(data));
       } else {
-        // Fallback to initial nearby amenities for this property
-        const fallback = INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propId);
-        setAmenities(fallback);
+        const found = properties.find(p => p.id === propId) || activeProperty;
+        const fallback = found ? getAmenitiesForProperty(found, INITIAL_NEARBY_AMENITIES) : [];
+        setAmenities(sanitizeUniqueAmenities(fallback));
       }
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Load amenities error:', err);
-      const fallback = INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propId);
-      setAmenities(fallback);
+      const found = properties.find(p => p.id === propId) || activeProperty;
+      const fallback = found ? getAmenitiesForProperty(found, INITIAL_NEARBY_AMENITIES) : [];
+      setAmenities(sanitizeUniqueAmenities(fallback));
     } finally {
       setIsLoadingAmenities(false);
     }
@@ -295,10 +259,20 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
       });
 
       L.control.attribution({ position: 'bottomleft', prefix: false })
-        .addAttribution(OSM_ATTRIBUTION)
+        .addAttribution(GOOGLE_ATTRIBUTION)
         .addTo(map);
 
       // Create base layers
+      const googleRoadmap = createGoogleMapsRoadmapLayer(
+        {},
+        (hasError, msg) => setMapTileError(hasError ? (msg || 'Peta Google Maps gagal dimuat.') : null)
+      );
+
+      const googleHybrid = createGoogleMapsHybridLayer(
+        {},
+        (hasError, msg) => setMapTileError(hasError ? (msg || 'Peta satelit Google Maps gagal dimuat.') : null)
+      );
+
       const osm = createOsmStandardTileLayer(
         {},
         (hasError, msg) => setMapTileError(hasError ? (msg || 'Peta gagal dimuat. Periksa koneksi.') : null)
@@ -309,13 +283,15 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         (hasError, msg) => setMapTileError(hasError ? (msg || 'Peta satelit gagal dimuat.') : null)
       );
 
-      baseLayersRef.current = { osm, satellite };
+      baseLayersRef.current = { 
+        'google-roadmap': googleRoadmap, 
+        'google-hybrid': googleHybrid, 
+        'osm': osm, 
+        'satellite': satellite 
+      };
 
-      if (activeTileType === 'satellite') {
-        satellite.addTo(map);
-      } else {
-        osm.addTo(map);
-      }
+      const initialLayer = baseLayersRef.current[activeTileType] || googleRoadmap;
+      initialLayer.addTo(map);
 
       // Initialize LayerGroups in order
       const propertyLayer = L.layerGroup().addTo(map);
@@ -391,16 +367,16 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     const map = mapRef.current;
     if (!map) return;
 
-    const { osm, satellite } = baseLayersRef.current;
-    if (!osm || !satellite) return;
-
-    if (activeTileType === 'satellite') {
-      if (map.hasLayer(osm)) map.removeLayer(osm);
-      if (!map.hasLayer(satellite)) satellite.addTo(map);
-    } else {
-      if (map.hasLayer(satellite)) map.removeLayer(satellite);
-      if (!map.hasLayer(osm)) osm.addTo(map);
-    }
+    (Object.keys(baseLayersRef.current) as AdminMapTileType[]).forEach((key) => {
+      const layer = baseLayersRef.current[key];
+      if (layer) {
+        if (key === activeTileType) {
+          if (!map.hasLayer(layer)) layer.addTo(map);
+        } else {
+          if (map.hasLayer(layer)) map.removeLayer(layer);
+        }
+      }
+    });
   }, [activeTileType]);
 
   // Update Property Marker
@@ -588,12 +564,16 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     setIsSavingProperty(true);
 
     try {
+      const norm = normalizeCoordinatePair(propLat, propLng);
+      const finalLat = norm ? norm.lat : (propLat ? -Math.abs(propLat) : -6.195621);
+      const finalLng = norm ? norm.lng : (propLng || 106.848815);
+
       const updated = await database.saveProperty({
         id: activeProperty.id,
         name: activeProperty.name,
         address: propAddress || activeProperty.address,
-        lat: propLat,
-        lng: propLng
+        lat: finalLat,
+        lng: finalLng
       });
 
       // Clear Overpass cache for this property
@@ -831,9 +811,11 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
 
     setIsSeeding(true);
     try {
-      const defaultForProp = INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === selectedPropertyId);
+      const defaultForProp = activeProperty 
+        ? getAmenitiesForProperty(activeProperty, INITIAL_NEARBY_AMENITIES)
+        : [];
       if (defaultForProp.length === 0) {
-        alert('Tidak ada template data default untuk properti ini. Gunakan fitur "Tarik dari OpenStreetMap" untuk memindai otomatis.');
+        alert('Tidak ada template data fasilitas dalam radius 3.5 km untuk properti ini. Gunakan fitur "Tarik dari OpenStreetMap" untuk memindai otomatis.');
         return;
       }
 
@@ -954,9 +936,31 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
 
             {/* Quick Layer Switcher */}
             <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-slate-100 text-xs">
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <Layers size={13} className="text-slate-500" />
                 <span className="text-[11px] font-bold text-slate-500">Tampilan Peta:</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTileType('google-roadmap')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                    activeTileType === 'google-roadmap' 
+                      ? 'bg-[#2E6F40] text-white shadow-xs' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  Google Maps (Resmi)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTileType('google-hybrid')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                    activeTileType === 'google-hybrid' 
+                      ? 'bg-[#2E6F40] text-white shadow-xs' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  Google Satelit
+                </button>
                 <button
                   type="button"
                   onClick={() => setActiveTileType('osm')}
@@ -966,7 +970,7 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  OpenStreetMap (Standar)
+                  OpenStreetMap
                 </button>
                 <button
                   type="button"
@@ -977,7 +981,7 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Citra Satelit Esri
+                  Satelit Esri
                 </button>
               </div>
 

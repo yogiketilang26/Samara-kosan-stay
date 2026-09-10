@@ -41,9 +41,11 @@ SAMARA STAY ERP v16 dibangun di atas arsitektur full-stack modern berkinerja tin
 │   ├── types.ts                               # Definisi tipe data & antarmuka TypeScript global
 │   ├── components/
 │   │   ├── accounting/                        # Modal audit integritas & diagnostik COA
+│   │   ├── admin/                             # Modul manajemen backoffice (AdminMapCoordinateManager, dll)
 │   │   ├── common/                            # UI primitives (Button, Modal, HDImage, Badge, dll)
 │   │   ├── coupon/                            # Komponen kupon promosi
 │   │   ├── layout/                            # Navbar, Footer, Sidebar, PageTransition
+│   │   ├── map/                               # Modul peta interaktif, POI amenities & routing
 │   │   ├── owner/                             # Modul Dashboard Eksekutif & Investor Pemilik
 │   │   │   ├── BranchComparisonSection.tsx    # Komparasi performa dan okupansi antar cabang kos
 │   │   │   ├── ExecutiveKpiCards.tsx          # Kartu KPI eksekutif (Inflow, Kontrak, Okupansi, NOI, Dividen)
@@ -61,6 +63,8 @@ SAMARA STAY ERP v16 dibangun di atas arsitektur full-stack modern berkinerja tin
 │   │   ├── CartContext.tsx                    # Keranjang reservasi sewa kamar
 │   │   ├── NotificationContext.tsx            # Sistem notifikasi toast global
 │   │   └── ThemeContext.tsx                   # Pengaturan tema visual
+│   ├── data/
+│   │   └── nearbyAmenities.ts                 # Dataset POI terkurasi, kalkulasi Haversine & proteksi key unik
 │   ├── hooks/
 │   │   ├── useAuth.ts                         # Hook autentikasi
 │   │   ├── useFacilitiesRealtime.ts           # Hook sinkronisasi fasilitas kamar/properti
@@ -202,4 +206,52 @@ Untuk mencegah modifikasi atau penimpaan (*credential overrides*) kredensial aku
 4. **Antarmuka Pengawasan Eksekutif (`SecurityAuditLogModule`):**
    - Tersedia di **Super Admin Panel** (Tab `Audit Keamanan`) dan **Owner Portal** (Tab `Audit Keamanan & Kredensial`).
    - Dilengkapi kartu KPI (Total Log, Modifikasi Akun Owner, Perubahan Konfigurasi, Upaya Ditolak, Status Rantai Hash), filter pencarian multi-kategori, tombol verifikasi integritas SHA-256 seketika (*live cryptographic integrity check*), pencatatan audit manual fisik, serta fitur ekspor laporan audit format CSV dan JSON.
+
+---
+
+## 10. Arsitektur Peta Interaktif, Geolokasi Properti & Point of Interest (Map & Nearby Amenities Engine)
+
+1. **Multi-Layer Map Tiles Rendering (`PropertyMapView.tsx`):**
+   - Peta interaktif mendukung 4 lapisan peta dinamis yang dapat dipilih langsung oleh pengguna:
+     - **Google Maps Roadmap:** Tampilan jalan perkotaan standar dengan kejelasan navigasi tinggi (`https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}`).
+     - **Google Hybrid Satelit:** Foto udara satelit resolusi tinggi berpadu dengan label jalan dan nama gedung (`https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}`).
+     - **OpenStreetMap (OSM Standard):** Kartografi open-source dengan detail gang lokal pemukiman warga (`https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`).
+     - **Esri World Imagery:** Tampilan citra satelit permukaan alam jernih (`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`).
+   - Dilengkapi kontrol *gesture zoom*, tombol reset center properti, indikator pulsa radar jangkauan, dan filter kategori POI.
+
+2. **Koordinat Properti Riil Terverifikasi:**
+   - **Kos Atika Kemayoran (Property 1):** `lat: -6.162249`, `lng: 106.865001` (Jl. Utan Panjang III No. 8, Kemayoran, Jakarta Pusat).
+   - **Kos Tiara Kemayoran (Property 2):** `lat: -6.163208`, `lng: 106.858349` (Jl. Angkasa Gg. V No. 12, Kemayoran, Jakarta Pusat).
+   - **Kos Salemba UI (Property 99):** `lat: -6.195000`, `lng: 106.851000` (Jl. Salemba Raya No. 4, Senen/Salemba, Jakarta Pusat).
+
+3. **Kalkulasi Jarak Geodesik Haversine & Estimasi Waktu Tempuh (`nearbyAmenities.ts`):**
+   - **Rumus Haversine Nyata (`calculateDistanceMeters`):** Menghitung jarak lengkung permukaan bumi WGS-84 ($R = 6.371.000\text{ m}$) antara koordinat kos dan fasilitas terdekat secara matematis akurat.
+   - **Estimasi Waktu Tempuh Realistis:**
+     - Jalan Kaki (*Walking Time*): Dikalibrasi pada kecepatan $80\text{ m/menit}$ ($\approx 4,8\text{ km/jam}$), batas minimal 1 menit.
+     - Berkendara (*Driving Time*): Dikalibrasi pada kecepatan lalu lintas urban $300\text{ m/menit}$ ($\approx 18\text{ km/jam}$), batas minimal 1 menit.
+   - **Batas Radius Ketat (`maxRadiusMeters`):**
+     - Dibatasi maksimal $3.500\text{ meter}$ ($3,5\text{ km}$) dari properti untuk mencegah fasilitas yang terlalu jauh tampil pada daftar.
+
+4. **Arsitektur Data POI 3-Lapis (Three-Tier Amenity Pipeline):**
+   - **Tier 1 (Live Overpass OSM API):** Kueri dinamis radius $1.500\text{ m}$ untuk kategori transit, healthcare, shopping, dining, worship, education, dan lifestyle.
+   - **Tier 2 (Supabase Table `nearby_amenities`):** Penyimpanan persisten di database Supabase dengan kolom `id`, `property_id`, `name`, `category`, `distance_meters`, `walking_minutes`, `driving_minutes`, `lat`, `lng`, `address`, `icon_name`, `description`, `is_active`, `created_at`, `updated_at`. Sinkronisasi reaktif langsung via Supabase Realtime WebSocket.
+   - **Tier 3 (Curated Seed Pool `INITIAL_NEARBY_AMENITIES`):** Koleksi titik fasilitas terverifikasi di sekitar Kemayoran dan Salemba (KRL Kemayoran, Halte Busway Landas Pacu, RS Hermina, JIExpo, MGK, Pasar Nangka Senen, dll).
+
+5. **Proteksi Keunikan Kunci React (Virtual DOM Key Identity Defense):**
+   - Mencegah error/peringatan `Encountered two children with the same key` melalui:
+     - Isolasi awalan ID properti unik (`tra-amenity-*`, `kmy-amenity-*`, `slb-*`).
+     - Deduplikasi ganda berdasarkan `id` dan nama tempat yang dinormalisasi (`${name.toLowerCase().trim()}_${category}`).
+     - Fallback generator key otomatis pada level komponen (`PropertyMapView` dan `AdminMapCoordinateManager`) sehingga seluruh pin peta dan daftar kartu fasilitas dijamin $100\%$ ber-ID unik.
+
+6. **Integrasi Navigasi Eksternal Langsung (1-Click Google Maps Routing):**
+   - Setiap kartu fasilitas dan popup pin peta menyediakan tombol pintas:
+     - **Petunjuk Arah (Directions):** `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`
+     - **Cari Lokasi (Search & Street View):** `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+
+7. **Modul Manajemen Backoffice (`AdminMapCoordinateManager.tsx`):**
+   - Terintegrasi pada Super Admin Backoffice (`/admin` tab Peta & Koordinat):
+     - Memungkinkan Super Admin menggeser pin lokasi kos secara interaktif (*drag & drop* atau klik peta).
+     - Validasi batas koordinat geografis wilayah Indonesia (Latitude $-11.0$ s/d $+6.0$, Longitude $95.0$ s/d $141.0$).
+     - Tambah, edit, nonaktifkan, dan hapus fasilitas POI per cabang properti secara langsung ke Supabase.
+
 

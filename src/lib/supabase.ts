@@ -1101,13 +1101,15 @@ export const database = {
         name: String(row.name || ''),
         category: row.category as any,
         distanceMeters: Number(row.distance_meters || 0),
-        walkingTimeMinutes: Number(row.walking_time_minutes || 0),
-        drivingTimeMinutes: row.driving_time_minutes ? Number(row.driving_time_minutes) : undefined,
+        walkingTimeMinutes: Number(row.walking_minutes ?? row.walking_time_minutes ?? 0),
+        drivingTimeMinutes: row.driving_minutes !== undefined && row.driving_minutes !== null 
+          ? Number(row.driving_minutes) 
+          : (row.driving_time_minutes !== undefined && row.driving_time_minutes !== null ? Number(row.driving_time_minutes) : undefined),
         lat: Number(row.lat || 0),
         lng: Number(row.lng || 0),
         description: row.description || '',
         address: row.address || '',
-        icon: row.icon || undefined
+        icon: row.icon_name || row.icon || undefined
       }));
     } catch (err) {
       console.warn('[fetchNearbyAmenities] Network/exception, returning default curated dataset:', err);
@@ -1134,6 +1136,7 @@ export const database = {
       description: amenity.description || '',
       address: amenity.address || '',
       icon: amenity.icon || null,
+      is_active: true,
       updated_at: new Date().toISOString()
     };
 
@@ -1141,6 +1144,26 @@ export const database = {
       payload.id = amenity.id;
     }
 
+    // 1. Try secure Server API endpoint with service role first
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/amenities/save', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          return json.data as NearbyAmenity;
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[saveNearbyAmenity] Server API error, attempting direct client fallback:', apiErr);
+    }
+
+    // 2. Direct client fallback
     try {
       const { data, error } = await supabase
         .from('nearby_amenities')
@@ -1165,8 +1188,10 @@ export const database = {
         name: String(data.name),
         category: data.category,
         distanceMeters: Number(data.distance_meters),
-        walkingTimeMinutes: Number(data.walking_time_minutes),
-        drivingTimeMinutes: data.driving_time_minutes ? Number(data.driving_time_minutes) : undefined,
+        walkingTimeMinutes: Number(data.walking_time_minutes ?? data.walking_minutes ?? 0),
+        drivingTimeMinutes: data.driving_time_minutes !== undefined && data.driving_time_minutes !== null 
+          ? Number(data.driving_time_minutes) 
+          : (data.driving_minutes ? Number(data.driving_minutes) : undefined),
         lat: Number(data.lat),
         lng: Number(data.lng),
         description: data.description,
@@ -1181,6 +1206,25 @@ export const database = {
 
   async deleteNearbyAmenity(id: string): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    
+    // 1. Try server endpoint first
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/amenities/delete', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ id })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) return true;
+      }
+    } catch (apiErr) {
+      console.warn('[deleteNearbyAmenity] Server API error, attempting client fallback:', apiErr);
+    }
+
+    // 2. Direct client fallback
     try {
       const { error } = await supabase.from('nearby_amenities').delete().eq('id', id);
       if (error) {
@@ -1195,12 +1239,31 @@ export const database = {
     }
   },
 
-  async batchSeedNearbyAmenities(amenities: NearbyAmenity[]): Promise<number> {
+  async batchSeedNearbyAmenities(amenities: NearbyAmenity[], propertyId?: number): Promise<number> {
     if (!isSupabaseConfigured) return 0;
+
+    // 1. Try server endpoint first
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/amenities/batch', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ amenities, property_id: propertyId })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) return json.count || amenities.length;
+      }
+    } catch (apiErr) {
+      console.warn('[batchSeedNearbyAmenities] Server API error, attempting client fallback:', apiErr);
+    }
+
+    // 2. Direct client fallback
     try {
       const payloads = amenities.map(a => ({
-        id: a.id,
-        property_id: a.propertyId,
+        id: a.id && !a.id.startsWith('temp-') ? a.id : undefined,
+        property_id: propertyId || a.propertyId,
         name: a.name,
         category: a.category,
         distance_meters: a.distanceMeters,
@@ -1210,7 +1273,8 @@ export const database = {
         lng: Number(a.lng),
         description: a.description || '',
         address: a.address || '',
-        icon: a.icon || null
+        icon: a.icon || null,
+        is_active: true
       }));
 
       const { data, error } = await supabase

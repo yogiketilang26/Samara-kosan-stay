@@ -41,6 +41,8 @@
 31. [CRITICAL FINDINGS & VULNERABILITIES](#31-critical-findings--vulnerabilities)
 32. [SAFE FIX PRIORITY ROADMAP (P0 - P3)](#32-safe-fix-priority-roadmap-p0---p3)
 33. [SAMARA STAY — CURRENT SYSTEM BLUEPRINT](#33-samara-stay---current-system-blueprint)
+34. [DATA CONSISTENCY & UNIFIED SUPABASE SINGLE-SOURCE ARCHITECTURE (SUPER ADMIN & OWNER PARITY)](#34-data-consistency--unified-supabase-single-source-architecture-super-admin--owner-parity)
+35. [GEOLOCATION, MAP ENGINE & POI (NEARBY AMENITIES) ARCHITECTURE](#35-geolocation-map-engine--poi-nearby-amenities-architecture)
 
 ---
 
@@ -86,6 +88,10 @@ Samara Stay is a full-stack, enterprise-grade Property Management System (PMS) a
 │   ├── components/                 # UI Component hierarchy
 │   │   ├── Navbar.tsx
 │   │   ├── MidtransSimulator.tsx
+│   │   ├── admin/                  # Backoffice management components
+│   │   │   └── AdminMapCoordinateManager.tsx # POI and Geolocation coordinate manager
+│   │   ├── map/                    # Map visualization & amenity POI engine
+│   │   │   └── PropertyMapView.tsx # Interactive Google Maps / Satellite / OSM viewer
 │   │   ├── common/                 # Base UI design system controls
 │   │   │   ├── Badge.tsx
 │   │   │   ├── Button.tsx
@@ -130,6 +136,8 @@ Samara Stay is a full-stack, enterprise-grade Property Management System (PMS) a
 │   │   ├── CartContext.tsx         # Booking item selection context
 │   │   ├── NotificationContext.tsx # Toast & alert popup context
 │   │   └── ThemeContext.tsx        # Light/Dark mode state manager
+│   ├── data/                       # Curated Datasets & Geospatial Utilities
+│   │   └── nearbyAmenities.ts      # POI pool, Haversine formula, travel time estimations & React key deduplication
 │   ├── hooks/                      # Custom React Hooks
 │   │   ├── useAuth.ts              # Auth context consumer
 │   │   ├── useFacilitiesRealtime.ts # Realtime facilities mapping listener
@@ -823,6 +831,67 @@ To eliminate any disparity in financial, operational, and tenant metrics between
 * **Strict Protection on Owner Accounts:** Protects `owner@samarastay.co.id` against unauthorized overrides in `server.ts` (`/api/auth/quick-reset-password`). Attempts by unauthenticated or non-superadmin actors are blocked (403 Forbidden) and logged with `CRITICAL` severity and `BLOCKED` status.
 * **Manual System Configuration Auditing:** Tracks all changes made to system settings, booking/survey policies, FAQ items, digital signatures, COA master records, and user role updates via `src/lib/securityAudit.ts`.
 * **Integrated Audit UI Module (`SecurityAuditLogModule`):** Accessible in both Super Admin Panel (`/admin`) and Owner Portal (`/owner`), featuring real-time cryptographic hash verification, multi-criteria filtering, manual audit logging, and compliance CSV/JSON exports.
+
+---
+
+## 35. GEOLOCATION, MAP ENGINE & POI (NEARBY AMENITIES) ARCHITECTURE
+
+### 1. Multi-Layer Map Engine & Interactive Visualizer (`PropertyMapView.tsx`)
+Samara Stay features a fully interactive GIS map engine built on top of Leaflet (`leaflet` and `react-leaflet`) with smooth gesture controls, custom branded pin markers, radar pulse indicators, and multi-layer raster/satellite basemap switching:
+* **Google Maps Roadmap:** High-contrast urban streets, arterial highways, and prominent building footprints (`https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}`).
+* **Google Hybrid Satellite:** High-resolution orthophoto imagery combined with road names, transit labels, and landmark annotations (`https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}`).
+* **OpenStreetMap (OSM Standard):** Open crowd-sourced cartography with detailed neighborhood alleys and pedestrian paths (`https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`).
+* **Esri World Imagery:** Clarity satellite imagery with natural terrain textures (`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`).
+
+### 2. Precise Ground-Truth Property Coordinates
+All property records are pegged to exact geographic coordinates validated against Jakarta municipal surveys:
+* **Kos Atika Kemayoran (Property 1):** `lat: -6.162249`, `lng: 106.865001` (Jl. Utan Panjang III No. 8, Kemayoran, Jakarta Pusat).
+* **Kos Tiara Kemayoran (Property 2):** `lat: -6.163208`, `lng: 106.858349` (Jl. Angkasa Gg. V No. 12, Kemayoran, Jakarta Pusat).
+* **Kos Salemba UI (Property 99):** `lat: -6.195000`, `lng: 106.851000` (Jl. Salemba Raya No. 4, Senen/Salemba, Jakarta Pusat).
+
+### 3. Geodesic Distance Matrix & Travel Time Calculation (`nearbyAmenities.ts`)
+* **Haversine Geodesic Distance:** Employs the spherical trigonometry Haversine algorithm (`calculateDistanceMeters`) using the WGS-84 Earth radius ($R = 6,371,000\text{ m}$) to compute true point-to-point surface distance between property pins and nearby facilities.
+* **Walking & Driving Time Heuristics:**
+  * Walking: Calibrated at a realistic pedestrian pace of $80\text{ m/minute}$ ($\approx 4.8\text{ km/h}$), enforcing a minimum of 1 minute.
+  * Driving: Calibrated at urban traffic flow of $300\text{ m/minute}$ ($\approx 18\text{ km/h}$), enforcing a minimum of 1 minute.
+* **Strict Maximum Radius Filtering (`maxRadiusMeters`):**
+  * Configured by default to $3,500\text{ m}$ ($3.5\text{ km}$).
+  * Candidacy pool automatically discards any amenities outside the geographic threshold to guarantee that only authentically proximate facilities are presented to prospective tenants.
+
+### 4. Multi-Tier POI Data Ingestion & Supabase Real-Time Pipeline
+The POI subsystem utilizes a three-tier ingestion and caching model:
+1. **Tier 1 — Live Overpass OSM API Sync:**
+   * Dynamic bounding-box query targeting OpenStreetMap Overpass nodes within $1,500\text{ m}$ across 7 core categories: `transit` (station, bus_stop), `healthcare` (hospital, clinic, pharmacy), `education` (university, school, college), `dining` (restaurant, cafe, food_court), `shopping` (supermarket, convenience, mall), `worship` (place_of_worship), and `lifestyle` (fitness_centre, sports_centre, park).
+2. **Tier 2 — Supabase PostgreSQL Persistent Table (`nearby_amenities`):**
+   * Primary key: `id` (text). Foreign key: `property_id` referencing `properties.id`.
+   * Standard columns: `name`, `category`, `distance_meters`, `walking_minutes`, `driving_minutes`, `lat`, `lng`, `address`, `icon_name`, `description`, `is_active`, `created_at`, `updated_at`.
+   * Real-time updates via Supabase WebSocket broadcast table changes immediately to client map views.
+   * Full schema compatibility: Database access functions (`fetchNearbyAmenities` and `saveNearbyAmenity`) support both canonical schema columns (`walking_minutes`, `driving_minutes`, `icon_name`) and legacy client property aliases (`walking_time_minutes`, `icon`).
+3. **Tier 3 — Curated Fallback Pool (`INITIAL_NEARBY_AMENITIES`):**
+   * Pre-compiled, verified local data set for all managed properties (e.g. Stasiun KRL Kemayoran, Halte Transjakarta Landas Pacu, RS Hermina Kemayoran, Mega Glodok Kemayoran, JIExpo Kemayoran, Pasar Nangka Bungur Senen, RSCM Salemba, Kampus UI Salemba).
+
+### 5. React Reconciliation Defense & Global Unique Key Guarantee
+To prevent React virtual DOM warning anomalies (`Encountered two children with the same key`), the map and list components implement strict key normalization:
+* **Prefix Isolation:** Distinct, non-colliding ID schemas:
+  * Kos Tiara Kemayoran: `tra-amenity-*` / `tra-*`
+  * Kos Atika Kemayoran: `kmy-amenity-*` / `kmy-*`
+  * Kos Salemba UI: `slb-*`
+* **Two-Layer Deduplication Engine:**
+  1. Deduplication by primary `id` set tracking.
+  2. Deduplication by composite normalized identity: `${name.toLowerCase().trim()}_${category}`.
+* **Component-Level Fallback Keying:** In both `PropertyMapView` and `AdminMapCoordinateManager`, if an amenity ID is undefined or previously observed, the engine transparently assigns `${amenity.id || 'amenity'}-${property.id}-${index}`, ensuring $100\%$ unique key identity for markers, popups, and carousel cards.
+
+### 6. Seamless External Navigation Deep-Linking
+Every amenity card and map popup contains direct action triggers to native navigation applications:
+* **Turn-by-Turn Navigation:** `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}` opens Google Maps Directions with destination pre-filled.
+* **Place Search & Street View:** `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` opens exact coordinate location on Google Maps.
+
+### 7. Backoffice Admin Coordinate & POI Management (`AdminMapCoordinateManager.tsx`)
+Located in the Super Admin Backoffice (`/admin` under the Map & Geolocation tab):
+* **Live Interactive Pin Tuning:** Allows administrators to drag pins or click on the map to update property latitude/longitude in real time.
+* **Instant Reverse Geocoding & Coordinate Validation:** Validates coordinate bounds against Indonesia geographic bounds (Latitude $-11.0$ to $+6.0$, Longitude $95.0$ to $141.0$).
+* **Amenity CRUD & Category Management:** Create, edit, toggle active state, or delete POIs linked to specific properties.
+* **Realtime Supabase Persistence:** Coordinate adjustments and custom amenity insertions write directly to Supabase `properties` and `nearby_amenities` tables with immediate client cache invalidation.
 
 ---
 *DOCUMENTATION COMPLETED — MASTER BLUEPRINT AUTHORIZED FOR SAMARA STAY ERP V16.0*

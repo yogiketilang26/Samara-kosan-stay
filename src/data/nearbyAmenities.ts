@@ -97,10 +97,124 @@ export const AMENITY_CATEGORIES: AmenityCategoryConfig[] = [
 
 // Curated amenities dataset for known Samara Stay locations
 export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
-  // --- PROPERTY 1: SALEMBA / CENTRAL JAKARTA (approx -6.1950, 106.8480) ---
+  // --- KEMAYORAN / JAKARTA PUSAT (approx -6.1622, 106.8650) ---
+  {
+    id: 'kmy-1',
+    propertyId: 1,
+    name: 'Masjid Jami Al-Ihsan Bendungan Jago',
+    category: 'worship',
+    distanceMeters: 150,
+    walkingTimeMinutes: 2,
+    drivingTimeMinutes: 1,
+    lat: -6.1625,
+    lng: 106.8642,
+    description: 'Tempat ibadah warga terdekat, bersih, dan nyaman untuk sholat berjamaah.',
+    address: 'Jl. Bendungan Jago, Serdang, Kemayoran, Jakarta Pusat',
+    icon: 'Moon'
+  },
+  {
+    id: 'kmy-2',
+    propertyId: 1,
+    name: 'Pasar Serdang Kemayoran',
+    category: 'shopping',
+    distanceMeters: 250,
+    walkingTimeMinutes: 3,
+    drivingTimeMinutes: 1,
+    lat: -6.1630,
+    lng: 106.8638,
+    description: 'Pusat belanja kebutuhan pokok harian, sayur buah segar, dan kuliner pagi.',
+    address: 'Jl. Serdang Raya No.1, Serdang, Kemayoran, Jakarta Pusat',
+    icon: 'ShoppingBag'
+  },
+  {
+    id: 'kmy-3',
+    propertyId: 1,
+    name: 'RSUD Kemayoran',
+    category: 'healthcare',
+    distanceMeters: 350,
+    walkingTimeMinutes: 4,
+    drivingTimeMinutes: 1,
+    lat: -6.1642,
+    lng: 106.8625,
+    description: 'Rumah Sakit Umum Daerah dengan fasilitas IGD 24 jam & poli spesialis.',
+    address: 'Jl. Serdang Baru I No.9, Serdang, Kemayoran, Jakarta Pusat',
+    icon: 'Hospital'
+  },
+  {
+    id: 'kmy-4',
+    propertyId: 1,
+    name: 'RS Hermina Kemayoran',
+    category: 'healthcare',
+    distanceMeters: 1200,
+    walkingTimeMinutes: 15,
+    drivingTimeMinutes: 3,
+    lat: -6.1575,
+    lng: 106.8550,
+    description: 'Rumah sakit rujukan swasta ternama dengan layanan medis lengkap.',
+    address: 'Jl. Selangit B-10 Kav.4, Kemayoran, Jakarta Pusat',
+    icon: 'Hospital'
+  },
+  {
+    id: 'kmy-5',
+    propertyId: 1,
+    name: 'Halte Transjakarta Landas Pacu Timur',
+    category: 'transit',
+    distanceMeters: 1300,
+    walkingTimeMinutes: 16,
+    drivingTimeMinutes: 3,
+    lat: -6.1585,
+    lng: 106.8540,
+    description: 'Akses BRT Transjakarta Koridor 12 (Pluit - Tanjung Priok).',
+    address: 'Jl. Landas Pacu Timur, Kemayoran, Jakarta Pusat',
+    icon: 'Bus'
+  },
+  {
+    id: 'kmy-6',
+    propertyId: 1,
+    name: 'Mega Glodok Kemayoran (MGK)',
+    category: 'shopping',
+    distanceMeters: 1500,
+    walkingTimeMinutes: 18,
+    drivingTimeMinutes: 4,
+    lat: -6.1555,
+    lng: 106.8530,
+    description: 'Pusat belanja grosir & retail, perkakas, perlengkapan hunian & otomotif.',
+    address: 'Jl. Angkasa Kav. B-6, Kemayoran, Jakarta Pusat',
+    icon: 'ShoppingBag'
+  },
+  {
+    id: 'kmy-7',
+    propertyId: 1,
+    name: 'Jakarta International Expo (JIExpo Kemayoran)',
+    category: 'lifestyle',
+    distanceMeters: 1800,
+    walkingTimeMinutes: 22,
+    drivingTimeMinutes: 5,
+    lat: -6.1525,
+    lng: 106.8525,
+    description: 'Pusat pameran terbesar, konser musik, dan acara tahunan PRJ Kemayoran.',
+    address: 'Arena PRJ Kemayoran, Kemayoran, Jakarta Pusat',
+    icon: 'Sparkles'
+  },
+  {
+    id: 'kmy-8',
+    propertyId: 1,
+    name: 'Stasiun KRL Kemayoran',
+    category: 'transit',
+    distanceMeters: 2300,
+    walkingTimeMinutes: 28,
+    drivingTimeMinutes: 6,
+    lat: -6.1615,
+    lng: 106.8435,
+    description: 'Stasiun Commuter Line Cikarang Loopline akses Senen, Manggarai & Tanah Abang.',
+    address: 'Jl. Garuda No.1, Kemayoran, Jakarta Pusat',
+    icon: 'Train'
+  },
+
+  // --- SALEMBA / CENTRAL JAKARTA (approx -6.1950, 106.8480) ---
   {
     id: 'slb-1',
-    propertyId: 1,
+    propertyId: 99,
     name: 'Halte Transjakarta Salemba UI',
     category: 'transit',
     distanceMeters: 250,
@@ -114,7 +228,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
   },
   {
     id: 'slb-2',
-    propertyId: 1,
+    propertyId: 99,
     name: 'Stasiun KRL Cikini',
     category: 'transit',
     distanceMeters: 750,
@@ -128,7 +242,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
   },
   {
     id: 'slb-3',
-    propertyId: 1,
+    propertyId: 99,
     name: 'Universitas Indonesia (Kampus Salemba - FK & FEB)',
     category: 'education',
     distanceMeters: 300,
@@ -142,7 +256,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
   },
   {
     id: 'slb-4',
-    propertyId: 1,
+    propertyId: 99,
     name: 'RSUPN Dr. Cipto Mangunkusumo (RSCM & Kencana)',
     category: 'healthcare',
     distanceMeters: 450,
@@ -156,7 +270,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
   },
   {
     id: 'slb-5',
-    propertyId: 1,
+    propertyId: 99,
     name: 'RS St. Carolus Salemba',
     category: 'healthcare',
     distanceMeters: 350,
@@ -170,7 +284,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
   },
   {
     id: 'slb-6',
-    propertyId: 1,
+    propertyId: 99,
     name: 'Gramedia Matraman & Food Court',
     category: 'shopping',
     distanceMeters: 900,
@@ -184,7 +298,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
   },
   {
     id: 'slb-7',
-    propertyId: 1,
+    propertyId: 99,
     name: 'Kopi Kenangan & Indomaret Point 24 Jam',
     category: 'dining',
     distanceMeters: 120,
@@ -198,7 +312,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
   },
   {
     id: 'slb-8',
-    propertyId: 1,
+    propertyId: 99,
     name: 'Masjid Jami Al-Falah Salemba',
     category: 'worship',
     distanceMeters: 180,
@@ -211,37 +325,37 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
     icon: 'Moon'
   },
 
-  // --- PROPERTY 2: ATIKAH KEMAYORAN (approx -6.1600, 106.8520) ---
+  // --- PROPERTY 2: TIARA KEMAYORAN (approx -6.1632, 106.8583) ---
   {
-    id: 'kmy-1',
+    id: 'tra-1',
     propertyId: 2,
-    name: 'Jakarta International Expo (JIExpo Kemayoran)',
-    category: 'lifestyle',
-    distanceMeters: 1200,
-    walkingTimeMinutes: 15,
-    drivingTimeMinutes: 4,
-    lat: -6.1525,
-    lng: 106.8525,
-    description: 'Pusat konvensi, expo nasional, konser, dan festival musik akbar.',
-    address: 'Arena PRJ Kemayoran, Kemayoran, Jakarta Pusat',
-    icon: 'Sparkles'
+    name: 'Masjid Al-Mujahidin Kemayoran',
+    category: 'worship',
+    distanceMeters: 180,
+    walkingTimeMinutes: 2,
+    drivingTimeMinutes: 1,
+    lat: -6.1638,
+    lng: 106.8575,
+    description: 'Masjid lingkungan tenang dan sejuk untuk ibadah lima waktu.',
+    address: 'Jl. Garuda Gg. V, Kemayoran, Jakarta Pusat',
+    icon: 'Moon'
   },
   {
-    id: 'kmy-2',
+    id: 'tra-2',
     propertyId: 2,
-    name: 'Stasiun KRL Kemayoran',
-    category: 'transit',
-    distanceMeters: 850,
-    walkingTimeMinutes: 10,
-    drivingTimeMinutes: 3,
-    lat: -6.1615,
-    lng: 106.8435,
-    description: 'Akses KRL Commuter Line Loopline Cikarang-Jatinegara-Pasar Senen.',
-    address: 'Jl. Garuda No.1, Kemayoran, Jakarta Pusat',
-    icon: 'Train'
+    name: 'Pasar Nangka Bungur Senen',
+    category: 'shopping',
+    distanceMeters: 550,
+    walkingTimeMinutes: 7,
+    drivingTimeMinutes: 2,
+    lat: -6.1685,
+    lng: 106.8510,
+    description: 'Pasar tradisional kebutuhan harian, sayur buah segar, dan kuliner pagi.',
+    address: 'Jl. Bungur Besar Raya, Senen, Jakarta Pusat',
+    icon: 'ShoppingBag'
   },
   {
-    id: 'kmy-3',
+    id: 'tra-3',
     propertyId: 2,
     name: 'RS Hermina Kemayoran',
     category: 'healthcare',
@@ -255,7 +369,21 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
     icon: 'Hospital'
   },
   {
-    id: 'kmy-4',
+    id: 'tra-4',
+    propertyId: 2,
+    name: 'Stasiun KRL Kemayoran',
+    category: 'transit',
+    distanceMeters: 850,
+    walkingTimeMinutes: 10,
+    drivingTimeMinutes: 3,
+    lat: -6.1615,
+    lng: 106.8435,
+    description: 'Akses KRL Commuter Line Loopline Cikarang-Jatinegara-Pasar Senen.',
+    address: 'Jl. Garuda No.1, Kemayoran, Jakarta Pusat',
+    icon: 'Train'
+  },
+  {
+    id: 'tra-5',
     propertyId: 2,
     name: 'Halte Busway Kemayoran Landas Pacu',
     category: 'transit',
@@ -269,7 +397,7 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
     icon: 'Bus'
   },
   {
-    id: 'kmy-5',
+    id: 'tra-6',
     propertyId: 2,
     name: 'Mega Glodok Kemayoran (MGK)',
     category: 'shopping',
@@ -283,7 +411,21 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
     icon: 'ShoppingBag'
   },
   {
-    id: 'kmy-6',
+    id: 'tra-7',
+    propertyId: 2,
+    name: 'Jakarta International Expo (JIExpo Kemayoran)',
+    category: 'lifestyle',
+    distanceMeters: 1200,
+    walkingTimeMinutes: 15,
+    drivingTimeMinutes: 4,
+    lat: -6.1525,
+    lng: 106.8525,
+    description: 'Pusat konvensi, expo nasional, konser, dan festival musik akbar.',
+    address: 'Arena PRJ Kemayoran, Kemayoran, Jakarta Pusat',
+    icon: 'Sparkles'
+  },
+  {
+    id: 'tra-8',
     propertyId: 2,
     name: 'Pusat Kuliner Pasar Senen & Kuliner Malam',
     category: 'dining',
@@ -486,31 +628,31 @@ export const INITIAL_NEARBY_AMENITIES: NearbyAmenity[] = [
 
 /**
  * Get amenities for a specific property with accurate distance calculations
+ * Strictly calculates true geographic distance and prevents dummy/faraway facilities from appearing.
  */
 export function getAmenitiesForProperty(
   property: Property,
-  customAmenities?: NearbyAmenity[]
+  customAmenities?: NearbyAmenity[],
+  maxRadiusMeters: number = 3500
 ): NearbyAmenity[] {
   const pool = customAmenities && customAmenities.length > 0 ? customAmenities : INITIAL_NEARBY_AMENITIES;
-  
-  // First match directly by propertyId
-  const directMatches = pool.filter(a => a.propertyId === property.id);
-  
-  if (directMatches.length > 0) {
-    return directMatches.sort((a, b) => a.distanceMeters - b.distanceMeters);
-  }
-
-  // If no direct propertyId matches (e.g. newly created property), calculate dynamic distance
   const propCoords = sanitizePropertyCoordinates(property);
 
-  return pool
-    .map(amenity => {
+  // If property has invalid coordinates, fallback is empty
+  if (!propCoords.lat || !propCoords.lng) {
+    return [];
+  }
+
+  // Calculate true geographic distance for every candidate amenity
+  const mapped = pool
+    .map((amenity, idx) => {
       const amenCoords = sanitizeAmenityCoordinates(amenity, propCoords.lat, propCoords.lng);
       const dist = calculateDistanceMeters(propCoords.lat, propCoords.lng, amenCoords.lat, amenCoords.lng);
-      const walkTime = Math.max(1, Math.round(dist / 80)); // approx 80m per minute walking
-      const driveTime = Math.max(1, Math.round(dist / 350)); // approx 350m per min city speed
+      const walkTime = Math.max(1, Math.round(dist / 80)); // ~80m per minute walking
+      const driveTime = Math.max(1, Math.round(dist / 350)); // ~350m per min city driving
       return {
         ...amenity,
+        id: amenity.id || `amenity-${property.id}-${idx}`,
         propertyId: property.id,
         lat: amenCoords.lat,
         lng: amenCoords.lng,
@@ -519,8 +661,26 @@ export function getAmenitiesForProperty(
         drivingTimeMinutes: driveTime
       };
     })
-    .filter(a => a.distanceMeters <= 5000) // Within 5km radius
+    // Strictly filter out any items outside real radius (never show arbitrary far locations)
+    .filter(a => a.distanceMeters <= maxRadiusMeters)
     .sort((a, b) => a.distanceMeters - b.distanceMeters);
+
+  // STRICT DEDUPLICATION:
+  // Ensure no duplicate IDs or duplicate places (by normalized name + category) can ever occur
+  const seenIds = new Set<string>();
+  const seenPlaces = new Set<string>();
+  const deduplicated: NearbyAmenity[] = [];
+
+  for (const item of mapped) {
+    const normPlace = `${item.name.toLowerCase().trim()}_${item.category}`;
+    if (!seenIds.has(item.id) && !seenPlaces.has(normPlace)) {
+      seenIds.add(item.id);
+      seenPlaces.add(normPlace);
+      deduplicated.push(item);
+    }
+  }
+
+  return deduplicated;
 }
 
 /**

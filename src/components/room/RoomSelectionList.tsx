@@ -119,8 +119,8 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
 
   // Derive unique floors available in current rooms
   const availableFloors = useMemo(() => {
-    const floors = Array.from(new Set(rooms.map(r => r.floor))).sort((a, b) => a - b);
-    return floors;
+    const rawFloors = rooms.map(r => Number(r.floor) || 1);
+    return Array.from(new Set(rawFloors)).sort((a: number, b: number) => a - b);
   }, [rooms]);
 
   // Overall metrics calculation

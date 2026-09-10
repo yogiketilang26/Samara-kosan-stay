@@ -3,12 +3,13 @@ import { Property } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
 import { uploadToSupabaseStorage } from '../../utils/storageUploader';
 import { Button } from '../common/Button';
-import { UploadCloud, Trash2, Image, RotateCw, Loader2, MapPin, Navigation, Search } from 'lucide-react';
+import { UploadCloud, Trash2, Image, RotateCw, Loader2, MapPin, Navigation, Search, Link2, CheckCircle2 } from 'lucide-react';
 import { database } from '../../lib/supabase';
 import * as LucideIcons from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { createOsmStandardTileLayer, OSM_ATTRIBUTION } from '../../utils/mapTiles';
+import { createGoogleMapsRoadmapLayer, createOsmStandardTileLayer, GOOGLE_ATTRIBUTION, OSM_ATTRIBUTION } from '../../utils/mapTiles';
+import { parseGoogleMapsCoordinates, normalizeCoordinatePair } from '../../utils/mapCoordinates';
 
 const renderIcon = (iconName: string) => {
   const IconComponent = (LucideIcons as any)[iconName] || LucideIcons.HelpCircle;
@@ -60,8 +61,12 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     loadMasterFacilities();
   }, []);
 
+  const [gmapsInput, setGmapsInput] = useState('');
+  const [gmapsSuccessMsg, setGmapsSuccessMsg] = useState('');
+
   useEffect(() => {
     if (property) {
+      const norm = normalizeCoordinatePair(property.lat, property.lng);
       setFormData({
         name: property.name,
         address: property.address,
@@ -70,8 +75,8 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         type: property.type,
         image_url: property.image_url,
         images: property.images || [],
-        lat: property.lat || -6.2,
-        lng: property.lng || 106.8,
+        lat: norm ? norm.lat : (property.lat ? -Math.abs(property.lat) : -6.195621),
+        lng: norm ? norm.lng : (property.lng || 106.848815),
         description: property.description || '',
         additional_rules: property.additional_rules || '',
         policies: property.policies || '',
@@ -97,7 +102,30 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
   const [searchLocationQuery, setSearchLocationQuery] = useState('');
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
 
-  // Initialize / Sync mini map
+  // Smart Google Maps Link / Coordinates Parser
+  const handleGmapsPaste = (val: string) => {
+    setGmapsInput(val);
+    if (!val || !val.trim()) {
+      setGmapsSuccessMsg('');
+      return;
+    }
+
+    const parsed = parseGoogleMapsCoordinates(val);
+    if (parsed) {
+      setFormData(prev => ({
+        ...prev,
+        lat: parsed.lat,
+        lng: parsed.lng
+      }));
+      setGmapsSuccessMsg(`Koordinat Google Maps terdeteksi: ${parsed.lat}, ${parsed.lng}`);
+      if (miniMapRef.current) {
+        miniMapRef.current.flyTo([parsed.lat, parsed.lng], 17, { duration: 1.0 });
+      }
+      setTimeout(() => setGmapsSuccessMsg(''), 6000);
+    }
+  };
+
+  // Initialize / Sync mini map with ResizeObserver
   useEffect(() => {
     if (!miniMapContainerRef.current) return;
 
@@ -112,19 +140,35 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         attributionControl: false
       });
 
-      createOsmStandardTileLayer().addTo(map);
+      createGoogleMapsRoadmapLayer().addTo(map);
 
       map.on('click', (e: L.LeafletMouseEvent) => {
-        const newLat = parseFloat(e.latlng.lat.toFixed(6));
-        const newLng = parseFloat(e.latlng.lng.toFixed(6));
+        const norm = normalizeCoordinatePair(e.latlng.lat, e.latlng.lng);
+        const newLat = norm ? norm.lat : parseFloat(e.latlng.lat.toFixed(6));
+        const newLng = norm ? norm.lng : parseFloat(e.latlng.lng.toFixed(6));
         setFormData(prev => ({ ...prev, lat: newLat, lng: newLng }));
       });
 
       miniMapRef.current = map;
     }
 
+    // Auto-invalidate map size when modal renders / animates
+    const ro = new ResizeObserver(() => {
+      miniMapRef.current?.invalidateSize();
+    });
+    ro.observe(miniMapContainerRef.current);
+
+    const timer1 = setTimeout(() => miniMapRef.current?.invalidateSize(), 150);
+    const timer2 = setTimeout(() => miniMapRef.current?.invalidateSize(), 400);
+
     return () => {
-      // Keep instance alive
+      ro.disconnect();
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      if (miniMapRef.current) {
+        miniMapRef.current.remove();
+        miniMapRef.current = null;
+      }
     };
   }, []);
 
@@ -377,6 +421,10 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       );
     }
 
+    const norm = normalizeCoordinatePair(formData.lat, formData.lng);
+    const finalLat = norm ? norm.lat : (formData.lat ? -Math.abs(Number(formData.lat)) : -6.195621);
+    const finalLng = norm ? norm.lng : Number(formData.lng || 106.848815);
+
     onSave({
       id: property?.id,
       name: formData.name,
@@ -387,8 +435,8 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       facilities: selectedFacilityIds as any,
       image_url: finalImageUrl,
       images: finalImages,
-      lat: Number(formData.lat),
-      lng: Number(formData.lng),
+      lat: finalLat,
+      lng: finalLng,
       description: formData.description,
       additional_rules: formData.additional_rules,
       policies: formData.policies,
@@ -617,6 +665,30 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
           </div>
         </div>
 
+        {/* Google Maps Smart Paste Input */}
+        <div className="space-y-1.5 bg-slate-900/90 border border-amber-500/30 p-2.5 rounded-xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-amber-400 text-[10px] font-bold">
+              <Link2 size={12} />
+              <span>Smart Paste Google Maps (Link atau Koordinat)</span>
+            </div>
+            <span className="text-[9px] text-slate-400 font-mono">Auto-detect & Koreksi Belahan Bumi</span>
+          </div>
+          <input
+            type="text"
+            value={gmapsInput}
+            onChange={(e) => handleGmapsPaste(e.target.value)}
+            placeholder="Tempel link GMaps (https://maps.app.goo.gl/... atau @-6.162249,106.865001 atau 6.162249, 106.865001)..."
+            className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 px-2.5 py-1.5 rounded-lg text-[10px] text-slate-200 outline-none font-mono"
+          />
+          {gmapsSuccessMsg && (
+            <div className="flex items-center gap-1.5 text-emerald-400 text-[9px] font-bold mt-1 bg-emerald-950/40 border border-emerald-800/60 px-2 py-1 rounded-md">
+              <CheckCircle2 size={11} className="shrink-0" />
+              <span>{gmapsSuccessMsg}</span>
+            </div>
+          )}
+        </div>
+
         {/* Quick Search on Mini Map */}
         <div className="flex gap-1.5">
           <input
@@ -647,14 +719,29 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
 
         <div className="grid grid-cols-2 gap-3 pt-1">
           <div className="space-y-1">
-            <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">Latitude GPS</label>
+            <div className="flex items-center justify-between">
+              <label className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">Latitude GPS</label>
+              {formData.lat > 0 && formData.lng >= 95 && formData.lng <= 142 && (
+                <span className="text-[9px] text-amber-400 font-mono font-bold">💡 Diubah ke {(-Math.abs(formData.lat)).toFixed(6)}</span>
+              )}
+            </div>
             <input 
               type="number" 
               step="any"
               value={formData.lat}
-              onChange={(e) => setFormData({ ...formData, lat: parseFloat(e.target.value) || 0 })}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setFormData({ ...formData, lat: isNaN(val) ? 0 : val });
+              }}
+              onBlur={() => {
+                const norm = normalizeCoordinatePair(formData.lat, formData.lng);
+                if (norm) {
+                  setFormData(prev => ({ ...prev, lat: norm.lat, lng: norm.lng }));
+                }
+              }}
               className="w-full bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono text-[11px] font-bold"
             />
+            <p className="text-[8px] text-slate-500">Jakarta & Jawa berada di selatan khatulistiwa (angka minus, contoh: -6.162249)</p>
           </div>
 
           <div className="space-y-1">
@@ -663,9 +750,19 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
               type="number" 
               step="any"
               value={formData.lng}
-              onChange={(e) => setFormData({ ...formData, lng: parseFloat(e.target.value) || 0 })}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setFormData({ ...formData, lng: isNaN(val) ? 0 : val });
+              }}
+              onBlur={() => {
+                const norm = normalizeCoordinatePair(formData.lat, formData.lng);
+                if (norm) {
+                  setFormData(prev => ({ ...prev, lat: norm.lat, lng: norm.lng }));
+                }
+              }}
               className="w-full bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-200 font-mono text-[11px] font-bold"
             />
+            <p className="text-[8px] text-slate-500">Bujur timur Indonesia (angka positif, contoh: 106.865001)</p>
           </div>
         </div>
       </div>

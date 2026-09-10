@@ -45,10 +45,16 @@ import {
   Compass
 } from 'lucide-react';
 import { 
+  createGoogleMapsRoadmapLayer,
+  createGoogleMapsHybridLayer,
+  createGoogleMapsSatelliteLayer,
   createOsmStandardTileLayer, 
   createSatelliteTileLayer, 
+  GOOGLE_ATTRIBUTION,
   OSM_ATTRIBUTION,
-  ESRI_SATELLITE_ATTRIBUTION
+  ESRI_SATELLITE_ATTRIBUTION,
+  getGoogleMapsSearchUrl,
+  getGoogleMapsDirectionsUrl
 } from '../../utils/mapTiles';
 
 interface PropertyMapViewProps {
@@ -61,9 +67,19 @@ interface PropertyMapViewProps {
   lang?: 'id' | 'en';
 }
 
-type MapLayerType = 'osm' | 'satellite';
+type MapLayerType = 'google-roadmap' | 'google-hybrid' | 'osm' | 'satellite';
 
 const MAP_LAYERS: Record<MapLayerType, { name: string; attribution: string; maxZoom: number }> = {
+  'google-roadmap': {
+    name: 'Google Maps (Peta Jalan Resmi)',
+    attribution: GOOGLE_ATTRIBUTION,
+    maxZoom: 20
+  },
+  'google-hybrid': {
+    name: 'Google Maps (Satelit + Jalan)',
+    attribution: GOOGLE_ATTRIBUTION,
+    maxZoom: 20
+  },
   osm: {
     name: 'OpenStreetMap (Standar)',
     attribution: OSM_ATTRIBUTION,
@@ -95,7 +111,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<AmenityCategory | 'all'>('all');
   const [radiusFilter, setRadiusFilter] = useState<number>(3000); // 3000m (3km) default
   const [showRadiusCircle, setShowRadiusCircle] = useState(true);
-  const [activeLayer, setActiveLayer] = useState<MapLayerType>('osm');
+  const [activeLayer, setActiveLayer] = useState<MapLayerType>('google-roadmap');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredAmenityId, setHoveredAmenityId] = useState<string | null>(null);
   const [mapTileError, setMapTileError] = useState<string | null>(null);
@@ -114,7 +130,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
   // Map DOM & Leaflet References
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
-  const baseLayersRef = useRef<{ osm: L.TileLayer | null; satellite: L.TileLayer | null }>({ osm: null, satellite: null });
+  const baseLayersRef = useRef<{ [key in MapLayerType]?: L.TileLayer | null }>({});
   const propertyLayerRef = useRef<L.LayerGroup | null>(null);
   const facilityLayerRef = useRef<L.LayerGroup | null>(null);
   const radiusLayerRef = useRef<L.LayerGroup | null>(null);
@@ -227,7 +243,20 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
     const all = Array.from(map.values());
     all.sort((a, b) => a.distanceMeters - b.distanceMeters);
-    return all;
+
+    // Guarantee strictly unique IDs across all amenities for safe React key identity
+    const seenIds = new Set<string>();
+    return all.map((amenity, idx) => {
+      let uniqueId = amenity.id;
+      if (!uniqueId || seenIds.has(uniqueId)) {
+        uniqueId = `${amenity.id || 'amenity'}-${activeProperty.id}-${idx}`;
+      }
+      seenIds.add(uniqueId);
+      return {
+        ...amenity,
+        id: uniqueId
+      };
+    });
   }, [activeProperty, dbAmenities, osmAmenities]);
 
   // Filter amenities by category, radius, and text search
@@ -297,10 +326,26 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
       // Attribution Control
       const attrControl = L.control.attribution({ position: 'bottomleft', prefix: false });
-      attrControl.addAttribution(OSM_ATTRIBUTION);
+      attrControl.addAttribution(GOOGLE_ATTRIBUTION);
       attrControl.addTo(map);
 
       // Create base layers
+      const googleRoadmap = createGoogleMapsRoadmapLayer({}, (hasError, message) => {
+        if (hasError) {
+          setMapTileError(message || 'Peta Google Maps gagal dimuat.');
+        } else {
+          setMapTileError(null);
+        }
+      });
+
+      const googleHybrid = createGoogleMapsHybridLayer({}, (hasError, message) => {
+        if (hasError) {
+          setMapTileError(message || 'Peta satelit Google Maps gagal dimuat.');
+        } else {
+          setMapTileError(null);
+        }
+      });
+
       const osmLayer = createOsmStandardTileLayer({}, (hasError, message) => {
         if (hasError) {
           setMapTileError(message || 'Peta gagal dimuat. Periksa koneksi internet.');
@@ -317,14 +362,16 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
         }
       });
 
-      baseLayersRef.current = { osm: osmLayer, satellite: satelliteLayer };
+      baseLayersRef.current = {
+        'google-roadmap': googleRoadmap,
+        'google-hybrid': googleHybrid,
+        'osm': osmLayer,
+        'satellite': satelliteLayer
+      };
 
       // Add default basemap
-      if (activeLayer === 'satellite') {
-        satelliteLayer.addTo(map);
-      } else {
-        osmLayer.addTo(map);
-      }
+      const initialLayer = baseLayersRef.current[activeLayer] || googleRoadmap;
+      initialLayer.addTo(map);
 
       // Initialize Hierarchical Data LayerGroups in exact Z-order
       const radiusLayer = L.layerGroup().addTo(map);
@@ -384,24 +431,20 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    const { osm, satellite } = baseLayersRef.current;
-    if (!osm || !satellite) return;
-
-    if (activeLayer === 'satellite') {
-      if (map.hasLayer(osm)) {
-        map.removeLayer(osm);
+    (Object.keys(baseLayersRef.current) as MapLayerType[]).forEach((layerKey) => {
+      const layer = baseLayersRef.current[layerKey];
+      if (layer) {
+        if (layerKey === activeLayer) {
+          if (!map.hasLayer(layer)) {
+            layer.addTo(map);
+          }
+        } else {
+          if (map.hasLayer(layer)) {
+            map.removeLayer(layer);
+          }
+        }
       }
-      if (!map.hasLayer(satellite)) {
-        satellite.addTo(map);
-      }
-    } else {
-      if (map.hasLayer(satellite)) {
-        map.removeLayer(satellite);
-      }
-      if (!map.hasLayer(osm)) {
-        osm.addTo(map);
-      }
-    }
+    });
   }, [activeLayer]);
 
   // Trigger invalidateSize on fullscreen toggle or activePropId change
@@ -499,8 +542,19 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
               ${availableRoomsCount} Unit Siap Huni
             </span>
           </div>
-          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed #e2e8f0; font-size: 10px; color: #64748b; font-family: monospace;">
-            OpenStreetMap: ${lat.toFixed(5)}, ${lng.toFixed(5)}
+          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed #e2e8f0; font-size: 10px; color: #64748b;">
+            <div style="font-family: monospace; font-size: 9px; margin-bottom: 4px; color: #059669; font-weight: bold;">
+              Koordinat: ${lat.toFixed(6)}, ${lng.toFixed(6)}
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <a href="${getGoogleMapsSearchUrl(lat, lng)}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; font-weight: 700; color: #2E6F40; text-decoration: underline;">
+                Google Maps ↗
+              </a>
+              <span style="color: #cbd5e1;">•</span>
+              <a href="${getGoogleMapsDirectionsUrl(lat, lng)}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; font-weight: 700; color: #0284c7; text-decoration: underline;">
+                Petunjuk Arah ↗
+              </a>
+            </div>
           </div>
         </div>
       `;
@@ -781,6 +835,8 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
               onChange={(e) => setActiveLayer(e.target.value as MapLayerType)}
               className="bg-transparent text-white text-xs font-bold focus:outline-none pr-2 cursor-pointer"
             >
+              <option value="google-roadmap" className="text-slate-900">Google Maps (Peta Jalan Resmi)</option>
+              <option value="google-hybrid" className="text-slate-900">Google Maps (Satelit + Jalan)</option>
               <option value="osm" className="text-slate-900">OpenStreetMap (Standar)</option>
               <option value="satellite" className="text-slate-900">Citra Satelit Esri</option>
             </select>

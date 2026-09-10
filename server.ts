@@ -1732,10 +1732,6 @@ async function startServer() {
       const payload = req.body || {};
       const { name, address } = payload;
 
-      if (!name || !address) {
-        return res.status(400).json({ success: false, error: 'Nama dan alamat properti wajib diisi.' });
-      }
-
       const role = (req.authProfile?.role || '').toLowerCase();
       if (!['super', 'super_admin', 'owner', 'admin'].includes(role)) {
         return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya Administrator atau Owner yang dapat mengelola properti.' });
@@ -1750,6 +1746,20 @@ async function startServer() {
 
       const rawId = payload.id;
       const propId = rawId ? Number(rawId) : null;
+
+      let existingProp: any = null;
+      if (propId) {
+        const { data: found } = await supabaseAdmin.from('properties').select('*').eq('id', propId).maybeSingle();
+        existingProp = found;
+      }
+
+      const effectiveName = name || existingProp?.name;
+      const effectiveAddress = address || existingProp?.address;
+
+      if (!effectiveName || !effectiveAddress) {
+        return res.status(400).json({ success: false, error: 'Nama dan alamat properti wajib diisi.' });
+      }
+
       const facilitiesToSync = payload.facilities;
 
       const allowedCols = [
@@ -1766,8 +1776,27 @@ async function startServer() {
         }
       }
 
-      if (cleanData.lat !== undefined) cleanData.lat = parseFloat(Number(cleanData.lat).toFixed(6));
-      if (cleanData.lng !== undefined) cleanData.lng = parseFloat(Number(cleanData.lng).toFixed(6));
+      if (cleanData.lat !== undefined && cleanData.lng !== undefined) {
+        let nLat = typeof cleanData.lat === 'number' ? cleanData.lat : parseFloat(String(cleanData.lat).trim());
+        let nLng = typeof cleanData.lng === 'number' ? cleanData.lng : parseFloat(String(cleanData.lng).trim());
+        if (!isNaN(nLat) && !isNaN(nLng)) {
+          // Detect swapped coords
+          if ((nLat > 90 || (nLat >= 95 && nLat <= 142)) && (nLng >= -11 && nLng <= 11)) {
+            const temp = nLat;
+            nLat = nLng;
+            nLng = temp;
+          }
+          // Detect missing negative sign in Indonesia (Jakarta / Java / Jabodetabek: latitudes are south of equator)
+          if (nLng >= 95 && nLng <= 142 && nLat > 0 && nLat <= 11) {
+            nLat = -nLat;
+          }
+          cleanData.lat = parseFloat(nLat.toFixed(6));
+          cleanData.lng = parseFloat(nLng.toFixed(6));
+        }
+      } else {
+        if (cleanData.lat !== undefined) cleanData.lat = parseFloat(Number(cleanData.lat).toFixed(6));
+        if (cleanData.lng !== undefined) cleanData.lng = parseFloat(Number(cleanData.lng).toFixed(6));
+      }
 
       if (cleanData.deposit_amount !== undefined && cleanData.deposit_amount !== null) {
         let termsStr = cleanData.terms || '';
@@ -1885,6 +1914,172 @@ async function startServer() {
     } catch (err: any) {
       console.error('[Admin API /api/admin/properties/save] exception:', err);
       return res.status(500).json({ success: false, error: err.message || 'Terjadi kesalahan pada server saat menyimpan properti.' });
+    }
+  });
+
+  // =========================================================================
+  // NEARBY AMENITIES (GPS POIs) CRUD ENDPOINTS (Secured with Service Role)
+  // =========================================================================
+
+  // POST /api/admin/amenities/save
+  app.post('/api/admin/amenities/save', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const role = (req.authProfile?.role || '').toLowerCase();
+      if (!['super', 'super_admin', 'owner', 'admin'].includes(role)) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya Administrator atau Owner yang dapat mengelola fasilitas sekitar.' });
+      }
+
+      if (!payload.name || !payload.category || payload.lat === undefined || payload.lng === undefined) {
+        return res.status(400).json({ success: false, error: 'Nama, kategori, latitude, dan longitude fasilitas wajib diisi.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const record: any = {
+        property_id: payload.property_id || payload.propertyId,
+        name: String(payload.name).trim(),
+        category: payload.category,
+        distance_meters: Math.round(Number(payload.distance_meters ?? payload.distanceMeters ?? 0)),
+        walking_time_minutes: Math.max(1, Math.round(Number(payload.walking_time_minutes ?? payload.walkingTimeMinutes ?? 1))),
+        driving_time_minutes: Math.max(1, Math.round(Number(payload.driving_time_minutes ?? payload.drivingTimeMinutes ?? 1))),
+        lat: Number(payload.lat),
+        lng: Number(payload.lng),
+        description: payload.description || '',
+        address: payload.address || '',
+        icon: payload.icon || payload.icon_name || null,
+        is_active: payload.is_active !== undefined ? payload.is_active : true,
+        updated_at: new Date().toISOString()
+      };
+
+      if (payload.id && !String(payload.id).startsWith('temp-') && !String(payload.id).startsWith('new-')) {
+        record.id = payload.id;
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('nearby_amenities')
+        .upsert(record)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[Admin API /api/admin/amenities/save] error:', error);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          id: String(data.id),
+          propertyId: Number(data.property_id),
+          name: String(data.name),
+          category: data.category,
+          distanceMeters: Number(data.distance_meters),
+          walkingTimeMinutes: Number(data.walking_time_minutes),
+          drivingTimeMinutes: Number(data.driving_time_minutes),
+          lat: Number(data.lat),
+          lng: Number(data.lng),
+          description: data.description,
+          address: data.address,
+          icon: data.icon
+        }
+      });
+    } catch (err: any) {
+      console.error('[Admin API /api/admin/amenities/save] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Internal server error' });
+    }
+  });
+
+  // POST /api/admin/amenities/delete
+  app.post('/api/admin/amenities/delete', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { id } = req.body || {};
+      if (!id) {
+        return res.status(400).json({ success: false, error: 'ID fasilitas wajib diisi.' });
+      }
+
+      const role = (req.authProfile?.role || '').toLowerCase();
+      if (!['super', 'super_admin', 'owner', 'admin'].includes(role)) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const { error } = await supabaseAdmin.from('nearby_amenities').delete().eq('id', id);
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.status(200).json({ success: true, message: 'Fasilitas berhasil dihapus.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Internal server error' });
+    }
+  });
+
+  // POST /api/admin/amenities/batch
+  app.post('/api/admin/amenities/batch', requireAdminAuth, express.json(), async (req, res) => {
+    try {
+      const { amenities, property_id } = req.body || {};
+      if (!Array.isArray(amenities) || amenities.length === 0) {
+        return res.status(400).json({ success: false, error: 'Daftar fasilitas wajib diisi.' });
+      }
+
+      const role = (req.authProfile?.role || '').toLowerCase();
+      if (!['super', 'super_admin', 'owner', 'admin'].includes(role)) {
+        return res.status(403).json({ success: false, error: 'Akses ditolak.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase belum terkonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const records = amenities.map((a: any) => {
+        const item: any = {
+          property_id: property_id || a.property_id || a.propertyId,
+          name: a.name,
+          category: a.category,
+          distance_meters: Math.round(Number(a.distance_meters ?? a.distanceMeters ?? 0)),
+          walking_time_minutes: Math.max(1, Math.round(Number(a.walking_time_minutes ?? a.walkingTimeMinutes ?? 1))),
+          driving_time_minutes: Math.max(1, Math.round(Number(a.driving_time_minutes ?? a.drivingTimeMinutes ?? 1))),
+          lat: Number(a.lat),
+          lng: Number(a.lng),
+          description: a.description || '',
+          address: a.address || '',
+          icon: a.icon || null,
+          is_active: true,
+          updated_at: new Date().toISOString()
+        };
+        if (a.id && !String(a.id).startsWith('temp-') && !String(a.id).startsWith('new-')) {
+          item.id = a.id;
+        }
+        return item;
+      });
+
+      const { data, error } = await supabaseAdmin
+        .from('nearby_amenities')
+        .upsert(records, { onConflict: 'id' })
+        .select();
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.status(200).json({ success: true, count: data?.length || records.length });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Internal server error' });
     }
   });
 

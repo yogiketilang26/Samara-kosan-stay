@@ -23,7 +23,11 @@ import PremiumSearchFilter from '../components/premium/PremiumSearchFilter';
 import PremiumRoomGrid from '../components/premium/PremiumRoomGrid';
 import PropertyMapView from '../components/map/PropertyMapView';
 import { sanitizePropertyCoordinates, isValidCoordinate } from '../utils/mapCoordinates';
-import { createOsmStandardTileLayer } from '../utils/mapTiles';
+import { 
+  createGoogleMapsRoadmapLayer, 
+  getGoogleMapsSearchUrl, 
+  getGoogleMapsDirectionsUrl 
+} from '../utils/mapTiles';
 import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
 
 interface HomeProps {}
@@ -55,7 +59,7 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
       scrollWheelZoom: false,
     }).setView([lat, lng], 16);
 
-    createOsmStandardTileLayer(
+    createGoogleMapsRoadmapLayer(
       {},
       (hasError) => setTileError(hasError)
     ).addTo(map);
@@ -77,24 +81,47 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
     const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
 
     const popupHtml = `
-      <div style="font-family: sans-serif; padding: 4px; max-width: 220px;">
-        <strong style="font-size: 12px; color: #3A444D; display: block; margin-bottom: 2px;">${property.name}</strong>
-        <p style="font-size: 10px; color: #64748B; margin: 0; line-height: 1.3;">${property.address}</p>
-        <span style="font-size: 10px; font-weight: bold; color: #2E6F40; display: inline-block; margin-top: 4px;">Lat: ${lat}, Lng: ${lng}</span>
+      <div style="font-family: system-ui, -apple-system, sans-serif; padding: 4px; max-width: 230px;">
+        <div style="font-size: 9px; font-weight: 800; color: #EA4335; text-transform: uppercase; margin-bottom: 2px;">📍 Google Maps</div>
+        <strong style="font-size: 12px; color: #1e293b; display: block; margin-bottom: 2px;">${property.name}</strong>
+        <p style="font-size: 10px; color: #64748B; margin: 0 0 4px 0; line-height: 1.3;">${property.address}</p>
+        <div style="font-size: 9px; font-mono; color: #059669; font-weight: bold; margin-bottom: 6px;">${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
+        <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid #f1f5f9;">
+          <a href="${getGoogleMapsSearchUrl(lat, lng)}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; font-weight: 700; color: #2E6F40; text-decoration: underline;">Buka Google Maps ↗</a>
+          <a href="${getGoogleMapsDirectionsUrl(lat, lng)}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; font-weight: 700; color: #0284c7; text-decoration: underline;">Petunjuk Arah ↗</a>
+        </div>
       </div>
     `;
     marker.bindPopup(popupHtml).openPopup();
 
     mapRef.current = map;
 
-    const timer = setTimeout(() => {
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        try {
+          map.invalidateSize();
+        } catch (e) {}
+      });
+      resizeObserver.observe(containerRef.current);
+    }
+
+    const timer1 = setTimeout(() => {
       try {
         map.invalidateSize();
       } catch (e) {}
-    }, 250);
+    }, 80);
+
+    const timer2 = setTimeout(() => {
+      try {
+        map.invalidateSize();
+      } catch (e) {}
+    }, 300);
 
     return () => {
-      clearTimeout(timer);
+      if (resizeObserver) resizeObserver.disconnect();
+      clearTimeout(timer1);
+      clearTimeout(timer2);
       if (mapRef.current) {
         try {
           mapRef.current.remove();
@@ -126,12 +153,22 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
             </button>
           )}
           <a
-            href={`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`}
+            href={getGoogleMapsDirectionsUrl(lat, lng)}
             target="_blank"
             rel="noreferrer"
-            className="text-[10px] font-bold text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#d8ebd8] px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
+            className="text-[10px] font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 px-2 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
+            title="Buka rute navigasi di Google Maps"
           >
-            Buka GMaps ↗
+            Rute ↗
+          </a>
+          <a
+            href={getGoogleMapsSearchUrl(lat, lng)}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[10px] font-bold text-[#2E6F40] bg-[#EEF7F0] hover:bg-[#d8ebd8] border border-[#2E6F40]/20 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
+            title="Lihat titik koordinat resmi di Google Maps"
+          >
+            Google Maps ↗
           </a>
         </div>
       </div>
@@ -1731,7 +1768,7 @@ export default function Home({}: HomeProps) {
           scrollWheelZoom: true,
         }).setView([-6.368, 106.83], 12); // Depok UI Campus default
         
-        createOsmStandardTileLayer().addTo(map);
+        createGoogleMapsRoadmapLayer().addTo(map);
 
         mapRef.current = map;
 
@@ -1786,6 +1823,17 @@ export default function Home({}: HomeProps) {
 
         const marker = L.marker([coords.lat, coords.lng], { icon: customIcon })
           .addTo(map)
+          .bindPopup(`
+            <div style="font-family: system-ui, -apple-system, sans-serif; padding: 4px; max-width: 220px;">
+              <div style="font-size: 9px; font-weight: 800; color: #EA4335; text-transform: uppercase; margin-bottom: 2px;">📍 Google Maps</div>
+              <strong style="font-size: 12px; color: #1e293b; display: block; margin-bottom: 2px;">${p.name}</strong>
+              <p style="font-size: 10px; color: #64748b; margin: 0 0 6px 0; line-height: 1.3;">${p.address}</p>
+              <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid #f1f5f9;">
+                <a href="${getGoogleMapsSearchUrl(coords.lat, coords.lng)}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; font-weight: 700; color: #2E6F40; text-decoration: underline;">Google Maps ↗</a>
+                <a href="${getGoogleMapsDirectionsUrl(coords.lat, coords.lng)}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; font-weight: 700; color: #0284c7; text-decoration: underline;">Rute ↗</a>
+              </div>
+            </div>
+          `)
           .on('click', () => {
             setSelectedMapProperty(p);
             map.setView([coords.lat, coords.lng], 16, { animate: true });

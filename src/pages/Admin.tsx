@@ -2412,6 +2412,38 @@ export default function Admin({}: AdminProps) {
     }
   };
 
+  const handleQuickToggleRoomStatus = async (
+    room: Room,
+    newStatus: RoomStatusType,
+    tenantName?: string | null
+  ) => {
+    startItemProcessing(room.id);
+    try {
+      const payload: Partial<Room> = {
+        id: room.id,
+        status: newStatus,
+        current_tenant_name: newStatus === 'available' ? null : (tenantName !== undefined ? tenantName : room.current_tenant_name)
+      };
+      await database.saveRoom(payload);
+      startModuleRefresh('rooms');
+      await refetchRooms();
+      const statusLabels: Record<string, string> = {
+        available: 'Tersedia',
+        occupied: 'Terisi',
+        maintenance: 'Perbaikan',
+        reserved: 'Direservasi'
+      };
+      showToast(`Status Kamar ${room.room_number} berhasil diubah ke ${statusLabels[newStatus] || newStatus}!`);
+      database.logActivity("Staff", "ROOM_STATUS_TOGGLE", `Mengubah status Kamar ${room.room_number} menjadi ${newStatus}`);
+    } catch (err: any) {
+      console.error('[Admin] Error toggling room status:', err);
+      showToast(err.message || 'Gagal mengubah status kamar.', 'error');
+    } finally {
+      endItemProcessing(room.id);
+      endModuleRefresh('rooms');
+    }
+  };
+
   const handleDeleteRoom = async (id: number) => {
     customConfirm(
       'Hapus Kamar',
@@ -3066,103 +3098,22 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
         )}
 
         {activeTab === 'rooms' && (
-          <div className="space-y-4">
-            {refreshingModule['rooms'] && (
-              <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
-                <RotateCw size={10} className="animate-spin" />
-                <span>Menyinkronkan data terbaru...</span>
-              </div>
-            )}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#F1F5F9] pb-4 gap-4 text-left">
-              <div>
-                <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Ketersediaan Kamar / Unit</h2>
-                <p className="text-xs text-[#64748B] mt-0.5">Pantau tarif harian, bulanan, detail lantai, dan metrik ketersediaan kamar.</p>
-              </div>
-              <button 
-                onClick={() => {
-                  setActiveRoomEdit(null);
-                  setShowRoomModal(true);
-                }}
-                className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
-              >
-                <Plus size={14} />
-                Tambah Kamar
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {rooms.length > 0 ? (
-                rooms.map(r => {
-                  const parentProj = properties.find(p=>p.id === r.property_id)?.name || 'Properti N/A';
-                  return (
-                    <div key={r.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
-                      <div>
-                        <h4 className="font-extrabold text-[#3A444D] uppercase text-sm">KAMAR {r.room_number} ({r.room_type})</h4>
-                        <p className="text-[11px] text-[#64748B] font-mono mt-0.5">{parentProj} | Lantai {r.floor} | Stat: <span className="font-bold text-[#0D9488]">{r.status}</span></p>
-                      </div>
-                      <div className="flex gap-2 w-full sm:w-auto">
-                        <button 
-                          onClick={() => {
-                            setActiveRoomEdit(r);
-                            setShowRoomModal(true);
-                          }}
-                          disabled={processingItems[r.id]}
-                          className="flex-1 sm:flex-none p-2 px-3.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] hover:text-[#0D9488] rounded-xl border border-[#E2E8F0] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Edit2 size={12} />
-                          Kustomisasi
-                        </button>
-                        <button 
-                          onClick={() => handleDeleteRoom(r.id)}
-                          disabled={processingItems[r.id]}
-                          className="flex-1 sm:flex-none p-2 px-3.5 bg-red-50 hover:bg-red-500 text-red-600 hover:text-white rounded-xl border border-red-100 hover:border-red-500 transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {processingItems[r.id] ? (
-                            <RotateCw size={12} className="animate-spin text-red-600" />
-                          ) : (
-                            <Trash2 size={12} />
-                          )}
-                          Hapus
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="bg-white border border-dashed border-amber-300 rounded-[20px] p-8 text-center space-y-4">
-                  <div className="mx-auto w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-500">
-                    <ShieldAlert size={24} />
-                  </div>
-                  <div className="max-w-md mx-auto space-y-2">
-                    <h3 className="font-extrabold text-sm text-[#3A444D] uppercase">Data Kamar Kosong</h3>
-                    <p className="text-xs text-[#64748B] leading-relaxed">
-                      {getIsSupabaseConfigured() ? (
-                        "Koneksi Supabase aktif, namun tidak ada kamar yang ditemukan di tabel 'rooms'. Jika Anda sudah menginputkan kamar di Supabase tapi belum muncul, hal ini kemungkinan besar diblokir oleh Row Level Security (RLS) di Supabase."
-                      ) : (
-                        "Belum ada kamar kos yang ditambahkan. Silakan klik tombol 'Tambah Kamar' di atas untuk memulai."
-                      )}
-                    </p>
-                  </div>
-                  {getIsSupabaseConfigured() && (
-                    <div className="bg-slate-50 rounded-xl p-4 max-w-lg mx-auto text-left border border-[#E2E8F0] space-y-3">
-                      <span className="block text-[10px] font-bold text-slate-400 font-mono uppercase"> SOLUSI UNTUK MENAMPILKAN DATA DARI SUPABASE:</span>
-                      <p className="text-[11px] text-[#3A444D] leading-relaxed">
-                        Jalankan perintah SQL berikut di menu <strong>SQL Editor</strong> dashboard Supabase Anda untuk mematikan RLS:
-                      </p>
-                      <pre className="bg-slate-900 text-[#00FF66] p-3 rounded-lg text-[11px] font-mono overflow-x-auto select-all">
-{`-- Solusi Cepat: Matikan RLS untuk tabel-tabel katalog
-ALTER TABLE properties DISABLE ROW LEVEL SECURITY;
-ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
-                      </pre>
-                      <p className="text-[10px] text-[#64748B] italic">
-                        * Setelah menjalankan perintah tersebut, halaman ini akan memuat seluruh data secara real-time.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
+          <RoomSelectionList
+            rooms={rooms}
+            properties={properties}
+            onQuickStatusToggle={handleQuickToggleRoomStatus}
+            onEditRoom={(room) => {
+              setActiveRoomEdit(room);
+              setShowRoomModal(true);
+            }}
+            onDeleteRoom={handleDeleteRoom}
+            onAddRoom={() => {
+              setActiveRoomEdit(null);
+              setShowRoomModal(true);
+            }}
+            processingItems={processingItems}
+            isRefreshing={!!refreshingModule['rooms']}
+          />
         )}
 
         {activeTab === 'facilities' && (
