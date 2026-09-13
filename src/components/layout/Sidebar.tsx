@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, Building2, BedDouble, GraduationCap, 
   Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail, Sparkles,
-  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass
+  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass, DoorOpen, Wrench
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -22,6 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'coupons', name: 'Promo Diskon', icon: Ticket },
     { id: 'bookings_history', name: 'Riwayat Sewa', icon: History },
     { id: 'tenants', name: 'Daftar Penghuni', icon: Users },
+    { id: 'staff_ops', name: 'Operasional & Staf', icon: Wrench },
     { id: 'settings', name: 'Pengaturan & Ttd Owner', icon: FileSignature },
     { id: 'user_roles', name: 'User & Akses', icon: UserCog },
     { id: 'email_integration', name: 'Integrasi Email', icon: Mail },
@@ -122,6 +123,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             );
           })}
         </nav>
+
+        {/* Dedicated Staff Admin View Link */}
+        <div className="pt-3 mt-2 border-t border-[#F1F5F9]">
+          <a
+            href="/staff"
+            className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all w-full text-left bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 group relative ${
+              isCollapsed ? 'justify-center px-0' : ''
+            }`}
+            title="Buka Tampilan Khusus Staff Admin"
+          >
+            <DoorOpen size={16} className="text-teal-600 shrink-0" />
+            {!isCollapsed && (
+              <div className="flex flex-col text-left overflow-hidden leading-tight">
+                <span className="font-extrabold text-[11px] text-teal-900">Portal Staff Admin</span>
+                <span className="text-[9px] text-teal-600 font-normal">Operasional Harian Kos</span>
+              </div>
+            )}
+            {isCollapsed && (
+              <div className="absolute left-full ml-3 px-2 py-1 bg-teal-900 text-white text-[10px] font-bold rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-md whitespace-nowrap">
+                Portal Staff Admin
+              </div>
+            )}
+          </a>
+        </div>
       </aside>
 
       {/* MOBILE DRAWER WITH BACKDROP OVERLAY (Visible only when isMobileOpen is true) */}
@@ -171,6 +196,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
                 );
               })}
             </nav>
+
+            <div className="pt-3 mt-2 border-t border-[#F1F5F9]">
+              <a
+                href="/staff"
+                className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all w-full text-left bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200"
+              >
+                <DoorOpen size={16} className="text-teal-600 shrink-0" />
+                <div className="flex flex-col text-left overflow-hidden leading-tight">
+                  <span className="font-extrabold text-[11px] text-teal-900">Portal Staff Admin</span>
+                  <span className="text-[9px] text-teal-600 font-normal">Operasional Harian Kos</span>
+                </div>
+              </a>
+            </div>
           </aside>
         </div>
       )}

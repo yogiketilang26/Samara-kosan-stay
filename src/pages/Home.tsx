@@ -22,6 +22,7 @@ import {
 import PremiumSearchFilter from '../components/premium/PremiumSearchFilter';
 import PremiumRoomGrid from '../components/premium/PremiumRoomGrid';
 import PropertyMapView from '../components/map/PropertyMapView';
+import { PropertyNearbyPlaces } from '../components/property/PropertyNearbyPlaces';
 import { sanitizePropertyCoordinates, isValidCoordinate } from '../utils/mapCoordinates';
 import { 
   createGoogleMapsRoadmapLayer, 
@@ -41,9 +42,10 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
   const coords = sanitizePropertyCoordinates(property);
   const lat = coords.lat;
   const lng = coords.lng;
+  const hasValid = isValidCoordinate(lat, lng);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !hasValid) return;
 
     if (mapRef.current) {
       try {
@@ -130,6 +132,31 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
       }
     };
   }, [property.id, lat, lng, property.name, property.address]);
+
+  if (!hasValid) {
+    return (
+      <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-xs text-left space-y-3">
+        <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-2">
+          <h4 className="font-extrabold text-[#3A444D] text-xs flex items-center gap-1.5 uppercase tracking-wide">
+            <MapPin size={13} className="text-amber-500" />
+            Titik Lokasi Gedung & Alamat
+          </h4>
+        </div>
+        <div className="p-4 bg-amber-50/60 rounded-xl border border-amber-200/60 text-xs text-amber-800 space-y-1">
+          <p className="font-bold">Koordinat GPS belum diatur</p>
+          <p className="text-[11px] text-amber-700 leading-relaxed">
+            Titik koordinat untuk properti ini belum ditentukan oleh pengelola. Peta lokasi dan rute akurat akan tampil otomatis setelah koordinat diatur di panel admin.
+          </p>
+        </div>
+        <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl text-[10px] leading-relaxed text-[#64748B] flex items-start gap-1.5">
+          <MapPin size={12} className="text-[#2E6F40] shrink-0 mt-0.5" />
+          <div>
+            <strong className="text-[#3A444D]">{property.name}</strong> — {property.address}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 overflow-hidden relative flex flex-col justify-between min-h-[220px] h-full shadow-xs text-left space-y-3">
@@ -3602,30 +3629,15 @@ export default function Home({}: HomeProps) {
                   Lokasi & Sekitar (Hotspots)
                 </h3>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Distances Hotspots List */}
-                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-[24px] space-y-4 shadow-xs text-left">
-                    <div className="text-xs text-[#2E6F40] font-bold uppercase tracking-wider border-b border-[#F1F5F9] pb-2">Jarak Fasilitas Terdekat</div>
-                    
-                    <div className="space-y-2.5">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-[#64748B]">Halte Transjakarta / Busway</span>
-                        <span className="font-semibold text-[#3A444D] font-mono">🚶 3 Menit (250m)</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-[#64748B]">Stasiun KRL Jabodetabek</span>
-                        <span className="font-semibold text-[#3A444D] font-mono">🚆 8 Menit (600m)</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-[#64748B]">Kampus / Universitas Terdekat</span>
-                        <span className="font-semibold text-[#3A444D] font-mono">🎓 12 Menit (1.0km)</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-[#64748B]">Mall & Pusat Kuliner</span>
-                        <span className="font-semibold text-[#3A444D] font-mono">🛍️ 10 Menit (800m)</span>
-                      </div>
-                    </div>
-                  </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+                  {/* Real Dynamic Nearby Facilities (Real GPS Coordinates & Exact Haversine Distances) */}
+                  <PropertyNearbyPlaces 
+                    property={activeProperty} 
+                    onOpenFullMap={() => {
+                      setUserPage('map');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                  />
 
                   {/* Live Interactive Leaflet Map for Active Property */}
                   <PropertyDetailMap 

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Building2, TrendingUp, DollarSign, CreditCard, 
   Scale, ShieldAlert, Clock, RefreshCw, Printer, 
-  BedDouble, CheckCircle2, AlertCircle, MapPin, PenTool, FileCheck
+  BedDouble, CheckCircle2, AlertCircle, MapPin, PenTool, FileCheck, Users
 } from 'lucide-react';
 import { database, isSupabaseConfigured } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
@@ -17,7 +17,7 @@ import {
 import { 
   Property, Room, Tenant, Booking, FinancialTransaction, 
   AccountCOA, MidtransClearingTransaction, Maintenance, 
-  PettyCashRequest, PurchaseOrder, PaymentInvoice 
+  PettyCashRequest, PurchaseOrder, PaymentInvoice, ActivityLog
 } from '../types';
 import { OwnerHeader } from '../components/owner/OwnerHeader';
 import { ExecutiveKpiCards } from '../components/owner/ExecutiveKpiCards';
@@ -27,13 +27,14 @@ import { ProfitLossDividendCard } from '../components/owner/ProfitLossDividendCa
 import { ExpenseAuditSection } from '../components/owner/ExpenseAuditSection';
 import { LeaseExpiringMonitor } from '../components/owner/LeaseExpiringMonitor';
 import { OwnerSignatureManager } from '../components/owner/OwnerSignatureManager';
+import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
 import Loader from '../components/common/Loader';
 import { formatRupiah } from '../utils/formatCurrency';
 
 export const Owner: React.FC = () => {
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
   const [selectedPeriod, setSelectedPeriod] = useState<'this_month' | 'last_month' | 'this_quarter' | 'ytd'>('this_month');
-  const [activeTab, setActiveTab] = useState<'overview' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops'>('overview');
 
   // Background auto-release expired leases check (>24h grace period -> Available)
   useEffect(() => {
@@ -61,6 +62,7 @@ export const Owner: React.FC = () => {
   const { data: maintenanceList = [] } = useRealtimeTable<Maintenance>('maintenance', () => database.fetchMaintenance({ limit: 500 }));
   const { data: pettyCashList = [] } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests({ limit: 500 }));
   const { data: purchaseOrders = [] } = useRealtimeTable<PurchaseOrder>('purchase_orders', () => database.fetchPurchaseOrders({ limit: 500 }));
+  const { data: activityLogs = [], refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>('activity_logs', () => database.fetchActivityLogs({ limit: 100 }));
 
   const isLoading = loadingProps || loadingRooms || loadingTenants || loadingBookings || loadingTx || loadingPayments;
 
@@ -344,6 +346,18 @@ export const Owner: React.FC = () => {
             <Clock size={14} />
             Monitoring Sewa
           </button>
+
+          <button
+            onClick={() => setActiveTab('staff_ops')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+              activeTab === 'staff_ops'
+                ? 'bg-teal-700 text-white shadow-sm'
+                : 'text-teal-700 hover:text-teal-900 hover:bg-teal-50'
+            }`}
+          >
+            <Users size={14} className={activeTab === 'staff_ops' ? 'text-teal-200' : 'text-teal-600'} />
+            <span>Operasional & Log Staf</span>
+          </button>
         </div>
 
         {/* 4. Tab Contents */}
@@ -415,6 +429,20 @@ export const Owner: React.FC = () => {
           <LeaseExpiringMonitor 
             tenants={filteredTenants}
             rooms={filteredRooms}
+          />
+        )}
+
+        {activeTab === 'staff_ops' && (
+          <StaffOperationsSection 
+            properties={properties}
+            rooms={filteredRooms}
+            maintenanceList={maintenanceList}
+            pettyCashList={pettyCashList}
+            activityLogs={activityLogs}
+            selectedPropertyId={selectedPropertyId}
+            onRefresh={() => {
+              refetchActivityLogs();
+            }}
           />
         )}
 

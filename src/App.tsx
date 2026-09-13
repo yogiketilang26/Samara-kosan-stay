@@ -12,12 +12,15 @@ import { ThemeProvider } from './context/ThemeContext';
 import { CartProvider } from './context/CartContext';
 import { NotificationProvider } from './context/NotificationContext';
 
-function getViewFromLocation(): 'user' | 'admin' | 'owner' {
+function getViewFromLocation(): 'user' | 'admin' | 'owner' | 'staff' {
   const pathname = window.location.pathname.toLowerCase();
   const hash = window.location.hash.toLowerCase();
 
   if (pathname.startsWith('/admin') || hash === '#admin') {
     return 'admin';
+  }
+  if (pathname.startsWith('/staff') || hash === '#staff') {
+    return 'staff';
   }
   if (pathname.startsWith('/owner') || hash === '#owner') {
     return 'owner';
@@ -26,12 +29,18 @@ function getViewFromLocation(): 'user' | 'admin' | 'owner' {
 }
 
 export default function App() {
-  const [viewState, setViewState] = useState<'user' | 'admin' | 'owner'>(getViewFromLocation);
+  const [viewState, setViewState] = useState<'user' | 'admin' | 'owner' | 'staff'>(getViewFromLocation);
 
-  const updateView = useCallback((newView: 'user' | 'admin' | 'owner', pushHistory = true) => {
+  const updateView = useCallback((newView: 'user' | 'admin' | 'owner' | 'staff', pushHistory = true) => {
     setViewState(newView);
     if (pushHistory) {
-      const targetPath = newView === 'admin' ? '/admin' : newView === 'owner' ? '/owner' : '/';
+      const targetPath = newView === 'admin' 
+        ? '/admin' 
+        : newView === 'staff' 
+        ? '/staff' 
+        : newView === 'owner' 
+        ? '/owner' 
+        : '/';
       if (window.location.pathname !== targetPath) {
         window.history.pushState({ view: newView }, '', targetPath);
       }

@@ -58,7 +58,15 @@ export function useRealtimeTable<T>(
       triggerDebouncedRefetch();
       
       // Also apply optimistic differential patch if raw row is provided
-      if (payload && payload.new && payload.eventType === 'UPDATE') {
+      if (payload && payload.new && payload.eventType === 'INSERT') {
+        const newItem = { ...payload.new };
+        setData((currentData) => {
+          if (newItem.id !== undefined && currentData.some((item: any) => String(item?.id) === String(newItem.id))) {
+            return currentData.map((item: any) => String(item?.id) === String(newItem.id) ? { ...item, ...newItem } : item);
+          }
+          return [newItem, ...currentData];
+        });
+      } else if (payload && payload.new && payload.eventType === 'UPDATE') {
         let updatedItem = { ...payload.new };
         if (tableName === 'properties' && (updatedItem.lat !== undefined || updatedItem.latitude !== undefined)) {
           const norm = normalizeCoordinatePair(
@@ -70,16 +78,20 @@ export function useRealtimeTable<T>(
             updatedItem.lng = norm.lng;
           }
         }
-        setData((currentData) =>
-          currentData.map((item: any) =>
-            (item as any)?.id === payload.new.id ? { ...item, ...updatedItem } : item
-          )
-        );
-      } else if (payload && payload.old && payload.eventType === 'DELETE') {
-        const targetId = payload.old?.id || payload.new?.id;
+        setData((currentData) => {
+          const exists = currentData.some((item: any) => String(item?.id) === String(payload.new.id));
+          if (!exists && payload.new.id !== undefined) {
+            return [updatedItem, ...currentData];
+          }
+          return currentData.map((item: any) =>
+            String((item as any)?.id) === String(payload.new.id) ? { ...item, ...updatedItem } : item
+          );
+        });
+      } else if (payload && (payload.old || payload.new) && payload.eventType === 'DELETE') {
+        const targetId = payload.old?.id ?? payload.new?.id;
         if (targetId !== undefined) {
           setData((currentData) =>
-            currentData.filter((item: any) => (item as any)?.id !== targetId)
+            currentData.filter((item: any) => String((item as any)?.id) !== String(targetId))
           );
         }
       }

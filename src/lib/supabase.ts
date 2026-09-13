@@ -528,10 +528,13 @@ export function configureSupabaseDynamically(url: string, key: string) {
 }
 
 const tableSchemas: Record<string, string[]> = {
+  profiles: [
+    'id', 'full_name', 'whatsapp', 'role', 'created_at'
+  ],
   properties: [
     'id', 'name', 'address', 'price', 'type', 'total_rooms', 'available_rooms',
     'facilities', 'image_url', 'images', 'lat', 'lng', 'created_at', 'description',
-    'additional_rules', 'policies', 'terms', 'regulations', 'deposit_amount'
+    'additional_rules', 'policies', 'terms', 'regulations'
   ],
   rooms: [
     'id', 'property_id', 'room_number', 'room_type', 'price', 'size_sqm', 'floor',
@@ -539,9 +542,9 @@ const tableSchemas: Record<string, string[]> = {
     'discount_percent', 'discount_until', 'is_daily_enabled', 'daily_price', 'created_at'
   ],
   tenants: [
-    'id', 'user_id', 'full_name', 'phone', 'email', 'job', 'nik', 'avatar_initials',
+    'id', 'user_id', 'full_name', 'phone', 'email', 'job', 'avatar_initials',
     'avatar_color', 'property_id', 'room_number', 'start_date', 'duration_months',
-    'payment_status', 'emergency_contact', 'created_at', 'status',
+    'payment_status', 'emergency_contact', 'created_at', 'status', 'nik',
     'is_married', 'marriage_certificate_url', 'spouse_name', 'spouse_nik', 'spouse_phone', 'spouse_relation'
   ],
   bookings: [
@@ -564,10 +567,13 @@ const tableSchemas: Record<string, string[]> = {
     'status', 'date', 'created_at'
   ],
   users: [
-    'id', 'full_name', 'email', 'role', 'role_id', 'access', 'last_login', 'active', 'created_at'
+    'id', 'full_name', 'email', 'role', 'role_id', 'access', 'last_login', 'active', 'created_at', 'property_id'
   ],
   activity_logs: [
     'id', 'time', 'admin_name', 'action', 'detail', 'ip_address', 'created_at'
+  ],
+  sent_emails: [
+    'id', 'to', 'subject', 'body', 'sent_at', 'created_at', 'recipient', 'status', 'error_message'
   ],
   surveys: [
     'id', 'reservation_number', 'tenant_name', 'nik', 'email', 'phone', 'address', 'job',
@@ -576,21 +582,85 @@ const tableSchemas: Record<string, string[]> = {
     'pelunasan_deadline_days', 'pelunasan_deadline_date', 'signature_url', 'created_at'
   ],
   accounts: [
-    'id', 'name', 'type', 'balance', 'created_at'
+    'id', 'name', 'type', 'balance', 'created_at', 'category'
   ],
   financial_transactions: [
     'id', 'transaction_no', 'transaction_date', 'category', 'description', 'amount',
-    'type', 'reference_type', 'reference_id', 'created_by', 'created_at'
+    'type', 'reference_type', 'reference_id', 'created_by', 'created_at', 'property_id'
   ],
   journal_entries: [
     'id', 'journal_no', 'transaction_id', 'account_id', 'debit', 'credit', 'created_at'
+  ],
+  ledger_entries: [
+    'id', 'account_id', 'journal_id', 'debit', 'credit', 'balance', 'created_at'
+  ],
+  financial_audit_logs: [
+    'id', 'user_id', 'action', 'old_value', 'new_value', 'created_at'
+  ],
+  settings: [
+    'id', 'booking_rules', 'survey_rules', 'standard_facilities', 'why_choose_us', 'faqs', 'owner_signature_url', 'updated_at'
   ],
   coupons: [
     'id', 'code', 'discount_type', 'discount_value', 'min_duration_months', 'min_duration_days',
     'max_discount_amount', 'is_active', 'description', 'created_at'
   ],
-  settings: [
-    'id', 'booking_rules', 'survey_rules', 'standard_facilities', 'why_choose_us', 'faqs', 'owner_signature_url', 'updated_at'
+  petty_cash_requests: [
+    'id', 'applicant', 'amount', 'purpose', 'status', 'date', 'created_at', 'property_id'
+  ],
+  fixed_assets: [
+    'id', 'name', 'cost', 'life_years', 'residual', 'depr_rate', 'accum_depr', 'created_at', 'property_id'
+  ],
+  budgets: [
+    'id', 'category', 'limit_amount', 'spent', 'created_at', 'property_id'
+  ],
+  vendors: [
+    'id', 'name', 'phone', 'category', 'created_at'
+  ],
+  purchase_orders: [
+    'id', 'vendor', 'items', 'amount', 'status', 'date', 'created_at', 'property_id'
+  ],
+  inventory_items: [
+    'id', 'name', 'stock', 'unit', 'min_stock', 'category', 'created_at', 'property_id'
+  ],
+  bank_statement_items: [
+    'id', 'date', 'desc', 'amount', 'type', 'matched', 'matched_ref', 'created_at'
+  ],
+  facilities: [
+    'id', 'name', 'icon', 'category', 'description', 'created_at'
+  ],
+  property_facilities: [
+    'property_id', 'facility_id', 'created_at'
+  ],
+  room_facilities: [
+    'room_id', 'facility_id', 'created_at'
+  ],
+  webhook_events: [
+    'id', 'provider', 'event_id', 'order_id', 'transaction_id', 'status', 'payload', 'processed_at', 'created_at'
+  ],
+  contract_extensions: [
+    'id', 'tenant_id', 'tenant_name', 'property_id', 'property_name', 'room_number',
+    'old_start_date', 'old_duration_months', 'extension_months', 'monthly_rate',
+    'total_amount', 'payment_method', 'status', 'midtrans_order_id', 'invoice_id', 'notes',
+    'created_at', 'paid_at'
+  ],
+  midtrans_clearing_transactions: [
+    'id', 'payment_id', 'booking_id', 'survey_id', 'contract_extension_id', 'midtrans_order_id',
+    'midtrans_transaction_id', 'gross_amount', 'fee_amount', 'net_amount', 'reconciled_amount',
+    'outstanding_amount', 'clearing_status', 'property_id', 'tenant_name', 'settled_at', 'created_at'
+  ],
+  bank_reconciliation_matches: [
+    'id', 'bank_statement_id', 'clearing_transaction_id', 'matched_amount', 'fee_amount',
+    'difference_amount', 'adjustment_category', 'status', 'notes', 'created_by', 'property_id', 'created_at'
+  ],
+  nearby_amenities: [
+    'id', 'property_id', 'name', 'category', 'distance_meters',
+    'walking_minutes', 'driving_minutes', 'lat', 'lng', 'address',
+    'icon_name', 'description', 'is_active', 'created_at', 'updated_at'
+  ],
+  failed_ledger_postings: [
+    'id', 'transaction_no', 'reference_type', 'reference_id', 'amount', 'debit_account_id',
+    'credit_account_id', 'property_id', 'created_by', 'error_message', 'status', 'resolved_at',
+    'resolved_by', 'created_at', 'updated_at'
   ]
 };
 
@@ -598,13 +668,134 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
   if (!isSupabaseConfigured) return { error: new Error('Supabase not configured') };
   let activePayload = { ...payload };
 
-  // Database Constraint Shield: Ensure room_type matches the CHECK constraint in remote DB ('Standard', 'Deluxe', 'Premium')
-  if (table === 'rooms' && activePayload.room_type) {
-    const allowedRoomTypes = ['Standard', 'Deluxe', 'Premium'];
-    if (!allowedRoomTypes.includes(activePayload.room_type)) {
-      console.warn(`[SUPABASE SHIELD] Coercing invalid room_type '${activePayload.room_type}' to 'Premium' to comply with check constraint.`);
-      activePayload.room_type = 'Premium';
+  // Database Constraint Shield: Enforce remote DB CHECK constraints strictly to prevent SQL errors
+  if (table === 'rooms') {
+    if (activePayload.room_type) {
+      const allowedRoomTypes = ['Standard', 'Deluxe', 'Premium'];
+      if (!allowedRoomTypes.includes(activePayload.room_type)) {
+        activePayload.room_type = 'Premium';
+      }
     }
+    if (activePayload.status) {
+      const allowedStatuses = ['available', 'occupied', 'maintenance', 'reserved'];
+      if (!allowedStatuses.includes(activePayload.status)) {
+        activePayload.status = 'available';
+      }
+    }
+  }
+
+  if (table === 'properties') {
+    if (activePayload.type) {
+      const allowedTypes = ['putra', 'putri', 'campur'];
+      if (!allowedTypes.includes(activePayload.type)) {
+        activePayload.type = 'campur';
+      }
+    }
+    // Handle deposit_amount: preserve in terms and remove column to avoid schema mismatch
+    if (activePayload.deposit_amount !== undefined) {
+      if (activePayload.deposit_amount !== null) {
+        let termsStr = activePayload.terms || '';
+        if (termsStr.includes('[DEPOSIT:')) {
+          termsStr = termsStr.replace(/\[DEPOSIT:\d+\]/, `[DEPOSIT:${activePayload.deposit_amount}]`);
+        } else {
+          termsStr = termsStr ? `${termsStr}\n[DEPOSIT:${activePayload.deposit_amount}]` : `[DEPOSIT:${activePayload.deposit_amount}]`;
+        }
+        activePayload.terms = termsStr;
+      }
+      delete activePayload.deposit_amount;
+    }
+  }
+
+  if (table === 'tenants' && activePayload.payment_status) {
+    const allowed = ['paid', 'pending', 'overdue'];
+    if (!allowed.includes(activePayload.payment_status)) {
+      activePayload.payment_status = 'pending';
+    }
+  }
+
+  if (table === 'bookings') {
+    if (activePayload.status) {
+      const allowed = ['pending', 'approved', 'rejected', 'checkout'];
+      if (!allowed.includes(activePayload.status)) {
+        activePayload.status = 'pending';
+      }
+    }
+    if (activePayload.booking_type) {
+      const allowed = ['monthly', 'daily'];
+      if (!allowed.includes(activePayload.booking_type)) {
+        activePayload.booking_type = 'monthly';
+      }
+    }
+  }
+
+  if (table === 'payments' && activePayload.status) {
+    const allowed = ['paid', 'pending', 'overdue'];
+    if (!allowed.includes(activePayload.status)) {
+      activePayload.status = 'pending';
+    }
+  }
+
+  if (table === 'maintenance') {
+    if (activePayload.priority) {
+      const allowed = ['Normal', 'High', 'Critical'];
+      if (!allowed.includes(activePayload.priority)) {
+        activePayload.priority = 'Normal';
+      }
+    }
+    if (activePayload.status) {
+      const allowed = ['open', 'in-progress', 'completed'];
+      if (!allowed.includes(activePayload.status)) {
+        activePayload.status = 'open';
+      }
+    }
+  }
+
+  if (table === 'users' && activePayload.role) {
+    const allowed = ['super', 'admin', 'staff', 'finance', 'owner', 'super_admin'];
+    if (!allowed.includes(activePayload.role)) {
+      activePayload.role = 'admin';
+    }
+  }
+
+  if (table === 'profiles' && activePayload.role) {
+    const allowed = ['user', 'admin', 'super_admin', 'owner', 'finance', 'staff'];
+    if (!allowed.includes(activePayload.role)) {
+      activePayload.role = 'user';
+    }
+  }
+
+  if (table === 'surveys' && activePayload.status) {
+    const allowed = ['pending_payment', 'survey_confirmed', 'no_show', 'survey_completed', 'paid_full', 'expired'];
+    if (!allowed.includes(activePayload.status)) {
+      activePayload.status = 'pending_payment';
+    }
+  }
+
+  if (table === 'accounts' && activePayload.type) {
+    const allowed = ['asset', 'liability', 'equity', 'revenue', 'expense'];
+    if (!allowed.includes(activePayload.type)) {
+      activePayload.type = 'asset';
+    }
+  }
+
+  if (table === 'financial_transactions' && activePayload.type) {
+    const allowed = ['income', 'expense', 'dp_booking', 'reclassification'];
+    if (!allowed.includes(activePayload.type)) {
+      activePayload.type = 'expense';
+    }
+  }
+
+  if (table === 'coupons' && activePayload.discount_type) {
+    const allowed = ['percentage', 'fixed'];
+    if (!allowed.includes(activePayload.discount_type)) {
+      activePayload.discount_type = 'percentage';
+    }
+  }
+
+  if (table === 'nearby_amenities' && activePayload.category) {
+    const allowed = ['transit', 'education', 'healthcare', 'shopping', 'dining', 'worship', 'lifestyle'];
+    const cat = String(activePayload.category).toLowerCase().trim();
+    activePayload.category = allowed.includes(cat) ? cat : 'transit';
   }
 
   // Early Schema Validation
@@ -804,17 +995,96 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
 }
 
 function logSupabaseError(context: string, error: any, isException = false) {
-  if (error && (
-    error.code === 'PGRST205' || 
-    error.code === '42501' || 
-    error.message?.includes('Could not find the table') || 
-    error.message?.includes('schema cache') ||
-    error.message?.includes('permission denied for table')
-  )) {
-    console.warn(`[SUPABASE NOTICE] [${context}] Table or endpoint permission restricted:`, error.message || error);
+  const errMsg = typeof error === 'string' ? error : (error?.message || error?.details || JSON.stringify(error || ''));
+  if (
+    error?.code === 'PGRST205' || 
+    error?.code === '42501' || 
+    errMsg.includes('Could not find the table') || 
+    errMsg.includes('schema cache') ||
+    errMsg.includes('permission denied for table') ||
+    errMsg.includes('Failed to fetch') ||
+    errMsg.includes('NetworkError') ||
+    errMsg.includes('Load failed')
+  ) {
+    console.warn(`[SUPABASE NOTICE] [${context}] Resilient recovery active (Network/CORS/Permission):`, errMsg);
     return;
   }
   console.error(`[SUPABASE ERROR] [${context}]`, error);
+}
+
+export async function fetchTableWithFallback<T>(
+  tableName: string,
+  options?: { limit?: number; offset?: number; orderCol?: string; orderAsc?: boolean }
+): Promise<T[]> {
+  const limit = options?.limit ?? 1000;
+  const offset = options?.offset ?? 0;
+  const orderCol = options?.orderCol || (tableName === 'bookings' || tableName === 'surveys' ? 'created_at' : 'id');
+  const orderAsc = options?.orderAsc ?? false;
+  const cacheKey = `samara_cache_${tableName}`;
+
+  const getCachedData = (): T[] => {
+    try {
+      if (typeof window !== 'undefined') {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) return JSON.parse(raw);
+      }
+    } catch (e) {}
+    return [];
+  };
+
+  const setCachedData = (items: T[]) => {
+    try {
+      if (typeof window !== 'undefined' && items && items.length > 0) {
+        localStorage.setItem(cacheKey, JSON.stringify(items));
+      }
+    } catch (e) {}
+  };
+
+  // 1. Direct Supabase query if configured
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from(tableName)
+        .select('*')
+        .order(orderCol, { ascending: orderAsc })
+        .range(offset, offset + limit - 1);
+
+      if (!error && data) {
+        setCachedData(data as T[]);
+        return data as T[];
+      }
+      if (error) {
+        logSupabaseError(`fetchTableWithFallback:${tableName}`, error);
+      }
+    } catch (err: any) {
+      logSupabaseError(`fetchTableWithFallback:${tableName}`, err, true);
+    }
+  }
+
+  // 2. Server API fallback (/api/bookings or /api/data/:table)
+  try {
+    const endpoint = tableName === 'bookings' 
+      ? `/api/bookings?limit=${limit}&offset=${offset}`
+      : `/api/data/${tableName}?limit=${limit}&offset=${offset}&order_col=${orderCol}&order_asc=${orderAsc}`;
+    const resp = await fetch(endpoint);
+    if (resp.ok) {
+      const json = await resp.json();
+      if (json.success && Array.isArray(json.data)) {
+        setCachedData(json.data);
+        return json.data as T[];
+      }
+    }
+  } catch (apiErr: any) {
+    console.warn(`[DATA FALLBACK] /api/data/${tableName} failed:`, apiErr?.message || apiErr);
+  }
+
+  // 3. Local offline cache fallback
+  const cached = getCachedData();
+  if (cached && cached.length > 0) {
+    return cached;
+  }
+
+  return [];
 }
 
 // =========================================================================
@@ -1112,17 +1382,17 @@ export const database = {
     }
 
     const payload: any = {
-      property_id: amenity.propertyId,
-      name: amenity.name,
+      property_id: Number(amenity.propertyId),
+      name: String(amenity.name || '').trim(),
       category: amenity.category,
-      distance_meters: amenity.distanceMeters ?? 0,
-      walking_time_minutes: amenity.walkingTimeMinutes ?? 0,
-      driving_time_minutes: amenity.drivingTimeMinutes ?? 0,
+      distance_meters: Math.round(Number(amenity.distanceMeters ?? 0)),
+      walking_minutes: Math.max(1, Math.round(Number(amenity.walkingTimeMinutes ?? 1))),
+      driving_minutes: Math.max(1, Math.round(Number(amenity.drivingTimeMinutes ?? 1))),
       lat: Number(amenity.lat),
       lng: Number(amenity.lng),
       description: amenity.description || '',
       address: amenity.address || '',
-      icon: amenity.icon || null,
+      icon_name: amenity.icon || null,
       is_active: true,
       updated_at: new Date().toISOString()
     };
@@ -1143,8 +1413,12 @@ export const database = {
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
+          notifyRealtimeMutation('nearby_amenities', amenity.id ? 'UPDATE' : 'INSERT', json.data);
           return json.data as NearbyAmenity;
         }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn('[saveNearbyAmenity] Server API non-200, attempting client fallback:', res.status, errJson);
       }
     } catch (apiErr) {
       console.warn('[saveNearbyAmenity] Server API error, attempting direct client fallback:', apiErr);
@@ -1169,22 +1443,23 @@ export const database = {
         `Fasilitas sekitar ${amenity.name} (${amenity.category}) berhasil disimpan.`
       );
 
-      return {
+      const savedResult: NearbyAmenity = {
         id: String(data.id),
         propertyId: Number(data.property_id),
         name: String(data.name),
         category: data.category,
         distanceMeters: Number(data.distance_meters),
-        walkingTimeMinutes: Number(data.walking_time_minutes ?? data.walking_minutes ?? 0),
-        drivingTimeMinutes: data.driving_time_minutes !== undefined && data.driving_time_minutes !== null 
-          ? Number(data.driving_time_minutes) 
-          : (data.driving_minutes ? Number(data.driving_minutes) : undefined),
+        walkingTimeMinutes: Number(data.walking_minutes ?? data.walking_time_minutes ?? 1),
+        drivingTimeMinutes: Number(data.driving_minutes ?? data.driving_time_minutes ?? 1),
         lat: Number(data.lat),
         lng: Number(data.lng),
-        description: data.description,
-        address: data.address,
-        icon: data.icon
+        description: data.description || '',
+        address: data.address || '',
+        icon: data.icon_name || data.icon || undefined
       };
+
+      notifyRealtimeMutation('nearby_amenities', amenity.id ? 'UPDATE' : 'INSERT', savedResult);
+      return savedResult;
     } catch (err: any) {
       console.error('[saveNearbyAmenity] Error:', err);
       throw err;
@@ -1205,7 +1480,10 @@ export const database = {
       });
       if (res.ok) {
         const json = await res.json();
-        if (json.success) return true;
+        if (json.success) {
+          notifyRealtimeMutation('nearby_amenities', 'DELETE', { id });
+          return true;
+        }
       }
     } catch (apiErr) {
       console.warn('[deleteNearbyAmenity] Server API error, attempting client fallback:', apiErr);
@@ -1219,6 +1497,7 @@ export const database = {
         throw new Error(`Gagal menghapus fasilitas: ${error.message}`);
       }
       await this.logActivity("Admin", "DELETE_AMENITY", `Menghapus fasilitas sekitar ID: ${id}`);
+      notifyRealtimeMutation('nearby_amenities', 'DELETE', { id });
       return true;
     } catch (err: any) {
       console.error('deleteNearbyAmenity failed:', err);
@@ -1240,7 +1519,10 @@ export const database = {
       });
       if (res.ok) {
         const json = await res.json();
-        if (json.success) return json.count || amenities.length;
+        if (json.success) {
+          notifyRealtimeMutation('nearby_amenities', 'INSERT', amenities);
+          return json.count || amenities.length;
+        }
       }
     } catch (apiErr) {
       console.warn('[batchSeedNearbyAmenities] Server API error, attempting client fallback:', apiErr);
@@ -1250,17 +1532,17 @@ export const database = {
     try {
       const payloads = amenities.map(a => ({
         id: a.id && !a.id.startsWith('temp-') ? a.id : undefined,
-        property_id: propertyId || a.propertyId,
-        name: a.name,
+        property_id: Number(propertyId || a.propertyId),
+        name: String(a.name).trim(),
         category: a.category,
-        distance_meters: a.distanceMeters,
-        walking_time_minutes: a.walkingTimeMinutes,
-        driving_time_minutes: a.drivingTimeMinutes || 0,
+        distance_meters: Math.round(Number(a.distanceMeters ?? 0)),
+        walking_minutes: Math.max(1, Math.round(Number(a.walkingTimeMinutes ?? 1))),
+        driving_minutes: Math.max(1, Math.round(Number(a.drivingTimeMinutes ?? 1))),
         lat: Number(a.lat),
         lng: Number(a.lng),
         description: a.description || '',
         address: a.address || '',
-        icon: a.icon || null,
+        icon_name: a.icon || null,
         is_active: true
       }));
 
@@ -1275,6 +1557,7 @@ export const database = {
       }
 
       await this.logActivity("Admin", "SEED_AMENITIES", `Sinkronisasi ${payloads.length} titik fasilitas sekitar ke Supabase.`);
+      notifyRealtimeMutation('nearby_amenities', 'INSERT', data || payloads);
       return data?.length || payloads.length;
     } catch (err: any) {
       console.error('batchSeedNearbyAmenities failed:', err);
@@ -1565,24 +1848,12 @@ export const database = {
 
   // --- BOOKINGS ---
   async fetchBookings(options?: { limit?: number; offset?: number }): Promise<Booking[]> {
-    if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchBookings', error);
-        return [];
-      }
-      return data as Booking[];
-    } catch (err) {
-      logSupabaseError('fetchBookings', err, true);
-      return [];
-    }
+    return fetchTableWithFallback<Booking>('bookings', {
+      limit: options?.limit,
+      offset: options?.offset,
+      orderCol: 'created_at',
+      orderAsc: false
+    });
   },
 
   async saveBooking(booking: Partial<Booking>): Promise<Booking> {
@@ -1932,24 +2203,12 @@ export const database = {
 
   // --- SURVEYS ---
   async fetchSurveys(options?: { limit?: number; offset?: number }): Promise<Survey[]> {
-    if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('surveys')
-        .select('*')
-        .order('id', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchSurveys', error);
-        return [];
-      }
-      return data as Survey[];
-    } catch (err) {
-      logSupabaseError('fetchSurveys', err, true);
-      return [];
-    }
+    return fetchTableWithFallback<Survey>('surveys', {
+      limit: options?.limit,
+      offset: options?.offset,
+      orderCol: 'id',
+      orderAsc: false
+    });
   },
 
   async saveSurvey(survey: Partial<Survey>): Promise<Survey> {
@@ -2722,24 +2981,12 @@ export const database = {
 
   // --- TENANTS ---
   async fetchTenants(options?: { limit?: number; offset?: number }): Promise<Tenant[]> {
-    if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('tenants')
-        .select('*')
-        .order('id', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchTenants', error);
-        return [];
-      }
-      return data as Tenant[];
-    } catch (err) {
-      logSupabaseError('fetchTenants', err, true);
-      return [];
-    }
+    return fetchTableWithFallback<Tenant>('tenants', {
+      limit: options?.limit,
+      offset: options?.offset,
+      orderCol: 'id',
+      orderAsc: false
+    });
   },
 
   async saveTenant(tenant: Partial<Tenant>): Promise<Tenant> {
@@ -2843,6 +3090,7 @@ export const database = {
       if (resp.ok) {
         const json = await resp.json();
         if (json.success && json.data) {
+          notifyRealtimeMutation('contract_extensions', ext.id ? 'UPDATE' : 'INSERT', json.data);
           return json.data as ContractExtension;
         }
       }
@@ -2862,6 +3110,7 @@ export const database = {
         throw new Error(`Gagal menyimpan perpanjangan kontrak: ${error.message}`);
       }
       const updated = (data && data.length > 0 ? data[0] : ext) as ContractExtension;
+      notifyRealtimeMutation('contract_extensions', id ? 'UPDATE' : 'INSERT', updated);
       return updated;
     } catch (err: any) {
       console.error('saveContractExtension failed:', err);
@@ -2877,7 +3126,7 @@ export const database = {
     midtransOrderId?: string;
     transactionId?: string;
     notes?: string;
-  }): Promise<{ success: boolean; invoiceId: string; newDurationMonths: number }> {
+  }): Promise<{ success: boolean; invoiceId: string; newDurationMonths: number; extension?: any; tenant?: any }> {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/admin/contract-extension/settle', {
       method: 'POST',
@@ -2900,9 +3149,71 @@ export const database = {
 
     const result = await res.json();
 
+    // Broadcast instant real-time mutations across local, inter-tab BroadcastChannel, and Supabase websocket
+    if (result.extension) {
+      notifyRealtimeMutation('contract_extensions', 'INSERT', result.extension);
+    } else {
+      notifyRealtimeMutation('contract_extensions', 'INSERT', {
+        tenant_id: payload.tenantId,
+        extension_months: payload.extensionMonths,
+        total_amount: payload.totalAmount,
+        payment_method: payload.paymentMethod,
+        status: 'paid',
+        midtrans_order_id: payload.midtransOrderId,
+        invoice_id: result.invoiceId
+      });
+    }
+
+    if (result.tenant) {
+      notifyRealtimeMutation('tenants', 'UPDATE', result.tenant);
+    } else {
+      notifyRealtimeMutation('tenants', 'UPDATE', {
+        id: payload.tenantId,
+        duration_months: result.newDurationMonths,
+        payment_status: 'paid',
+        status: 'active'
+      });
+    }
+
+    notifyRealtimeMutation('payments', 'INSERT');
+    notifyRealtimeMutation('rooms', 'UPDATE');
+    notifyRealtimeMutation('financial_transactions', 'INSERT');
+    notifyRealtimeMutation('journal_entries', 'INSERT');
+    notifyRealtimeMutation('accounts', 'UPDATE');
+
     await this.logActivity("Super Admin", "CONTRACT_EXTENSION", `Perpanjangan sewa ID tenant ${payload.tenantId} sebanyak ${payload.extensionMonths} bulan.`);
 
     return result;
+  },
+
+  async deleteContractExtension(id: number | string): Promise<boolean> {
+    try {
+      const headers = await getAuthHeaders();
+      const resp = await fetch(`/api/contract-extensions/${id}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (resp.ok) {
+        notifyRealtimeMutation('contract_extensions', 'DELETE', { id });
+        return true;
+      }
+    } catch (e) {
+      // Fallback
+    }
+
+    if (!isSupabaseConfigured) return false;
+    try {
+      const { error } = await supabase.from('contract_extensions').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteContractExtension', error);
+        return false;
+      }
+      notifyRealtimeMutation('contract_extensions', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deleteContractExtension', err, true);
+      return false;
+    }
   },
 
   async deleteSurvey(id: number): Promise<boolean> {

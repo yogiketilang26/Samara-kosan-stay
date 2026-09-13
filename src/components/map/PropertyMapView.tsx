@@ -207,32 +207,53 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
     loadOsmAmenities(false);
   }, [loadOsmAmenities]);
 
-  // Combined amenities for the active property (Prioritize OSM Overpass, then DB, then Curated Fallback)
+  // Combined amenities for the active property (OSM Overpass + Supabase DB)
   const activePropertyAmenities = useMemo(() => {
     if (!activeProperty) return [];
 
+    const propCoords = sanitizePropertyCoordinates(activeProperty);
+    if (!isValidCoordinate(propCoords.lat, propCoords.lng)) {
+      return [];
+    }
+
     const map = new Map<string, NearbyAmenity>();
 
-    // 1. Add DB amenities
+    // 1. Add DB amenities with strictly validated coordinates and exact Haversine distance
     dbAmenities.forEach(a => {
-      const dist = calculateDistanceMeters(activeProperty.lat, activeProperty.lng, a.lat, a.lng);
-      map.set(`${a.name.toLowerCase()}_${a.category}`, {
+      if (!isValidCoordinate(a.lat, a.lng)) return;
+      const dist = calculateDistanceMeters(propCoords.lat, propCoords.lng, a.lat, a.lng);
+      if (dist <= 0 || dist > 15000) return; // Skip if out of range
+
+      map.set(`${a.name.toLowerCase().trim()}_${a.category}`, {
         ...a,
+        lat: Number(a.lat),
+        lng: Number(a.lng),
         distanceMeters: dist,
         walkingTimeMinutes: Math.max(1, Math.round(dist / 75)),
         drivingTimeMinutes: Math.max(1, Math.round(dist / 350))
       });
     });
 
-    // 2. Add Live OSM amenities
+    // 2. Add Live OSM amenities with verified coordinates
     osmAmenities.forEach(a => {
-      const key = `${a.name.toLowerCase()}_${a.category}`;
+      if (!isValidCoordinate(a.lat, a.lng)) return;
+      const dist = calculateDistanceMeters(propCoords.lat, propCoords.lng, a.lat, a.lng);
+      if (dist <= 0 || dist > 15000) return;
+
+      const key = `${a.name.toLowerCase().trim()}_${a.category}`;
       if (!map.has(key)) {
-        map.set(key, a);
+        map.set(key, {
+          ...a,
+          lat: Number(a.lat),
+          lng: Number(a.lng),
+          distanceMeters: dist,
+          walkingTimeMinutes: Math.max(1, Math.round(dist / 75)),
+          drivingTimeMinutes: Math.max(1, Math.round(dist / 350))
+        });
       }
     });
 
-    // Amenities pool comes strictly from Supabase dbAmenities and live OSM scan
+    // Amenities pool comes strictly from validated DB & OSM points with real coordinates
     const all = Array.from(map.values());
     all.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
@@ -642,7 +663,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
             <span style="font-weight: 800; color: #2E6F40;">${amenity.distanceMeters} Meter</span>
           </div>
 
-          <a href="https://www.google.com/maps/dir/?api=1&destination=${amenCoords.lat},${amenCoords.lng}" 
+          <a href="${getGoogleMapsDirectionsUrl(amenCoords.lat, amenCoords.lng, propCoords.lat, propCoords.lng)}" 
              target="_blank" 
              rel="noreferrer"
              style="display: block; text-align: center; background: #2E6F40; color: white; font-size: 10px; font-weight: 800; padding: 6px; border-radius: 6px; text-decoration: none; text-transform: uppercase; letter-spacing: 0.5px;">
@@ -1155,7 +1176,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                       🛵 ~{amenity.drivingTimeMinutes || 2} mnt motor
                     </span>
                     <a
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${amenCoords.lat},${amenCoords.lng}`}
+                      href={getGoogleMapsDirectionsUrl(amenCoords.lat, amenCoords.lng, propCoords.lat, propCoords.lng)}
                       target="_blank"
                       rel="noreferrer"
                       onClick={(e) => e.stopPropagation()}

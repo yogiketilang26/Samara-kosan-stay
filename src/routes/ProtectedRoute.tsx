@@ -6,7 +6,7 @@ import { Lock, Mail, ShieldAlert, User, CheckCircle2, ArrowLeft, LogOut, Buildin
 interface ProtectedRouteProps {
   children: React.ReactNode;
   allowedRoles: string[];
-  requiredPortal?: 'admin' | 'owner';
+  requiredPortal?: 'admin' | 'owner' | 'staff';
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ 
@@ -79,6 +79,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   // 1. IF NOT AUTHENTICATED -> Render Dedicated Portal Login Screen
   if (!user) {
     const isOwnerPortal = requiredPortal === 'owner';
+    const isStaffPortal = requiredPortal === 'staff';
 
     return (
       <div className="min-h-screen bg-[#09090b] flex flex-col items-center justify-center p-6 font-sans text-slate-300">
@@ -88,6 +89,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
             <div className={`mx-auto w-14 h-14 rounded-2xl flex items-center justify-center border shadow-lg ${
               isOwnerPortal 
                 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' 
+                : isStaffPortal
+                ? 'bg-teal-500/10 border-teal-500/30 text-teal-400'
                 : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
             }`}>
               {isOwnerPortal ? <Building2 size={26} /> : <Shield size={26} />}
@@ -96,13 +99,21 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
             <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-widest border ${
               isOwnerPortal
                 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                : isStaffPortal
+                ? 'bg-teal-500/20 text-teal-300 border-teal-500/30'
                 : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
             }`}>
-              {isOwnerPortal ? 'Owner & Investor Portal' : 'Super Admin Management'}
+              {isOwnerPortal ? 'Owner & Investor Portal' : isStaffPortal ? 'Portal Staff Admin Operasional' : 'Super Admin Management'}
             </span>
 
             <h2 className="text-xl font-black text-white uppercase tracking-wider font-display pt-1">
-              {isSignUp ? 'DAFTAR AKUN OPERATOR' : (isOwnerPortal ? 'MASUK OWNER PORTAL' : 'MASUK ADMIN PANEL')}
+              {isSignUp 
+                ? 'DAFTAR AKUN OPERATOR' 
+                : (isOwnerPortal 
+                    ? 'MASUK OWNER PORTAL' 
+                    : isStaffPortal 
+                    ? 'MASUK STAFF ADMIN' 
+                    : 'MASUK ADMIN PANEL')}
             </h2>
 
             <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
@@ -112,6 +123,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                     : 'Daftarkan akun operator/admin baru untuk mengelola properti Samara Stay.')
                 : (isOwnerPortal 
                     ? 'Akses khusus Pemilik / Investor Properti Samara Stay untuk memantau performa bisnis dan pengesahan dokumen.'
+                    : isStaffPortal
+                    ? 'Akses khusus Staff Admin Operasional kos untuk mengelola unit kamar, survey tamu, check-in/out, dan perbaikan harian.'
                     : 'Akses khusus Super Administrator untuk manajemen operasional, reservasi, tarif, dan pembukuan kos.')}
             </p>
           </div>
@@ -121,7 +134,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
             <div className="bg-slate-950 border border-slate-800/80 rounded-2xl p-3 space-y-2 text-left">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <Sparkles size={11} className={isOwnerPortal ? "text-amber-400" : "text-emerald-400"} />
+                  <Sparkles size={11} className={isOwnerPortal ? "text-amber-400" : isStaffPortal ? "text-teal-400" : "text-emerald-400"} />
                   Pilih Kredensial Cepat
                 </span>
                 <span className="text-[9px] text-slate-500 font-mono">Klik untuk mengisi</span>
@@ -144,6 +157,25 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                     >
                       <span className="font-extrabold text-white">Akun Pemilik (Yogi)</span>
                       <span className="text-[9px] text-slate-400 truncate">yogiketilang33@gmail.com</span>
+                    </button>
+                  </>
+                ) : isStaffPortal ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleQuickFill('staff@samarastay.co.id', 'admin123')}
+                      className="bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 text-[10px] font-bold p-2 rounded-xl text-left transition-all cursor-pointer flex flex-col"
+                    >
+                      <span className="font-extrabold text-teal-200">Staff Operasional</span>
+                      <span className="text-[9px] text-slate-400 truncate">staff@samarastay.co.id</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleQuickFill('admin@samarastay.co.id', 'admin123')}
+                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[10px] font-bold p-2 rounded-xl text-left transition-all cursor-pointer flex flex-col"
+                    >
+                      <span className="font-extrabold text-white">Super Admin (Semua Akses)</span>
+                      <span className="text-[9px] text-slate-400 truncate">admin@samarastay.co.id</span>
                     </button>
                   </>
                 ) : (
@@ -308,7 +340,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   // 3. IF ROLE IS NOT AUTHORIZED -> RENDER 403 FORBIDDEN PAGE
   if (!isAllowed) {
     const isOwnerPortal = requiredPortal === 'owner';
-    const targetPortalName = isOwnerPortal ? 'Owner Portal' : 'Admin Panel';
+    const isStaffPortal = requiredPortal === 'staff';
+    const targetPortalName = isOwnerPortal ? 'Owner Portal' : isStaffPortal ? 'Staff Admin' : 'Admin Panel';
     const targetRolesDisplay = allowedRoles.map(r => r.toUpperCase()).join(' / ');
 
     return (

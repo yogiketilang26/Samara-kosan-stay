@@ -110,6 +110,30 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const [isAddingAmenity, setIsAddingAmenity] = useState(false);
   const [editingAmenity, setEditingAmenity] = useState<NearbyAmenity | null>(null);
   const [isSavingAmenity, setIsSavingAmenity] = useState(false);
+  const [amenityToDelete, setAmenityToDelete] = useState<NearbyAmenity | null>(null);
+  const [isDeletingAmenity, setIsDeletingAmenity] = useState(false);
+
+  // Synchronized refs to prevent stale closure bugs in Leaflet event listeners
+  const isAddingAmenityRef = useRef(isAddingAmenity);
+  const editingAmenityRef = useRef(editingAmenity);
+  const propLatRef = useRef(propLat);
+  const propLngRef = useRef(propLng);
+
+  useEffect(() => {
+    isAddingAmenityRef.current = isAddingAmenity;
+  }, [isAddingAmenity]);
+
+  useEffect(() => {
+    editingAmenityRef.current = editingAmenity;
+  }, [editingAmenity]);
+
+  useEffect(() => {
+    propLatRef.current = propLat;
+  }, [propLat]);
+
+  useEffect(() => {
+    propLngRef.current = propLng;
+  }, [propLng]);
 
   // Overpass OpenStreetMap Scanner State for Admin
   const [isScanningOsm, setIsScanningOsm] = useState(false);
@@ -586,20 +610,23 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         const lng = parseFloat(e.latlng.lng.toFixed(6));
 
         // If currently adding/editing an amenity, set amenity position
-        if (isAddingAmenity || editingAmenity) {
-          setAmenityForm(prev => {
-            const dist = calculateDistanceMeters(propLat, propLng, lat, lng);
-            const walk = Math.max(1, Math.round(dist / 80));
-            const drive = Math.max(1, Math.round(dist / 350));
-            return {
-              ...prev,
-              lat,
-              lng,
-              distanceMeters: dist,
-              walkingTimeMinutes: walk,
-              drivingTimeMinutes: drive
-            };
-          });
+        if (isAddingAmenityRef.current || editingAmenityRef.current) {
+          const currentPropLat = propLatRef.current;
+          const currentPropLng = propLngRef.current;
+          const dist = calculateDistanceMeters(currentPropLat, currentPropLng, lat, lng);
+          const walk = Math.max(1, Math.round(dist / 80));
+          const drive = Math.max(1, Math.round(dist / 350));
+          setAmenityForm(prev => ({
+            ...prev,
+            lat,
+            lng,
+            distanceMeters: dist,
+            walkingTimeMinutes: walk,
+            drivingTimeMinutes: drive
+          }));
+          if (showToast) {
+            showToast(`Pin fasilitas dipindahkan ke: (${lat}, ${lng}) - Jarak: ${dist}m`);
+          }
         } else {
           // Relocate property marker
           isUserEditingRef.current = true;
@@ -1076,7 +1103,13 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const handleSaveAmenity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amenityForm.name.trim()) {
-      alert('Nama fasilitas wajib diisi.');
+      if (showToast) showToast('Nama fasilitas wajib diisi.', 'error');
+      return;
+    }
+
+    const norm = normalizeCoordinatePair(amenityForm.lat, amenityForm.lng);
+    if (!norm) {
+      if (showToast) showToast('Koordinat fasilitas tidak valid.', 'error');
       return;
     }
 
@@ -1087,8 +1120,8 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         propertyId: selectedPropertyId,
         name: amenityForm.name.trim(),
         category: amenityForm.category,
-        lat: amenityForm.lat,
-        lng: amenityForm.lng,
+        lat: norm.lat,
+        lng: norm.lng,
         distanceMeters: amenityForm.distanceMeters,
         walkingTimeMinutes: amenityForm.walkingTimeMinutes,
         drivingTimeMinutes: amenityForm.drivingTimeMinutes,
@@ -1117,20 +1150,30 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     }
   };
 
-  const handleDeleteAmenity = async (amenity: NearbyAmenity) => {
-    if (!confirm(`Apakah Anda yakin ingin menghapus fasilitas "${amenity.name}"?`)) return;
+  const handleDeleteAmenity = (amenity: NearbyAmenity) => {
+    // Open clean in-app confirmation modal (works reliably inside iframe sandbox)
+    setAmenityToDelete(amenity);
+  };
+
+  const handleConfirmDeleteAmenity = async () => {
+    if (!amenityToDelete) return;
+    const target = amenityToDelete;
+    setIsDeletingAmenity(true);
 
     try {
-      await database.deleteNearbyAmenity(amenity.id);
-      setAmenities(prev => prev.filter(a => a.id !== amenity.id));
+      await database.deleteNearbyAmenity(target.id);
+      setAmenities(prev => prev.filter(a => a.id !== target.id));
       clearFacilityCache(selectedPropertyId);
-      if (editingAmenity?.id === amenity.id) {
+      if (editingAmenity?.id === target.id) {
         setEditingAmenity(null);
       }
-      if (showToast) showToast(`Fasilitas "${amenity.name}" berhasil dihapus.`);
+      setAmenityToDelete(null);
+      if (showToast) showToast(`Fasilitas "${target.name}" berhasil dihapus.`);
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Delete amenity error:', err);
       if (showToast) showToast(err.message || 'Gagal menghapus fasilitas.', 'error');
+    } finally {
+      setIsDeletingAmenity(false);
     }
   };
 
@@ -1720,6 +1763,63 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                   </div>
                 </div>
 
+                {/* Direct Lat & Lng Input Section */}
+                <div className="p-2.5 bg-white rounded-xl border border-emerald-200/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
+                      <Crosshair size={12} className="text-emerald-600" />
+                      Koordinat Lokasi Fasilitas
+                    </span>
+                    <span className="text-[10px] text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded font-medium">
+                      💡 Klik di peta untuk geser titik
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 block mb-1">Latitude (Garis Lintang):</label>
+                      <input
+                        type="number"
+                        step="any"
+                        required
+                        value={amenityForm.lat}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const dist = calculateDistanceMeters(propLat, propLng, val, amenityForm.lng);
+                          setAmenityForm(prev => ({
+                            ...prev,
+                            lat: val,
+                            distanceMeters: dist,
+                            walkingTimeMinutes: Math.max(1, Math.round(dist / 80)),
+                            drivingTimeMinutes: Math.max(1, Math.round(dist / 350))
+                          }));
+                        }}
+                        className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-800 outline-none focus:border-[#2E6F40]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 block mb-1">Longitude (Garis Bujur):</label>
+                      <input
+                        type="number"
+                        step="any"
+                        required
+                        value={amenityForm.lng}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const dist = calculateDistanceMeters(propLat, propLng, amenityForm.lat, val);
+                          setAmenityForm(prev => ({
+                            ...prev,
+                            lng: val,
+                            distanceMeters: dist,
+                            walkingTimeMinutes: Math.max(1, Math.round(dist / 80)),
+                            drivingTimeMinutes: Math.max(1, Math.round(dist / 350))
+                          }));
+                        }}
+                        className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-800 outline-none focus:border-[#2E6F40]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="text-[10px] font-bold text-slate-600 block mb-1">Jarak (Meter):</label>
@@ -1748,6 +1848,17 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                       className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-800"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 block mb-1">Alamat Fasilitas (Opsional):</label>
+                  <input
+                    type="text"
+                    value={amenityForm.address}
+                    onChange={(e) => setAmenityForm(prev => ({ ...prev, address: e.target.value }))}
+                    placeholder="Contoh: Jl. Diponegoro No. 12, Senen..."
+                    className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 outline-none focus:border-[#2E6F40]"
+                  />
                 </div>
 
                 <div>
@@ -1879,6 +1990,63 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         </div>
 
       </div>
+
+      {/* ==================================================== */}
+      {/* DELETE AMENITY CONFIRMATION MODAL */}
+      {/* ==================================================== */}
+      {amenityToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl p-6 space-y-4 border border-rose-100 animate-scale-up">
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-rose-100 text-rose-600 rounded-xl">
+                <Trash2 size={24} />
+              </div>
+              <div className="space-y-1 flex-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Hapus Fasilitas Terdekat?
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Apakah Anda yakin ingin menghapus data fasilitas berikut dari database dan peta?
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
+              <div className="font-bold text-slate-900">{amenityToDelete.name}</div>
+              <div className="text-slate-500 flex items-center gap-2 font-mono text-[11px]">
+                <span>📍 Jarak: {amenityToDelete.distanceMeters}m</span>
+                <span>•</span>
+                <span>Lat: {amenityToDelete.lat}, Lng: {amenityToDelete.lng}</span>
+              </div>
+              {amenityToDelete.address && (
+                <div className="text-slate-500 text-[11px] truncate">
+                  Alamat: {amenityToDelete.address}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                disabled={isDeletingAmenity}
+                onClick={() => setAmenityToDelete(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingAmenity}
+                onClick={handleConfirmDeleteAmenity}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingAmenity ? <RotateCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                <span>{isDeletingAmenity ? 'Menghapus...' : 'Ya, Hapus'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ==================================================== */}
       {/* OPENSTREETMAP SCAN & IMPORT MODAL */}

@@ -226,9 +226,12 @@ export function getGoogleMapsSearchUrl(lat: number, lng: number): string {
 }
 
 /**
- * Generates official Google Maps directions URL to coordinates
+ * Generates official Google Maps directions URL to coordinates, optionally with origin
  */
-export function getGoogleMapsDirectionsUrl(destLat: number, destLng: number): string {
+export function getGoogleMapsDirectionsUrl(destLat: number, destLng: number, originLat?: number, originLng?: number): string {
+  if (originLat !== undefined && originLng !== undefined && !isNaN(originLat) && !isNaN(originLng) && (originLat !== 0 || originLng !== 0)) {
+    return `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${destLat},${destLng}`;
+  }
   return `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}`;
 }
 

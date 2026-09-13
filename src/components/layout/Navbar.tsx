@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Home, Shield, RefreshCw, Database, Building2, LogOut, Key, UserCheck, ChevronDown } from 'lucide-react';
+import { Home, Shield, RefreshCw, Database, Building2, LogOut, Key, UserCheck, ChevronDown, DoorOpen } from 'lucide-react';
 import { isSupabaseConfigured, database } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
 interface NavbarProps {
-  currentView: 'user' | 'admin' | 'owner';
-  setView: (view: 'user' | 'admin' | 'owner') => void;
+  currentView: 'user' | 'admin' | 'owner' | 'staff';
+  setView: (view: 'user' | 'admin' | 'owner' | 'staff') => void;
   onRefresh: () => void;
 }
 
@@ -16,6 +16,7 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
   const rawRole = (user?.raw_role || user?.role || '').trim().toLowerCase();
   const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin'));
   const isOwner = Boolean(user && rawRole === 'owner');
+  const isStaff = Boolean(user && rawRole === 'staff');
 
   const handleResetSandbox = () => {
     if (window.confirm("Ingin me-reset ulang data sandbox ke stelan default bawaan? Semua data transaksi percobaan saat ini akan dibersihkan.")) {
@@ -161,8 +162,23 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
               User Website
             </button>
 
-            {/* 2. Super Admin Panel (Strictly shown ONLY for super role or when active) */}
-            {(isSuper || currentView === 'admin') && (
+            {/* 2. Staff Admin Panel (Dedicated Operational View) */}
+            {(isStaff || isSuper || rawRole === 'admin' || currentView === 'staff') && (
+              <button
+                onClick={() => setView('staff')}
+                className={`px-3 sm:px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+                  currentView === 'staff' 
+                    ? 'bg-teal-600 text-white shadow-lg shadow-teal-900/40' 
+                    : 'text-teal-300 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <DoorOpen size={14} className="text-teal-400" />
+                Staff Admin
+              </button>
+            )}
+
+            {/* 3. Super Admin Panel (Strictly shown ONLY for super/admin role or when active) */}
+            {(isSuper || rawRole === 'admin' || currentView === 'admin') && (
               <button
                 onClick={() => setView('admin')}
                 className={`px-3 sm:px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
@@ -176,7 +192,7 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
               </button>
             )}
 
-            {/* 3. Owner Portal (Strictly shown for owner role, super admin, or when active) */}
+            {/* 4. Owner Portal (Strictly shown for owner role, super admin, or when active) */}
             {(isOwner || isSuper || currentView === 'owner') && (
               <button
                 onClick={() => setView('owner')}
@@ -191,7 +207,7 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
               </button>
             )}
 
-            {/* 4. Portal Selector for Anonymous / Non-Logged In Users */}
+            {/* 5. Portal Selector for Anonymous / Non-Logged In Users */}
             {!user && currentView === 'user' && (
               <div className="relative">
                 <button
@@ -204,7 +220,17 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
                 </button>
 
                 {showPortalDropdown && (
-                  <div className="absolute right-0 mt-2 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50 text-xs">
+                  <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50 text-xs">
+                    <button
+                      onClick={() => {
+                        setShowPortalDropdown(false);
+                        setView('staff');
+                      }}
+                      className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800 hover:text-teal-400 flex items-center gap-2 cursor-pointer font-medium"
+                    >
+                      <DoorOpen size={14} className="text-teal-400" />
+                      <span>Masuk Staff Admin</span>
+                    </button>
                     <button
                       onClick={() => {
                         setShowPortalDropdown(false);

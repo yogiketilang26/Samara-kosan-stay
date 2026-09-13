@@ -4,7 +4,7 @@ import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAUL
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { observability, useRenderCounter } from '../lib/observability';
-import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, MidtransClearingTransaction, BankReconciliationMatch } from '../types';
+import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, MidtransClearingTransaction, BankReconciliationMatch, Maintenance } from '../types';
 import { loadMidtransSnapScript, requestSnapTokenFromServer } from '../lib/midtrans';
 import Sidebar from '../components/layout/Sidebar';
 import { Button } from '../components/common/Button';
@@ -19,6 +19,7 @@ import CouponList from '../components/coupon/CouponList';
 import InvoiceCard from '../components/transaction/InvoiceCard';
 import { CoaDiagnosticModal } from '../components/accounting/CoaDiagnosticModal';
 import { AccountingIntegrityAuditModal } from '../components/accounting/AccountingIntegrityAuditModal';
+import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
 import { formatRupiah } from '../utils/formatCurrency';
 import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
 import { calculateOccupancy, calculateTotalInflow, calculateTotalExpenses, calculateNOI, calculateGrossPipeline } from '../lib/financialMetrics';
@@ -715,6 +716,9 @@ export default function Admin({}: AdminProps) {
   });
 
   // Realtime granular hooks for administrative modules
+  const { data: maintenanceData = [], refetch: refetchMaintenance } = useRealtimeTable<Maintenance>(
+    'maintenance',
+    () => database.fetchMaintenance());
   const { data: pettyCashRequestsData, refetch: refetchPettyCashRequests } = useRealtimeTable<PettyCashRequest>(
     'petty_cash_requests',
     () => database.fetchPettyCashRequests());
@@ -1480,8 +1484,15 @@ export default function Admin({}: AdminProps) {
           (window as any).snap.pay(snapRes.token, {
             onSuccess: async (result: any) => {
               console.log('[Midtrans Snap Extension Success]', result);
-              showToast('Pembayaran diterima Midtrans. Menunggu konfirmasi settlement dari server...');
+              showToast('Pembayaran diterima Midtrans. Memverifikasi perpanjangan...');
               setShowExtensionModal(false);
+
+              // Proactively trigger status check and auto-settle
+              try {
+                await fetch(`/api/midtrans/status/${orderId}`);
+              } catch (checkErr) {
+                console.warn('Auto-settle trigger warning:', checkErr);
+              }
 
               let attempts = 0;
               const maxAttempts = 10; // ~20 detik total
@@ -8170,6 +8181,26 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </div>
           );
         })()}
+
+        {/* TAB: Staff Operations & Monitoring */}
+        {activeTab === 'staff_ops' && (
+          <StaffOperationsSection
+            properties={properties}
+            rooms={rooms}
+            maintenanceList={maintenanceData}
+            pettyCashList={pettyCashRequests}
+            activityLogs={activityLogs}
+            selectedPropertyId="all"
+            onRefresh={async () => {
+              await Promise.all([
+                refetchActivityLogs ? refetchActivityLogs() : Promise.resolve(),
+                refetchPettyCashRequests ? refetchPettyCashRequests() : Promise.resolve(),
+                refetchMaintenance ? refetchMaintenance() : Promise.resolve(),
+              ]);
+              showToast('Data operasional staf berhasil disinkronkan!');
+            }}
+          />
+        )}
 
       </div>
 
