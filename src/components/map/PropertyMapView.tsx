@@ -5,7 +5,6 @@ import { Property, Room, NearbyAmenity, AmenityCategory } from '../../types';
 import { database } from '../../lib/supabase';
 import { 
   AMENITY_CATEGORIES, 
-  INITIAL_NEARBY_AMENITIES, 
   getAmenitiesForProperty,
   fetchNearbyAmenitiesFromOSM
 } from '../../data/nearbyAmenities';
@@ -160,8 +159,8 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
     let isMounted = true;
     database.fetchNearbyAmenities(activePropId)
       .then(data => {
-        if (isMounted && data && data.length > 0) {
-          setDbAmenities(data);
+        if (isMounted) {
+          setDbAmenities(data || []);
         }
       })
       .catch(err => {
@@ -233,14 +232,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
       }
     });
 
-    // 3. If still empty, add default curated amenities
-    if (map.size === 0) {
-      const defaultPool = getAmenitiesForProperty(activeProperty, INITIAL_NEARBY_AMENITIES);
-      defaultPool.forEach(a => {
-        map.set(`${a.name.toLowerCase()}_${a.category}`, a);
-      });
-    }
-
+    // Amenities pool comes strictly from Supabase dbAmenities and live OSM scan
     const all = Array.from(map.values());
     all.sort((a, b) => a.distanceMeters - b.distanceMeters);
 

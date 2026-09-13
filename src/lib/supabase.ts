@@ -11,7 +11,6 @@ import {
   Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, Facility,
   MidtransClearingTransaction, BankReconciliationMatch, NearbyAmenity, StandardFacility
 } from '../types';
-import { INITIAL_NEARBY_AMENITIES } from '../data/nearbyAmenities';
 import { sanitizePropertyCoordinates } from '../utils/mapCoordinates';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
@@ -1062,10 +1061,7 @@ export const database = {
   // --- NEARBY AMENITIES & GPS COORDINATES ---
   async fetchNearbyAmenities(propertyId?: number): Promise<NearbyAmenity[]> {
     if (!isSupabaseConfigured) {
-      if (propertyId) {
-        return INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId);
-      }
-      return INITIAL_NEARBY_AMENITIES;
+      return [];
     }
     try {
       let query = supabase
@@ -1080,19 +1076,12 @@ export const database = {
       const { data, error } = await query;
 
       if (error) {
-        console.warn('[fetchNearbyAmenities] Query error or table not yet initialized, falling back to curated data:', error.message);
-        if (propertyId) {
-          return INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId);
-        }
-        return INITIAL_NEARBY_AMENITIES;
+        console.warn('[fetchNearbyAmenities] Query error:', error.message);
+        return [];
       }
 
       if (!data || data.length === 0) {
-        // If table exists but empty, return curated initial data
-        const fallback = propertyId 
-          ? INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId)
-          : INITIAL_NEARBY_AMENITIES;
-        return fallback;
+        return [];
       }
 
       return (data || []).map((row: any) => ({
@@ -1112,10 +1101,8 @@ export const database = {
         icon: row.icon_name || row.icon || undefined
       }));
     } catch (err) {
-      console.warn('[fetchNearbyAmenities] Network/exception, returning default curated dataset:', err);
-      return propertyId 
-        ? INITIAL_NEARBY_AMENITIES.filter(a => a.propertyId === propertyId)
-        : INITIAL_NEARBY_AMENITIES;
+      console.warn('[fetchNearbyAmenities] Network/exception:', err);
+      return [];
     }
   },
 

@@ -1726,6 +1726,169 @@ async function startServer() {
     }
   });
 
+  // POST /api/admin/maps/resolve-link - Resolves Google Maps links including shortlinks (maps.app.goo.gl)
+  app.post('/api/admin/maps/resolve-link', express.json(), async (req, res) => {
+    try {
+      const rawUrl = (req.body?.url || req.query?.url || '').toString().trim();
+      if (!rawUrl) {
+        return res.status(400).json({ success: false, error: 'URL link Google Maps wajib diisi.' });
+      }
+
+      function extractCoords(str: string): { lat: number; lng: number } | null {
+        if (!str || typeof str !== 'string') return null;
+        let s = str.trim();
+        try { s = decodeURIComponent(s); } catch (e) {}
+        s = s.replace(/[\u2212\u2013\u2014]/g, '-');
+
+        // Pattern 1: @lat,lng
+        const mAt = s.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
+        if (mAt) {
+          let lat = parseFloat(mAt[1]);
+          let lng = parseFloat(mAt[2]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            if (lat > 0 && lat <= 11 && lng >= 95 && lng <= 142) lat = -lat;
+            return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+          }
+        }
+
+        // Pattern 2: ?q= or ?ll= or center= or destination=
+        const mQ = s.match(/[?&/](?:q|query|ll|search|destination|center|saddr|daddr)(?:=|\/)?(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)/i);
+        if (mQ) {
+          let lat = parseFloat(mQ[1]);
+          let lng = parseFloat(mQ[2]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            if (lat > 0 && lat <= 11 && lng >= 95 && lng <= 142) lat = -lat;
+            return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+          }
+        }
+
+        // Pattern 3a: !3dlat!4dlng
+        const mEmA = s.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+        if (mEmA) {
+          let lat = parseFloat(mEmA[1]);
+          let lng = parseFloat(mEmA[2]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            if (lat > 0 && lat <= 11 && lng >= 95 && lng <= 142) lat = -lat;
+            return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+          }
+        }
+
+        // Pattern 3b: !2dlng!3dlat
+        const mEmB = s.match(/!2d(-?\d+\.\d+)!3d(-?\d+\.\d+)/);
+        if (mEmB) {
+          let lng = parseFloat(mEmB[1]);
+          let lat = parseFloat(mEmB[2]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            if (lat > 0 && lat <= 11 && lng >= 95 && lng <= 142) lat = -lat;
+            return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+          }
+        }
+
+        // Pattern 4: Indonesian comma decimal
+        const mComma = s.match(/(-?\d+),(\d{3,8})[\s,;]+(-?\d+),(\d{3,8})/);
+        if (mComma) {
+          let lat = parseFloat(`${mComma[1]}.${mComma[2]}`);
+          let lng = parseFloat(`${mComma[3]}.${mComma[4]}`);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            if (lat > 0 && lat <= 11 && lng >= 95 && lng <= 142) lat = -lat;
+            return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+          }
+        }
+
+        // Pattern 5: Plain coordinates
+        const mPlain = s.match(/(-?\d{1,2}\.\d+)[,\s;\t/]+(-?\d{1,3}\.\d+)/);
+        if (mPlain) {
+          let lat = parseFloat(mPlain[1]);
+          let lng = parseFloat(mPlain[2]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            if ((lat > 90 || (lat >= 95 && lat <= 142)) && (lng >= -11 && lng <= 11)) {
+              const t = lat; lat = lng; lng = t;
+            }
+            if (lat > 0 && lat <= 11 && lng >= 95 && lng <= 142) lat = -lat;
+            return { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+          }
+        }
+
+        return null;
+      }
+
+      // Check if coordinate is present in the raw input directly
+      const directMatch = extractCoords(rawUrl);
+      if (directMatch) {
+        return res.json({ success: true, lat: directMatch.lat, lng: directMatch.lng, resolvedUrl: rawUrl });
+      }
+
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        return res.status(400).json({
+          success: false,
+          error: 'URL tidak valid. Pastikan link diawali dengan https:// atau http://'
+        });
+      }
+
+      // Follow redirects to resolve shortened URLs (e.g. maps.app.goo.gl)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 9000);
+
+      try {
+        const fetchResp = await fetch(rawUrl, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+          }
+        });
+        clearTimeout(timeoutId);
+
+        const finalUrl = fetchResp.url || rawUrl;
+        let coords = extractCoords(finalUrl);
+
+        if (!coords) {
+          const html = await fetchResp.text();
+          coords = extractCoords(html);
+          if (!coords) {
+            // Look for center=-6.xxx,106.xxx or ll=-6.xxx,106.xxx
+            const centerM = html.match(/(?:center|ll|query|q)=([-\d\.]+)(?:%2C|,)([-\d\.]+)/i);
+            if (centerM) {
+              let lat = parseFloat(centerM[1]);
+              let lng = parseFloat(centerM[2]);
+              if (!isNaN(lat) && !isNaN(lng)) {
+                if (lat > 0 && lat <= 11 && lng >= 95 && lng <= 142) lat = -lat;
+                coords = { lat: parseFloat(lat.toFixed(6)), lng: parseFloat(lng.toFixed(6)) };
+              }
+            }
+          }
+        }
+
+        if (coords) {
+          return res.json({
+            success: true,
+            lat: coords.lat,
+            lng: coords.lng,
+            resolvedUrl: finalUrl
+          });
+        }
+
+        return res.status(422).json({
+          success: false,
+          error: 'Tidak dapat menemukan koordinat dari link tersebut. Pastikan tautan mengarah ke lokasi Google Maps yang tepat.'
+        });
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+        console.warn('[Admin API resolve-link] Fetch failed:', fetchErr);
+        return res.status(500).json({
+          success: false,
+          error: `Gagal membaca tautan: ${fetchErr.message || 'Koneksi timeout'}`
+        });
+      }
+    } catch (err: any) {
+      console.error('[Admin API resolve-link] exception:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error' });
+    }
+  });
+
   // POST /api/admin/properties/save
   app.post('/api/admin/properties/save', requireAdminAuth, express.json(), async (req, res) => {
     try {
@@ -1776,9 +1939,13 @@ async function startServer() {
         }
       }
 
+      // Explicitly guarantee name and address are set
+      cleanData.name = effectiveName;
+      cleanData.address = effectiveAddress;
+
       if (cleanData.lat !== undefined && cleanData.lng !== undefined) {
-        let nLat = typeof cleanData.lat === 'number' ? cleanData.lat : parseFloat(String(cleanData.lat).trim());
-        let nLng = typeof cleanData.lng === 'number' ? cleanData.lng : parseFloat(String(cleanData.lng).trim());
+        let nLat = typeof cleanData.lat === 'number' ? cleanData.lat : parseFloat(String(cleanData.lat).trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.'));
+        let nLng = typeof cleanData.lng === 'number' ? cleanData.lng : parseFloat(String(cleanData.lng).trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.'));
         if (!isNaN(nLat) && !isNaN(nLng)) {
           // Detect swapped coords
           if ((nLat > 90 || (nLat >= 95 && nLat <= 142)) && (nLng >= -11 && nLng <= 11)) {
@@ -1794,8 +1961,14 @@ async function startServer() {
           cleanData.lng = parseFloat(nLng.toFixed(6));
         }
       } else {
-        if (cleanData.lat !== undefined) cleanData.lat = parseFloat(Number(cleanData.lat).toFixed(6));
-        if (cleanData.lng !== undefined) cleanData.lng = parseFloat(Number(cleanData.lng).toFixed(6));
+        if (cleanData.lat !== undefined) {
+          const parsed = parseFloat(String(cleanData.lat).trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.'));
+          if (!isNaN(parsed)) cleanData.lat = parseFloat(parsed.toFixed(6));
+        }
+        if (cleanData.lng !== undefined) {
+          const parsed = parseFloat(String(cleanData.lng).trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.'));
+          if (!isNaN(parsed)) cleanData.lng = parseFloat(parsed.toFixed(6));
+        }
       }
 
       if (cleanData.deposit_amount !== undefined && cleanData.deposit_amount !== null) {

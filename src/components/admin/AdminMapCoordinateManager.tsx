@@ -1,11 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Property, NearbyAmenity, AmenityCategory } from '../../types';
 import { database } from '../../lib/supabase';
 import { 
   AMENITY_CATEGORIES, 
   AmenityCategoryConfig, 
-  INITIAL_NEARBY_AMENITIES,
-  getAmenitiesForProperty,
   fetchNearbyAmenitiesFromOSM,
   clearFacilityCache
 } from '../../data/nearbyAmenities';
@@ -14,7 +12,7 @@ import {
   Trash2, Plus, Edit2, RotateCw, Sparkles, Building2, 
   ExternalLink, Layers, Info, Check, X, AlertCircle, ArrowUpRight,
   Clipboard, ClipboardPaste, Copy, ClipboardCheck, ArrowRight, HelpCircle,
-  Globe, DownloadCloud, RefreshCw
+  Globe, DownloadCloud, RefreshCw, Undo2, Crosshair
 } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import L from 'leaflet';
@@ -30,7 +28,7 @@ import {
   getGoogleMapsSearchUrl,
   getGoogleMapsDirectionsUrl
 } from '../../utils/mapTiles';
-import { parseGoogleMapsCoordinates, normalizeCoordinatePair } from '../../utils/mapCoordinates';
+import { parseGoogleMapsCoordinates, normalizeCoordinatePair, resolveGoogleMapsLink } from '../../utils/mapCoordinates';
 
 interface AdminMapCoordinateManagerProps {
   properties: Property[];
@@ -62,11 +60,38 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const [selectedPropertyId, setSelectedPropertyId] = useState<number>(properties[0]?.id || 1);
   const [activeProperty, setActiveProperty] = useState<Property | null>(null);
 
-  // Property Coordinate Form
-  const [propLat, setPropLat] = useState<number>(-6.195621);
-  const [propLng, setPropLng] = useState<number>(106.848815);
-  const [propAddress, setPropAddress] = useState<string>('');
+  // Property Coordinate Form (initialized strictly from user properties, no hardcoded dummy data)
+  const [propLat, setPropLat] = useState<number>(() => {
+    const first = properties[0];
+    const norm = first ? normalizeCoordinatePair(first.lat, first.lng) : null;
+    return norm ? norm.lat : (first?.lat ? Number(first.lat) : 0);
+  });
+  const [propLng, setPropLng] = useState<number>(() => {
+    const first = properties[0];
+    const norm = first ? normalizeCoordinatePair(first.lat, first.lng) : null;
+    return norm ? norm.lng : (first?.lng ? Number(first.lng) : 0);
+  });
+  const [latInput, setLatInput] = useState<string>(() => {
+    const first = properties[0];
+    const norm = first ? normalizeCoordinatePair(first.lat, first.lng) : null;
+    const l = norm ? norm.lat : (first?.lat ? Number(first.lat) : 0);
+    return l !== 0 ? String(l) : '';
+  });
+  const [lngInput, setLngInput] = useState<string>(() => {
+    const first = properties[0];
+    const norm = first ? normalizeCoordinatePair(first.lat, first.lng) : null;
+    const l = norm ? norm.lng : (first?.lng ? Number(first.lng) : 0);
+    return l !== 0 ? String(l) : '';
+  });
+  const [coordFeedback, setCoordFeedback] = useState<string | null>(null);
+  const [propAddress, setPropAddress] = useState<string>(() => properties[0]?.address || '');
   const [isSavingProperty, setIsSavingProperty] = useState(false);
+  const [copiedCoords, setCopiedCoords] = useState(false);
+
+  // Sync and Editing Guard Refs to prevent resets & flickering
+  const prevSelectedPropertyIdRef = useRef<number | null>(null);
+  const isUserEditingRef = useRef<boolean>(false);
+  const lastSavedCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
 
   // Google Maps Direct Smart Paste State
   const [gmapsPropInput, setGmapsPropInput] = useState('');
@@ -85,7 +110,6 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const [isAddingAmenity, setIsAddingAmenity] = useState(false);
   const [editingAmenity, setEditingAmenity] = useState<NearbyAmenity | null>(null);
   const [isSavingAmenity, setIsSavingAmenity] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
 
   // Overpass OpenStreetMap Scanner State for Admin
   const [isScanningOsm, setIsScanningOsm] = useState(false);
@@ -126,17 +150,85 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const [activeTileType, setActiveTileType] = useState<AdminMapTileType>('google-roadmap');
   const [mapTileError, setMapTileError] = useState<string | null>(null);
 
+  // Track if coordinates have unsaved modifications (dirty status)
+  const isDirty = useMemo(() => {
+    if (!activeProperty) return false;
+    const cleanLat = latInput.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+    const cleanLng = lngInput.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+    const numLat = parseFloat(cleanLat);
+    const numLng = parseFloat(cleanLng);
+
+    const savedLat = lastSavedCoordsRef.current?.lat ?? (activeProperty.lat ? Number(activeProperty.lat) : 0);
+    const savedLng = lastSavedCoordsRef.current?.lng ?? (activeProperty.lng ? Number(activeProperty.lng) : 0);
+
+    if (isNaN(numLat) || isNaN(numLng)) {
+      return latInput.trim() !== '' || lngInput.trim() !== '';
+    }
+    return (
+      Math.abs(numLat - savedLat) > 0.000001 ||
+      Math.abs(numLng - savedLng) > 0.000001 ||
+      propAddress !== (activeProperty.address || '')
+    );
+  }, [latInput, lngInput, propAddress, activeProperty]);
+
   // Update active property when selected ID changes or properties list updates
   useEffect(() => {
     const found = properties.find(p => p.id === selectedPropertyId) || properties[0] || null;
-    setActiveProperty(found);
-    if (found) {
+    if (!found) return;
+
+    // Check if user changed to a DIFFERENT property
+    const isNewPropertySelected = prevSelectedPropertyIdRef.current !== found.id;
+
+    if (isNewPropertySelected) {
+      prevSelectedPropertyIdRef.current = found.id;
+      isUserEditingRef.current = false;
+      setActiveProperty(found);
+
       const norm = normalizeCoordinatePair(found.lat, found.lng);
-      setPropLat(norm ? norm.lat : (found.lat ? -Math.abs(found.lat) : -6.195621));
-      setPropLng(norm ? norm.lng : (found.lng || 106.848815));
+      const safeLat = norm ? norm.lat : (found.lat ? Number(found.lat) : 0);
+      const safeLng = norm ? norm.lng : (found.lng ? Number(found.lng) : 0);
+      lastSavedCoordsRef.current = { lat: safeLat, lng: safeLng };
+
+      setPropLat(safeLat);
+      setPropLng(safeLng);
+      setLatInput(safeLat !== 0 ? String(safeLat) : '');
+      setLngInput(safeLng !== 0 ? String(safeLng) : '');
       setPropAddress(found.address || '');
       setGmapsPropInput('');
       setPropParseStatus({ status: 'idle' });
+      setCoordFeedback(null);
+      if (safeLat !== 0 && safeLng !== 0) {
+        centerMapOn(safeLat, safeLng, 16);
+      } else {
+        centerMapOn(-6.175392, 106.827153, 12);
+      }
+      return;
+    }
+
+    // SAME property updated from background (e.g. Supabase realtime or Admin re-render)
+    setActiveProperty(found);
+
+    // CRITICAL: If user is actively typing or editing, DO NOT reset their inputs or map location!
+    if (isUserEditingRef.current) {
+      return;
+    }
+
+    // If not editing, sync if DB coordinates actually changed
+    const norm = normalizeCoordinatePair(found.lat, found.lng);
+    const safeLat = norm ? norm.lat : (found.lat ? Number(found.lat) : 0);
+    const safeLng = norm ? norm.lng : (found.lng ? Number(found.lng) : 0);
+
+    if (
+      !lastSavedCoordsRef.current ||
+      Math.abs(lastSavedCoordsRef.current.lat - safeLat) > 0.000001 ||
+      Math.abs(lastSavedCoordsRef.current.lng - safeLng) > 0.000001
+    ) {
+      lastSavedCoordsRef.current = { lat: safeLat, lng: safeLng };
+      setPropLat(safeLat);
+      setPropLng(safeLng);
+      setLatInput(safeLat !== 0 ? String(safeLat) : '');
+      setLngInput(safeLng !== 0 ? String(safeLng) : '');
+      setPropAddress(found.address || '');
     }
   }, [selectedPropertyId, properties]);
 
@@ -157,18 +249,10 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
 
     try {
       const data = await database.fetchNearbyAmenities(propId);
-      if (data && data.length > 0) {
-        setAmenities(sanitizeUniqueAmenities(data));
-      } else {
-        const found = properties.find(p => p.id === propId) || activeProperty;
-        const fallback = found ? getAmenitiesForProperty(found, INITIAL_NEARBY_AMENITIES) : [];
-        setAmenities(sanitizeUniqueAmenities(fallback));
-      }
+      setAmenities(sanitizeUniqueAmenities(data || []));
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Load amenities error:', err);
-      const found = properties.find(p => p.id === propId) || activeProperty;
-      const fallback = found ? getAmenitiesForProperty(found, INITIAL_NEARBY_AMENITIES) : [];
-      setAmenities(sanitizeUniqueAmenities(fallback));
+      setAmenities([]);
     } finally {
       setIsLoadingAmenities(false);
     }
@@ -181,41 +265,73 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   }, [selectedPropertyId]);
 
   // Handle Google Maps Smart Paste for Property
-  const handleGmapsPropPaste = (value: string) => {
+  const handleGmapsPropPaste = async (value: string) => {
+    isUserEditingRef.current = true;
     setGmapsPropInput(value);
+    setCoordFeedback(null);
     if (!value.trim()) {
       setPropParseStatus({ status: 'idle' });
       return;
     }
 
+    // 1. Direct synchronous parse
     const parsed = parseGoogleMapsCoordinates(value);
     if (parsed) {
       setPropLat(parsed.lat);
       setPropLng(parsed.lng);
+      setLatInput(String(parsed.lat));
+      setLngInput(String(parsed.lng));
       setPropParseStatus({
         status: 'success',
         message: `Koordinat terdeteksi: Lat ${parsed.lat}, Lng ${parsed.lng}`
       });
-
-      // Fly map to new coordinates
       centerMapOn(parsed.lat, parsed.lng, 17);
-    } else {
-      setPropParseStatus({
-        status: 'error',
-        message: 'Format tidak dikenali. Paste link Google Maps (misal https://maps.app.goo.gl/... atau @-6.19,106.84) atau teks koordinat "-6.1956, 106.8488".'
-      });
+      return;
     }
+
+    // 2. If it is a web link (e.g. maps.app.goo.gl or goo.gl/maps or google.com/maps), resolve asynchronously
+    const isUrl = value.trim().startsWith('http://') || value.trim().startsWith('https://') || value.includes('maps') || value.includes('goo.gl');
+    if (isUrl) {
+      setPropParseStatus({
+        status: 'idle',
+        message: 'Sedang membaca tautan Google Maps...'
+      });
+
+      const resolved = await resolveGoogleMapsLink(value.trim());
+      if (resolved) {
+        setPropLat(resolved.lat);
+        setPropLng(resolved.lng);
+        setLatInput(String(resolved.lat));
+        setLngInput(String(resolved.lng));
+        setPropParseStatus({
+          status: 'success',
+          message: `Link berhasil diterjemahkan: Lat ${resolved.lat}, Lng ${resolved.lng}`
+        });
+        centerMapOn(resolved.lat, resolved.lng, 17);
+        return;
+      }
+    }
+
+    setPropParseStatus({
+      status: 'error',
+      message: 'Format tidak dikenali. Paste link Google Maps (misal https://maps.app.goo.gl/... atau @-6.19,106.84) atau teks koordinat "-6.195621, 106.848815".'
+    });
   };
 
   // Handle Google Maps Smart Paste for Amenity Form
-  const handleGmapsAmenityPaste = (value: string) => {
+  const handleGmapsAmenityPaste = async (value: string) => {
     setGmapsAmenityInput(value);
     if (!value.trim()) {
       setAmenityParseStatus({ status: 'idle' });
       return;
     }
 
-    const parsed = parseGoogleMapsCoordinates(value);
+    let parsed = parseGoogleMapsCoordinates(value);
+    if (!parsed && (value.trim().startsWith('http') || value.includes('maps') || value.includes('goo.gl'))) {
+      setAmenityParseStatus({ status: 'idle', message: 'Membaca tautan Google Maps...' });
+      parsed = await resolveGoogleMapsLink(value.trim());
+    }
+
     if (parsed) {
       const dist = calculateDistanceMeters(propLat, propLng, parsed.lat, parsed.lng);
       const walk = Math.max(1, Math.round(dist / 80)); // 80m / min
@@ -241,6 +357,151 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         status: 'error',
         message: 'Format link / koordinat tidak valid.'
       });
+    }
+  };
+
+  // Handler for Latitude text input
+  const handleLatInputChange = (val: string) => {
+    isUserEditingRef.current = true;
+    setLatInput(val);
+    setCoordFeedback(null);
+
+    // If user pasted combined string e.g. "-6.162249, 106.865001" or link into Latitude
+    if (val.includes(',') || val.includes('@') || val.includes('http') || val.includes(';') || (val.includes(' ') && val.trim().split(/\s+/).length >= 2)) {
+      const parsed = parseGoogleMapsCoordinates(val);
+      if (parsed) {
+        setPropLat(parsed.lat);
+        setPropLng(parsed.lng);
+        setLatInput(String(parsed.lat));
+        setLngInput(String(parsed.lng));
+        setCoordFeedback(`Koordinat ganda terdeteksi & dipisahkan: Lat ${parsed.lat}, Lng ${parsed.lng}`);
+        centerMapOn(parsed.lat, parsed.lng, 17);
+        return;
+      }
+    }
+
+    const cleanStr = val.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+    const num = parseFloat(cleanStr);
+    if (!isNaN(num) && isFinite(num) && num >= -90 && num <= 90 && cleanStr.length >= 4) {
+      setPropLat(num);
+    }
+  };
+
+  // Handler for Longitude text input
+  const handleLngInputChange = (val: string) => {
+    isUserEditingRef.current = true;
+    setLngInput(val);
+    setCoordFeedback(null);
+
+    // If user pasted combined string e.g. "-6.162249, 106.865001" or link into Longitude
+    if (val.includes(',') || val.includes('@') || val.includes('http') || val.includes(';') || (val.includes(' ') && val.trim().split(/\s+/).length >= 2)) {
+      const parsed = parseGoogleMapsCoordinates(val);
+      if (parsed) {
+        setPropLat(parsed.lat);
+        setPropLng(parsed.lng);
+        setLatInput(String(parsed.lat));
+        setLngInput(String(parsed.lng));
+        setCoordFeedback(`Koordinat ganda terdeteksi & dipisahkan: Lat ${parsed.lat}, Lng ${parsed.lng}`);
+        centerMapOn(parsed.lat, parsed.lng, 17);
+        return;
+      }
+    }
+
+    const cleanStr = val.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+    const num = parseFloat(cleanStr);
+    if (!isNaN(num) && isFinite(num) && num >= -180 && num <= 180 && cleanStr.length >= 4) {
+      setPropLng(num);
+    }
+  };
+
+  // Coordinate normalizer on input blur
+  const handleCoordBlur = () => {
+    const cleanLat = latInput.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+    const cleanLng = lngInput.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+    
+    if (cleanLat === '' && cleanLng === '') return;
+    
+    const norm = normalizeCoordinatePair(cleanLat, cleanLng);
+    if (norm) {
+      setPropLat(norm.lat);
+      setPropLng(norm.lng);
+      setLatInput(String(norm.lat));
+      setLngInput(String(norm.lng));
+      centerMapOn(norm.lat, norm.lng, 17);
+    }
+  };
+
+  // Device GPS Location getter
+  const handleUseCurrentLocation = () => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      if (showToast) showToast('Browser tidak mendukung geolokasi GPS.', 'error');
+      return;
+    }
+    isUserEditingRef.current = true;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = parseFloat(pos.coords.latitude.toFixed(6));
+        const lng = parseFloat(pos.coords.longitude.toFixed(6));
+        setPropLat(lat);
+        setPropLng(lng);
+        setLatInput(String(lat));
+        setLngInput(String(lng));
+        setCoordFeedback(`Koordinat GPS terdeteksi: Lat ${lat}, Lng ${lng}`);
+        centerMapOn(lat, lng, 17);
+        if (showToast) showToast(`Titik GPS terdeteksi: ${lat}, ${lng}`, 'success');
+      },
+      (err) => {
+        if (showToast) showToast(`Gagal membaca GPS: ${err.message}`, 'error');
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  // Copy coordinates string to clipboard
+  const handleCopyCoords = () => {
+    if (!latInput || !lngInput) return;
+    navigator.clipboard.writeText(`${latInput}, ${lngInput}`);
+    setCopiedCoords(true);
+    setTimeout(() => setCopiedCoords(false), 2000);
+    if (showToast) showToast('Koordinat disalin ke papan klip.', 'success');
+  };
+
+  // Revert coordinates back to last saved database state (CRUD Revert)
+  const handleRevertCoordinates = () => {
+    if (!activeProperty) return;
+    const savedLat = lastSavedCoordsRef.current?.lat ?? (activeProperty.lat ? Number(activeProperty.lat) : 0);
+    const savedLng = lastSavedCoordsRef.current?.lng ?? (activeProperty.lng ? Number(activeProperty.lng) : 0);
+    isUserEditingRef.current = false;
+    setPropLat(savedLat);
+    setPropLng(savedLng);
+    setLatInput(savedLat !== 0 ? String(savedLat) : '');
+    setLngInput(savedLng !== 0 ? String(savedLng) : '');
+    setPropAddress(activeProperty.address || '');
+    setGmapsPropInput('');
+    setPropParseStatus({ status: 'idle' });
+    setCoordFeedback('Perubahan dibatalkan. Koordinat dikembalikan ke data tersimpan.');
+    if (savedLat !== 0 && savedLng !== 0) {
+      centerMapOn(savedLat, savedLng, 16);
+    } else {
+      centerMapOn(-6.175392, 106.827153, 12);
+    }
+  };
+
+  // Delete / Clear coordinates from property (CRUD Delete)
+  const handleClearCoordinates = async () => {
+    if (!activeProperty) return;
+    if (!confirm(`Hapus titik koordinat untuk properti "${activeProperty.name}"? Pin lokasi akan dikosongkan.`)) return;
+
+    isUserEditingRef.current = true;
+    setPropLat(0);
+    setPropLng(0);
+    setLatInput('');
+    setLngInput('');
+    setGmapsPropInput('');
+    setCoordFeedback('Koordinat dikosongkan. Klik "Simpan Titik Koordinat" untuk memperbarui data di database.');
+    if (propertyMarkerRef.current && propertyLayerRef.current) {
+      propertyLayerRef.current.clearLayers();
+      propertyMarkerRef.current = null;
     }
   };
 
@@ -341,8 +602,12 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
           });
         } else {
           // Relocate property marker
+          isUserEditingRef.current = true;
           setPropLat(lat);
           setPropLng(lng);
+          setLatInput(String(lat));
+          setLngInput(String(lng));
+          setCoordFeedback(`Titik dipilih dari peta: Lat ${lat}, Lng ${lng}`);
         }
       });
     }
@@ -379,11 +644,31 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     });
   }, [activeTileType]);
 
-  // Update Property Marker
+  // Keep track of property ID for marker recreation
+  const currentMarkerPropIdRef = useRef<number | null>(null);
+
+  // Update Property Marker smoothly without destroying/recreating on every keystroke
   useEffect(() => {
     const propertyLayer = propertyLayerRef.current;
     if (!propertyLayer) return;
 
+    // If coordinates are cleared (0, 0 or null), remove marker
+    if (!propLat || !propLng || (Math.abs(propLat) < 0.0001 && Math.abs(propLng) < 0.0001)) {
+      propertyLayer.clearLayers();
+      propertyMarkerRef.current = null;
+      return;
+    }
+
+    const propIdChanged = currentMarkerPropIdRef.current !== activeProperty?.id;
+
+    // If marker already exists and property hasn't changed, smoothly update coordinates without destroying
+    if (propertyMarkerRef.current && !propIdChanged) {
+      propertyMarkerRef.current.setLatLng([propLat, propLng]);
+      return;
+    }
+
+    // Recreate marker when property changes or initially mounts
+    currentMarkerPropIdRef.current = activeProperty?.id || null;
     propertyLayer.clearLayers();
     propertyMarkerRef.current = null;
 
@@ -413,12 +698,16 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
       const position = e.target.getLatLng();
       const lat = parseFloat(position.lat.toFixed(6));
       const lng = parseFloat(position.lng.toFixed(6));
+      isUserEditingRef.current = true;
       setPropLat(lat);
       setPropLng(lng);
+      setLatInput(String(lat));
+      setLngInput(String(lng));
+      setCoordFeedback(`Marker digeser ke Lat ${lat}, Lng ${lng}`);
     });
 
     propertyMarkerRef.current = marker;
-  }, [propLat, propLng, activeProperty]);
+  }, [propLat, propLng, activeProperty?.id, activeProperty?.name]);
 
   // Update Amenity Markers on Map
   useEffect(() => {
@@ -550,23 +839,56 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
   const handleSelectSearchResult = (result: any) => {
     const lat = parseFloat(parseFloat(result.lat).toFixed(6));
     const lng = parseFloat(parseFloat(result.lon).toFixed(6));
+    isUserEditingRef.current = true;
     setPropLat(lat);
     setPropLng(lng);
+    setLatInput(String(lat));
+    setLngInput(String(lng));
     setPropAddress(result.display_name);
     setSearchResults([]);
     setSearchQuery('');
     centerMapOn(lat, lng, 17);
   };
 
-  // Save Property Coordinates & Address
+  // Save Property Coordinates & Address (CRUD Update / Create)
   const handleSavePropertyCoordinates = async () => {
     if (!activeProperty) return;
     setIsSavingProperty(true);
 
     try {
-      const norm = normalizeCoordinatePair(propLat, propLng);
-      const finalLat = norm ? norm.lat : (propLat ? -Math.abs(propLat) : -6.195621);
-      const finalLng = norm ? norm.lng : (propLng || 106.848815);
+      const cleanLat = latInput.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+      const cleanLng = lngInput.trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+
+      // Check if user explicitly cleared / deleted the coordinates
+      if (cleanLat === '' || cleanLng === '' || (cleanLat === '0' && cleanLng === '0')) {
+        const updated = await database.saveProperty({
+          id: activeProperty.id,
+          name: activeProperty.name,
+          address: propAddress || activeProperty.address,
+          lat: 0,
+          lng: 0
+        });
+        isUserEditingRef.current = false;
+        lastSavedCoordsRef.current = { lat: 0, lng: 0 };
+        setPropLat(0);
+        setPropLng(0);
+        setLatInput('');
+        setLngInput('');
+        setCoordFeedback('Titik koordinat berhasil dikosongkan/dihapus.');
+        clearFacilityCache(activeProperty.id);
+        if (onPropertyUpdated) onPropertyUpdated(updated);
+        if (showToast) showToast(`Titik koordinat untuk ${activeProperty.name} berhasil dikosongkan.`, 'success');
+        return;
+      }
+
+      const norm = normalizeCoordinatePair(cleanLat, cleanLng) || normalizeCoordinatePair(propLat, propLng);
+      if (!norm) {
+        setCoordFeedback('Format koordinat tidak valid. Harap masukkan angka latitude dan longitude yang valid.');
+        setIsSavingProperty(false);
+        return;
+      }
+      const finalLat = norm.lat;
+      const finalLng = norm.lng;
 
       const updated = await database.saveProperty({
         id: activeProperty.id,
@@ -576,6 +898,15 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         lng: finalLng
       });
 
+      // Update state with finalized values and reset editing guard
+      isUserEditingRef.current = false;
+      lastSavedCoordsRef.current = { lat: finalLat, lng: finalLng };
+      setPropLat(finalLat);
+      setPropLng(finalLng);
+      setLatInput(String(finalLat));
+      setLngInput(String(finalLng));
+      setCoordFeedback(`Koordinat berhasil disimpan: Lat ${finalLat}, Lng ${finalLng}`);
+
       // Clear Overpass cache for this property
       clearFacilityCache(activeProperty.id);
 
@@ -584,7 +915,7 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
       }
 
       if (showToast) {
-        showToast(`Koordinat GPS untuk ${activeProperty.name} berhasil disimpan!`);
+        showToast(`Koordinat GPS untuk ${activeProperty.name} berhasil disimpan! (${finalLat}, ${finalLng})`, 'success');
       }
     } catch (err: any) {
       console.error('[AdminMapCoordinateManager] Save property coord error:', err);
@@ -803,34 +1134,6 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
     }
   };
 
-  // Seed / Sync Default Amenities to Supabase
-  const handleSeedDefaultAmenities = async () => {
-    if (!confirm(`Sinkronisasi seluruh data kurasi awal fasilitas sekitar untuk ${activeProperty?.name} ke tabel Supabase?`)) {
-      return;
-    }
-
-    setIsSeeding(true);
-    try {
-      const defaultForProp = activeProperty 
-        ? getAmenitiesForProperty(activeProperty, INITIAL_NEARBY_AMENITIES)
-        : [];
-      if (defaultForProp.length === 0) {
-        alert('Tidak ada template data fasilitas dalam radius 3.5 km untuk properti ini. Gunakan fitur "Tarik dari OpenStreetMap" untuk memindai otomatis.');
-        return;
-      }
-
-      await database.batchSeedNearbyAmenities(defaultForProp);
-      await loadAmenities(selectedPropertyId);
-      clearFacilityCache(selectedPropertyId);
-      if (showToast) showToast(`Berhasil menyinkronkan ${defaultForProp.length} titik fasilitas ke Supabase!`);
-    } catch (err: any) {
-      console.error('[AdminMapCoordinateManager] Seed error:', err);
-      if (showToast) showToast(err.message || 'Gagal sinkronisasi data fasilitas.', 'error');
-    } finally {
-      setIsSeeding(false);
-    }
-  };
-
   return (
     <div className="space-y-6 font-sans text-slate-800 text-left">
       
@@ -1033,28 +1336,89 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
         {/* ==================================================== */}
         <div className="lg:col-span-5 space-y-5">
           
-          {/* Card 1: Property Location Coordinates */}
+          {/* Card 1: Property Location Coordinates (CRUD Manager) */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             
-            <div className="flex justify-between items-start">
+            <div className="flex justify-between items-start flex-wrap gap-2">
               <div>
-                <span className="text-[10px] font-black font-mono text-[#2E6F40] uppercase tracking-wider block">
-                  TITIK KOORDINAT PROPERTI
-                </span>
-                <h3 className="text-base font-extrabold text-slate-900">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black font-mono text-[#2E6F40] uppercase tracking-wider block">
+                    TITIK KOORDINAT PROPERTI
+                  </span>
+                  {isDirty ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                      <span>Belum Disimpan</span>
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                      <Check size={10} className="text-emerald-700" />
+                      <span>Tersimpan di Supabase</span>
+                    </span>
+                  )}
+                </div>
+                <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
                   {activeProperty?.name || 'Cabang Kos'}
                 </h3>
               </div>
               
-              <a
-                href={`https://www.google.com/maps/search/?api=1&query=${propLat},${propLng}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] font-bold text-[#2E6F40] hover:underline flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded-lg"
-              >
-                <span>Buka Google Maps</span>
-                <ExternalLink size={10} />
-              </a>
+              <div className="flex items-center gap-1.5">
+                <a
+                  href={`https://www.google.com/maps/search/?api=1&query=${propLat},${propLng}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[10px] font-bold text-[#2E6F40] hover:underline flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-lg border border-emerald-200 transition"
+                  title="Buka titik koordinat di Google Maps tab baru"
+                >
+                  <span>Google Maps</span>
+                  <ExternalLink size={10} />
+                </a>
+              </div>
+            </div>
+
+            {/* Real Properties Switcher & Device GPS */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-bold text-slate-600 uppercase font-mono flex items-center gap-1">
+                  <Building2 size={11} className="text-[#2E6F40]" />
+                  <span>Pilih Cabang Properti:</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocation}
+                  className="text-[10px] font-bold text-[#2E6F40] hover:text-[#1e4b2a] flex items-center gap-1 bg-white hover:bg-emerald-50 px-2 py-0.5 rounded-md border border-slate-200 cursor-pointer shadow-2xs"
+                  title="Gunakan posisi GPS perangkat saat ini"
+                >
+                  <Crosshair size={10} />
+                  <span>GPS Saya</span>
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {properties.map(p => {
+                  const isSelected = p.id === selectedPropertyId;
+                  const hasCoords = Boolean(p.lat && p.lng && (p.lat !== 0 || p.lng !== 0));
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setSelectedPropertyId(p.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                        isSelected 
+                          ? 'bg-[#2E6F40] text-white shadow-xs'
+                          : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                      }`}
+                    >
+                      <Building2 size={10} className={isSelected ? 'text-white' : 'text-slate-500'} />
+                      <span>{p.name}</span>
+                      {hasCoords ? (
+                        <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-emerald-200' : 'bg-emerald-500'}`} title="Koordinat terisi" />
+                      ) : (
+                        <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-amber-200' : 'bg-amber-400'}`} title="Koordinat belum diatur" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Google Maps Smart Paste Input */}
@@ -1064,14 +1428,28 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                   <ClipboardPaste size={13} className="text-[#2E6F40]" />
                   <span>Smart Paste (Link / Koordinat Google Maps)</span>
                 </label>
-                <button
-                  type="button"
-                  onClick={() => setShowGmapsGuide(!showGmapsGuide)}
-                  className="text-[10px] text-[#2E6F40] font-bold hover:underline flex items-center gap-0.5 cursor-pointer"
-                >
-                  <HelpCircle size={10} />
-                  <span>Panduan</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {gmapsPropInput && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGmapsPropInput('');
+                        setPropParseStatus({ status: 'idle' });
+                      }}
+                      className="text-[10px] text-slate-400 hover:text-slate-600 font-bold"
+                    >
+                      Bersihkan
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowGmapsGuide(!showGmapsGuide)}
+                    className="text-[10px] text-[#2E6F40] font-bold hover:underline flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <HelpCircle size={10} />
+                    <span>Panduan</span>
+                  </button>
+                </div>
               </div>
 
               <input
@@ -1108,32 +1486,75 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
               )}
             </div>
 
-            {/* Latitude & Longitude Numeric Inputs */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 uppercase font-mono block mb-1">
-                  Latitude:
-                </label>
-                <input
-                  type="number"
-                  step="0.000001"
-                  value={propLat}
-                  onChange={(e) => setPropLat(parseFloat(e.target.value) || 0)}
-                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40]"
-                />
+            {/* Latitude & Longitude Inputs */}
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[11px] font-bold text-slate-600 uppercase font-mono">
+                      Latitude:
+                    </label>
+                    <span className="text-[9px] text-slate-400 font-mono">Contoh: -6.162249</span>
+                  </div>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={latInput}
+                    onChange={(e) => handleLatInputChange(e.target.value)}
+                    onBlur={handleCoordBlur}
+                    placeholder="-6.162249"
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40] transition"
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[11px] font-bold text-slate-600 uppercase font-mono">
+                      Longitude:
+                    </label>
+                    <span className="text-[9px] text-slate-400 font-mono">Contoh: 106.865001</span>
+                  </div>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={lngInput}
+                    onChange={(e) => handleLngInputChange(e.target.value)}
+                    onBlur={handleCoordBlur}
+                    placeholder="106.865001"
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40] transition"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 uppercase font-mono block mb-1">
-                  Longitude:
-                </label>
-                <input
-                  type="number"
-                  step="0.000001"
-                  value={propLng}
-                  onChange={(e) => setPropLng(parseFloat(e.target.value) || 0)}
-                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40]"
-                />
+
+              {/* Coordinate quick utility buttons */}
+              <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCopyCoords}
+                    className="text-[10px] font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1 cursor-pointer"
+                    title="Salin pasangan koordinat Lat, Lng"
+                  >
+                    {copiedCoords ? <ClipboardCheck size={11} className="text-emerald-600" /> : <Copy size={11} />}
+                    <span>{copiedCoords ? 'Tersalin!' : 'Salin Koordinat'}</span>
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => centerMapOn(propLat, propLng, 17)}
+                    className="text-[10px] font-bold text-[#2E6F40] hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Navigation size={11} />
+                    <span>Fokus Peta</span>
+                  </button>
+                </div>
               </div>
+
+              {coordFeedback && (
+                <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-lg font-medium flex items-center gap-1 mt-1 border border-emerald-200">
+                  <CheckCircle size={11} className="text-emerald-600 shrink-0" />
+                  <span>{coordFeedback}</span>
+                </div>
+              )}
             </div>
 
             {/* Address Input */}
@@ -1145,30 +1566,59 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                 <button
                   type="button"
                   onClick={() => handleReverseGeocode(propLat, propLng)}
-                  className="text-[10px] text-[#2E6F40] font-bold hover:underline cursor-pointer"
+                  className="text-[10px] text-[#2E6F40] font-bold hover:underline cursor-pointer flex items-center gap-1"
                 >
-                  ⚡ Deteksi Alamat Otomatis
+                  <span>⚡ Deteksi Alamat Otomatis</span>
                 </button>
               </div>
               <textarea
                 rows={2}
                 value={propAddress}
-                onChange={(e) => setPropAddress(e.target.value)}
+                onChange={(e) => {
+                  isUserEditingRef.current = true;
+                  setPropAddress(e.target.value);
+                }}
                 placeholder="Alamat fisik properti..."
-                className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40]"
+                className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 outline-none focus:bg-white focus:border-[#2E6F40] transition"
               />
             </div>
 
-            {/* Save Coordinates Button */}
-            <button
-              type="button"
-              onClick={handleSavePropertyCoordinates}
-              disabled={isSavingProperty}
-              className="w-full py-2.5 bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-extrabold uppercase tracking-wider rounded-xl transition shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-            >
-              {isSavingProperty ? <RotateCw size={14} className="animate-spin" /> : <Check size={14} />}
-              <span>{isSavingProperty ? 'Menyimpan ke Supabase...' : 'Simpan Titik Koordinat'}</span>
-            </button>
+            {/* CRUD Action Buttons */}
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={handleSavePropertyCoordinates}
+                disabled={isSavingProperty}
+                className="w-full py-2.5 bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-extrabold uppercase tracking-wider rounded-xl transition shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isSavingProperty ? <RotateCw size={14} className="animate-spin" /> : <Check size={14} />}
+                <span>{isSavingProperty ? 'Menyimpan ke Supabase...' : 'Simpan Titik Koordinat'}</span>
+              </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleRevertCoordinates}
+                  disabled={!isDirty || isSavingProperty}
+                  className="py-1.5 px-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1 cursor-pointer"
+                  title="Batalkan perubahan dan kembalikan ke data tersimpan di Supabase"
+                >
+                  <Undo2 size={12} />
+                  <span>Batal / Reset</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleClearCoordinates}
+                  disabled={isSavingProperty || (!latInput && !lngInput)}
+                  className="py-1.5 px-2 bg-rose-50 hover:bg-rose-100 disabled:opacity-40 text-rose-700 border border-rose-200 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1 cursor-pointer"
+                  title="Kosongkan koordinat untuk properti ini"
+                >
+                  <Trash2 size={12} />
+                  <span>Kosongkan Pin</span>
+                </button>
+              </div>
+            </div>
 
           </div>
 
@@ -1205,17 +1655,6 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                 >
                   <Plus size={12} />
                   <span>Manual</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSeedDefaultAmenities}
-                  disabled={isSeeding}
-                  className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-bold transition flex items-center gap-1 cursor-pointer"
-                  title="Sinkronkan data template awal ke Supabase"
-                >
-                  <Sparkles size={11} className="text-amber-500" />
-                  <span>Template</span>
                 </button>
               </div>
             </div>
@@ -1262,7 +1701,7 @@ export const AdminMapCoordinateManager: React.FC<AdminMapCoordinateManagerProps>
                       required
                       value={amenityForm.name}
                       onChange={(e) => setAmenityForm(prev => ({ ...prev, name: e.target.value }))}
-                      placeholder="Contoh: Stasiun Salemba / UI Depok"
+                      placeholder="Contoh: Stasiun KRL / Kampus / Rumah Sakit"
                       className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#2E6F40]"
                     />
                   </div>

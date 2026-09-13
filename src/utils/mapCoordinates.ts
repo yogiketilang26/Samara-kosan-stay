@@ -5,38 +5,35 @@
 import { Property, NearbyAmenity } from '../types';
 
 // Curated accurate default coordinates for known Samara Stay locations
-export const KNOWN_BRANCH_COORDINATES: Record<string, { lat: number; lng: number; name: string }> = {
-  salemba: { lat: -6.195621, lng: 106.848815, name: 'Samara Stay Salemba (Jakarta Pusat)' },
-  kemayoran: { lat: -6.155500, lng: 106.853000, name: 'Samara Stay Kemayoran (Jakarta Pusat)' },
-  atikah: { lat: -6.155500, lng: 106.853000, name: 'Samara Stay Kemayoran - Atikah (Jakarta Pusat)' },
-  depok: { lat: -6.368200, lng: 106.830500, name: 'Samara Stay Margonda Depok UI' },
-  margonda: { lat: -6.368200, lng: 106.830500, name: 'Samara Stay Margonda Depok UI' },
-  kukusan: { lat: -6.368200, lng: 106.830500, name: 'Samara Stay Margonda Depok UI' },
-  tebet: { lat: -6.226500, lng: 106.858000, name: 'Samara Stay Tebet (Jakarta Selatan)' },
-  kuningan: { lat: -6.226500, lng: 106.858000, name: 'Samara Stay Tebet / Kuningan (Jakarta Selatan)' }
-};
+// Real branch coordinates are stored and fetched dynamically from Supabase
+export const KNOWN_BRANCH_COORDINATES: Record<string, { lat: number; lng: number; name: string }> = {};
 
 export const DEFAULT_JAKARTA_COORDINATES = {
-  lat: -6.195621,
-  lng: 106.848815
+  lat: -6.175392,
+  lng: 106.827153
 };
 
 /**
  * Normalizes a latitude & longitude coordinate pair:
  * 1. Converts strings, numbers, or expressions into clean numbers
- * 2. Detects swapped coordinates (e.g. lat > 90 or lat in Indonesian longitude range 95-142)
- * 3. Detects Indonesian coordinates south of equator that missed the negative sign
- *    (e.g. Jakarta lat is between -6.0 and -6.6; if entered as  with lng 106.865001,
- *    it auto-fixes to )
- * 4. Ensures 6-decimal-place precision
+ * 2. Cleans typographic Unicode minus signs (−, –, —) and comma decimal separators
+ * 3. Detects swapped coordinates (e.g. lat > 90 or lat in Indonesian longitude range 95-142)
+ * 4. Detects Indonesian coordinates south of equator that missed the negative sign
+ *    (e.g. Jakarta lat is between -6.0 and -6.6; if entered as 6.162249 with lng 106.865001,
+ *    it auto-fixes to -6.162249)
+ * 5. Ensures 6-decimal-place precision
  */
 export function normalizeCoordinatePair(rawLat: any, rawLng: any): { lat: number; lng: number } | null {
   if (rawLat === null || rawLat === undefined || rawLng === null || rawLng === undefined) {
     return null;
   }
 
-  let numLat = typeof rawLat === 'number' ? rawLat : parseFloat(String(rawLat).trim());
-  let numLng = typeof rawLng === 'number' ? rawLng : parseFloat(String(rawLng).trim());
+  // Convert to string and sanitize Unicode minus (−, –, —), quotes, and Indonesian comma decimal
+  let cleanLatStr = String(rawLat).trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+  let cleanLngStr = String(rawLng).trim().replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.');
+
+  let numLat = typeof rawLat === 'number' ? rawLat : parseFloat(cleanLatStr);
+  let numLng = typeof rawLng === 'number' ? rawLng : parseFloat(cleanLngStr);
 
   if (isNaN(numLat) || isNaN(numLng) || !isFinite(numLat) || !isFinite(numLng)) {
     return null;
@@ -100,7 +97,7 @@ export function sanitizePropertyCoordinates(prop: Partial<Property> | null | und
     return normalized;
   }
 
-  // 2. Check if rawLat or rawLng contains combined coordinates e.g. ", 106.865001"
+  // 2. Check if rawLat or rawLng contains combined coordinates e.g. "-6.162249, 106.865001"
   if (typeof rawLat === 'string' && (rawLat.includes(',') || rawLat.includes('http') || rawLat.includes('@'))) {
     const parsed = parseGoogleMapsCoordinates(rawLat);
     if (parsed) return parsed;
@@ -127,23 +124,8 @@ export function sanitizePropertyCoordinates(prop: Partial<Property> | null | und
     }
   }
 
-  // 4. Fallback by matching name or address keywords
-  const searchText = `${prop.name || ''} ${prop.address || ''}`.toLowerCase();
-  
-  if (searchText.includes('kemayoran') || searchText.includes('atikah') || searchText.includes('tiara') || searchText.includes('jiexpo') || searchText.includes('cempaka') || searchText.includes('serdang') || searchText.includes('sumur batu')) {
-    return { ...KNOWN_BRANCH_COORDINATES.kemayoran };
-  }
-  if (searchText.includes('salemba') || searchText.includes('senen') || searchText.includes('paseban') || searchText.includes('kenari') || searchText.includes('rscm')) {
-    return { ...KNOWN_BRANCH_COORDINATES.salemba };
-  }
-  if (searchText.includes('depok') || searchText.includes('margonda') || searchText.includes('ui') || searchText.includes('kukusan') || searchText.includes('beji')) {
-    return { ...KNOWN_BRANCH_COORDINATES.depok };
-  }
-  if (searchText.includes('tebet') || searchText.includes('kuningan') || searchText.includes('casablanca') || searchText.includes('jaksel') || searchText.includes('pancoran')) {
-    return { ...KNOWN_BRANCH_COORDINATES.tebet };
-  }
-
-  return { ...DEFAULT_JAKARTA_COORDINATES };
+  // 4. If coordinates are not configured in database/address, return 0, 0 (no fake coordinates)
+  return { lat: 0, lng: 0 };
 }
 
 /**
@@ -203,36 +185,55 @@ export function calculateDistanceMeters(lat1: any, lon1: any, lat2: any, lon2: a
 /**
  * Parse Google Maps URL, Share Link, Direct Coordinate Strings, or DMS format.
  * Supports:
- * 1. Google Maps right click format: "-6.195621, 106.848815"
- * 2. Google Maps URL with @lat,lng: "https://www.google.com/maps/place/.../@-6.195621,106.848815,17z"
- * 3. Google Maps query URL: "https://maps.google.com/?q=-6.195621,106.848815" or "?ll=-6.195621,106.848815"
- * 4. Google Maps embed / data URL: "...!3d-6.195621!4d106.848815"
- * 5. DMS format: `6°11'44.2"S 106°50'55.7"E`
- * 6. Short link or geo URI: `geo:`
+ * 1. Google Maps right click format: "-6.195621, 106.848815" or "−6.195621, 106.848815"
+ * 2. Indonesian comma decimal format: "-6,195621, 106,848815" or "-6,195621; 106,848815"
+ * 3. Google Maps URL with @lat,lng: "https://www.google.com/maps/place/.../@-6.195621,106.848815,17z"
+ * 4. Google Maps query URL: "https://maps.google.com/?q=-6.195621,106.848815" or "?ll=-6.195621,106.848815" or "?center=..."
+ * 5. Google Maps embed / iframe pb URL: "...!3d-6.195621!4d106.848815" or "...!2d106.848815!3d-6.195621"
+ * 6. DMS format: `6°11'44.2"S 106°50'55.7"E`
+ * 7. Geo URI: `geo:-6.195621,106.848815`
+ * 8. Labeled format: `Lat: -6.195621, Long: 106.848815`
  */
 export function parseGoogleMapsCoordinates(input: string): { lat: number; lng: number } | null {
   if (!input || typeof input !== 'string') return null;
-  const str = input.trim();
+  let str = input.trim();
   if (!str) return null;
 
-  // Pattern 1: URL with @lat,lng
+  // 1. Decode URI component in case URL query params are encoded (%2C for comma, %40 for @, %20 for space)
+  try {
+    str = decodeURIComponent(str);
+  } catch (e) {
+    // Keep original string if decode fails
+  }
+
+  // 2. Normalize unicode minus characters (U+2212 typographic minus, U+2013 en-dash, U+2014 em-dash)
+  str = str.replace(/[\u2212\u2013\u2014]/g, '-');
+
+  // Pattern 1: URL with @lat,lng e.g. /@ -6.195621,106.848815,17z
   const urlAtMatch = str.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
   if (urlAtMatch) {
     const normalized = normalizeCoordinatePair(urlAtMatch[1], urlAtMatch[2]);
     if (normalized) return normalized;
   }
 
-  // Pattern 2: URL with query param ?q=lat,lng or ?query=lat,lng or ?ll=lat,lng or /search/lat,lng or ?saddr / ?daddr / destination
-  const urlQueryMatch = str.match(/[?&/](?:q|query|ll|search|destination|saddr|daddr)(?:=|\/)?(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)/i);
+  // Pattern 2: URL with query param ?q=lat,lng or ?query=lat,lng or ?ll=lat,lng or ?center=lat,lng or /search/lat,lng or ?destination=
+  const urlQueryMatch = str.match(/[?&/](?:q|query|ll|search|destination|center|saddr|daddr)(?:=|\/)?(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)/i);
   if (urlQueryMatch) {
     const normalized = normalizeCoordinatePair(urlQueryMatch[1], urlQueryMatch[2]);
     if (normalized) return normalized;
   }
 
-  // Pattern 3: Embed !3dlat!4dlng
-  const embedMatch = str.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-  if (embedMatch) {
-    const normalized = normalizeCoordinatePair(embedMatch[1], embedMatch[2]);
+  // Pattern 3a: Embed !3dlat!4dlng (standard embed pb)
+  const embedMatchA = str.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if (embedMatchA) {
+    const normalized = normalizeCoordinatePair(embedMatchA[1], embedMatchA[2]);
+    if (normalized) return normalized;
+  }
+
+  // Pattern 3b: Embed !2dlng!3dlat (common in iframe src)
+  const embedMatchB = str.match(/!2d(-?\d+\.\d+)!3d(-?\d+\.\d+)/);
+  if (embedMatchB) {
+    const normalized = normalizeCoordinatePair(embedMatchB[2], embedMatchB[1]);
     if (normalized) return normalized;
   }
 
@@ -243,14 +244,30 @@ export function parseGoogleMapsCoordinates(input: string): { lat: number; lng: n
     if (normalized) return normalized;
   }
 
-  // Pattern 5: Plain coordinate pair e.g. "-6.195621, 106.848815" or "6.195621, 106.848815" or "-6.195621; 106.848815" or "Lat: -6.195621, Lng: 106.848815"
-  const plainMatch = str.match(/(-?\d{1,2}\.\d+)[,\s;\t]+(-?\d{1,3}\.\d+)/);
+  // Pattern 5: Labeled coordinates e.g. "Lat: -6.195621, Long: 106.848815" or "Latitude: -6.195621 Longitude: 106.848815"
+  const labeledMatch = str.match(/(?:lat|latitude)[:\s]*(-?\d+\.?\d*)[,\s]+(?:lng|long|longitude)[:\s]*(-?\d+\.?\d*)/i);
+  if (labeledMatch) {
+    const normalized = normalizeCoordinatePair(labeledMatch[1], labeledMatch[2]);
+    if (normalized) return normalized;
+  }
+
+  // Pattern 6: Indonesian comma decimal notation e.g. "-6,195621, 106,848815" or "-6,195621; 106,848815" or "-6,195621 106,848815"
+  const commaDecMatch = str.match(/(-?\d+),(\d{3,8})[\s,;]+(-?\d+),(\d{3,8})/);
+  if (commaDecMatch) {
+    const latStr = `${commaDecMatch[1]}.${commaDecMatch[2]}`;
+    const lngStr = `${commaDecMatch[3]}.${commaDecMatch[4]}`;
+    const normalized = normalizeCoordinatePair(latStr, lngStr);
+    if (normalized) return normalized;
+  }
+
+  // Pattern 7: Plain coordinate pair e.g. "-6.195621, 106.848815" or "6.195621, 106.848815" or "-6.195621; 106.848815" or "-6.195621 106.848815"
+  const plainMatch = str.match(/(-?\d{1,2}\.\d+)[,\s;\t/]+(-?\d{1,3}\.\d+)/);
   if (plainMatch) {
     const normalized = normalizeCoordinatePair(plainMatch[1], plainMatch[2]);
     if (normalized) return normalized;
   }
 
-  // Pattern 6: DMS notation e.g. 6°11'44.2"S 106°50'55.7"E or 6°09'44.1" S 106°51'54.0" E
+  // Pattern 8: DMS notation e.g. 6°11'44.2"S 106°50'55.7"E or 6°09'44.1" S 106°51'54.0" E
   const dmsMatch = str.match(/(\d+)[°\s]+(\d+)['\s]+([\d.]+)"?\s*([NS])[,\s]+(\d+)[°\s]+(\d+)['\s]+([\d.]+)"?\s*([EW])/i);
   if (dmsMatch) {
     let lat = parseInt(dmsMatch[1], 10) + parseInt(dmsMatch[2], 10) / 60 + parseFloat(dmsMatch[3]) / 3600;
@@ -259,6 +276,42 @@ export function parseGoogleMapsCoordinates(input: string): { lat: number; lng: n
     if (dmsMatch[8].toUpperCase() === 'W') lng = -lng;
     const normalized = normalizeCoordinatePair(lat, lng);
     if (normalized) return normalized;
+  }
+
+  return null;
+}
+
+/**
+ * Asynchronously resolves Google Maps share links (such as https://maps.app.goo.gl/... or https://goo.gl/maps/...)
+ * by calling the server-side redirection resolver.
+ */
+export async function resolveGoogleMapsLink(url: string): Promise<{ lat: number; lng: number } | null> {
+  if (!url || typeof url !== 'string') return null;
+  const direct = parseGoogleMapsCoordinates(url);
+  if (direct) return direct;
+
+  const trimmed = url.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return null;
+  }
+
+  try {
+    const res = await fetch('/api/admin/maps/resolve-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: trimmed })
+    });
+
+    if (!res.ok) {
+      return null;
+    }
+
+    const data = await res.json();
+    if (data.success && data.lat !== undefined && data.lng !== undefined) {
+      return normalizeCoordinatePair(data.lat, data.lng);
+    }
+  } catch (err) {
+    console.warn('[resolveGoogleMapsLink] Server resolution error:', err);
   }
 
   return null;
