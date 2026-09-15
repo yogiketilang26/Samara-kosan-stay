@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Building2, TrendingUp, DollarSign, CreditCard, 
   Scale, ShieldAlert, Clock, RefreshCw, Printer, 
-  BedDouble, CheckCircle2, AlertCircle, MapPin, PenTool, FileCheck, Users
+  BedDouble, CheckCircle2, AlertCircle, MapPin, PenTool, FileCheck, Users, Box, Wrench
 } from 'lucide-react';
 import { database, isSupabaseConfigured } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
@@ -17,7 +17,7 @@ import {
 import { 
   Property, Room, Tenant, Booking, FinancialTransaction, 
   AccountCOA, MidtransClearingTransaction, Maintenance, 
-  PettyCashRequest, PurchaseOrder, PaymentInvoice, ActivityLog
+  PettyCashRequest, PurchaseOrder, PaymentInvoice, ActivityLog, FixedAsset
 } from '../types';
 import { OwnerHeader } from '../components/owner/OwnerHeader';
 import { ExecutiveKpiCards } from '../components/owner/ExecutiveKpiCards';
@@ -28,13 +28,14 @@ import { ExpenseAuditSection } from '../components/owner/ExpenseAuditSection';
 import { LeaseExpiringMonitor } from '../components/owner/LeaseExpiringMonitor';
 import { OwnerSignatureManager } from '../components/owner/OwnerSignatureManager';
 import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
+import { AssetManagementSection } from '../components/AssetManagementSection';
 import Loader from '../components/common/Loader';
 import { formatRupiah } from '../utils/formatCurrency';
 
 export const Owner: React.FC = () => {
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
   const [selectedPeriod, setSelectedPeriod] = useState<'this_month' | 'last_month' | 'this_quarter' | 'ytd'>('this_month');
-  const [activeTab, setActiveTab] = useState<'overview' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops' | 'assets'>('overview');
 
   // Background auto-release expired leases check (>24h grace period -> Available)
   useEffect(() => {
@@ -63,6 +64,7 @@ export const Owner: React.FC = () => {
   const { data: pettyCashList = [] } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests({ limit: 500 }));
   const { data: purchaseOrders = [] } = useRealtimeTable<PurchaseOrder>('purchase_orders', () => database.fetchPurchaseOrders({ limit: 500 }));
   const { data: activityLogs = [], refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>('activity_logs', () => database.fetchActivityLogs({ limit: 100 }));
+  const { data: fixedAssets = [], refetch: refetchFixedAssets } = useRealtimeTable<FixedAsset>('fixed_assets', () => database.fetchFixedAssets());
 
   const isLoading = loadingProps || loadingRooms || loadingTenants || loadingBookings || loadingTx || loadingPayments;
 
@@ -358,6 +360,21 @@ export const Owner: React.FC = () => {
             <Users size={14} className={activeTab === 'staff_ops' ? 'text-teal-200' : 'text-teal-600'} />
             <span>Operasional & Log Staf</span>
           </button>
+
+          <button
+            onClick={() => setActiveTab('assets')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+              activeTab === 'assets'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Box size={14} className={activeTab === 'assets' ? 'text-teal-400' : 'text-teal-600'} />
+            <span>Aset & Pemeliharaan</span>
+            <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-200 text-slate-800 font-black">
+              {fixedAssets.length}
+            </span>
+          </button>
         </div>
 
         {/* 4. Tab Contents */}
@@ -443,6 +460,17 @@ export const Owner: React.FC = () => {
             onRefresh={() => {
               refetchActivityLogs();
             }}
+          />
+        )}
+
+        {activeTab === 'assets' && (
+          <AssetManagementSection
+            assets={fixedAssets}
+            properties={properties}
+            selectedPropertyId={selectedPropertyId}
+            readOnly={true}
+            userRole="owner"
+            onRefresh={refetchFixedAssets}
           />
         )}
 

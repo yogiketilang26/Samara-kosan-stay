@@ -78,8 +78,19 @@ export interface Tenant {
   phone: string;
   email: string;
   nik?: string;
+  identity_type?: string; // 'KTP' | 'SIM' | 'Kartu Mahasiswa' | string
+  identity_number?: string;
   ktp_image?: string;
+  birth_place?: string;
+  birth_date?: string;
+  religion?: string; // 'Islam' | 'Kristen Protestan' | 'Kristen Katolik' | 'Buddha' | 'Hindu' | 'Konghucu' | 'Yang lain'
+  religion_other?: string;
+  origin_city?: string;
   job?: string;
+  work_or_study_place?: string;
+  parent_guardian_name?: string;
+  parent_guardian_phone?: string;
+  vehicle_plate_number?: string;
   avatar_initials: string;
   avatar_color: string;
   property_id: number | null;
@@ -153,7 +164,19 @@ export interface Booking {
   occupant_phone?: string;
   occupant_email?: string;
   occupant_nik?: string;
+  occupant_identity_type?: string;
+  occupant_identity_number?: string;
   occupant_ktp_image?: string;
+  occupant_birth_place?: string;
+  occupant_birth_date?: string;
+  occupant_religion?: string;
+  occupant_religion_other?: string;
+  occupant_origin_city?: string;
+  occupant_job?: string;
+  occupant_work_or_study_place?: string;
+  occupant_parent_guardian_name?: string;
+  occupant_parent_guardian_phone?: string;
+  occupant_vehicle_plate_number?: string;
   is_occupant_verified?: boolean;
   occupant_arrival_status?: 'pending' | 'checked_in';
   signature_url?: string;
@@ -193,11 +216,15 @@ export interface Maintenance {
   room: string;
   priority: 'Normal' | 'High' | 'Critical';
   cost: number;
-  tech?: string;
+  tech?: string; // Nama Teknisi
+  technician_name?: string; // Alias
+  reported_by?: string; // Siapa yang melaporkan
   desc_field?: string;
   status: 'open' | 'in-progress' | 'completed';
   date: string;
   created_at?: string;
+  post_to_finance?: boolean; // Opsional: langsung masuk ke laporan keuangan
+  financial_trx_id?: number | null;
 }
 
 export interface Profile {
@@ -366,11 +393,20 @@ export interface PettyCashRequest {
 export interface FixedAsset {
   id: number;
   name: string;
+  property_id?: number;
+  location?: string;
+  category?: string; // 'Elektronik & AC' | 'Mesin & Pompa Air' | 'Furnitur' | 'Struktur Bangunan' | 'Keamanan & CCTV' | 'Lainnya'
   cost: number;
   lifeYears: number;
   residual: number;
   deprRate: number;
   accumDepr: number;
+  maintenance_interval_months?: number; // Jangka waktu pemeliharaan rutin (dalam bulan, misal tiap 3 bulan)
+  last_maintenance_date?: string; // Tanggal pemeliharaan / servis terakhir (YYYY-MM-DD)
+  next_maintenance_date?: string; // Jadwal pemeliharaan berikutnya (YYYY-MM-DD)
+  maintenance_notes?: string; // Catatan teknis / vendor servis
+  last_repair_cost?: number; // Biaya servis / perbaikan terakhir yang dicatat (Rp)
+  condition?: 'Baik' | 'Perlu Servis' | 'Rusak Ringan' | 'Rusak Berat';
   created_at?: string;
 }
 

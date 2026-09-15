@@ -5,13 +5,14 @@ import {
   FileText, RefreshCw, MessageSquare, Send, Check, X, 
   ExternalLink, Sparkles, UserX, AlertCircle, ArrowUpRight,
   ChevronRight, ArrowRightLeft, Brush, DoorOpen, Shield,
-  Wallet, ShieldCheck, Megaphone, Radio
+  Wallet, ShieldCheck, Megaphone, Radio, Box, DollarSign
 } from 'lucide-react';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { database } from '../lib/supabase';
-import { Room, Tenant, Survey, Maintenance, Property, ContractExtension, PettyCashRequest, ActivityLog } from '../types';
+import { Room, Tenant, Survey, Maintenance, Property, ContractExtension, PettyCashRequest, ActivityLog, FixedAsset } from '../types';
 import { useAuth } from '../hooks/useAuth';
 import { formatRupiah } from '../utils/formatCurrency';
+import { AssetManagementSection } from '../components/AssetManagementSection';
 
 export default function StaffAdmin() {
   const { user } = useAuth();
@@ -25,9 +26,10 @@ export default function StaffAdmin() {
   const { data: extensions = [], refetch: refetchExtensions } = useRealtimeTable<ContractExtension>('contract_extensions', () => database.fetchContractExtensions());
   const { data: pettyCashList = [], refetch: refetchPettyCash } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests());
   const { data: activityLogs = [], refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>('activity_logs', () => database.fetchActivityLogs({ limit: 100 }));
+  const { data: fixedAssets = [], refetch: refetchFixedAssets } = useRealtimeTable<FixedAsset>('fixed_assets', () => database.fetchFixedAssets());
 
   // 2. Local Navigation & Filtering States
-  const [activeTab, setActiveTab] = useState<'rooms' | 'surveys' | 'tenants' | 'maintenance' | 'petty_cash' | 'shift_log'>('rooms');
+  const [activeTab, setActiveTab] = useState<'rooms' | 'surveys' | 'tenants' | 'maintenance' | 'assets' | 'petty_cash' | 'shift_log'>('rooms');
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
   const [roomFilterStatus, setRoomFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -47,8 +49,19 @@ export default function StaffAdmin() {
     title: '',
     priority: 'Normal' as 'Normal' | 'High' | 'Critical',
     desc_field: '',
-    tech: 'Teknisi In-House'
+    tech: 'Teknisi In-House',
+    reported_by: '',
+    cost: '' as string | number,
+    post_to_finance: true,
+    credit_account_id: 1010
   });
+
+  // Modal: Input / Update Biaya Perbaikan & Sinkron Laporan Keuangan
+  const [costModalTicket, setCostModalTicket] = useState<Maintenance | null>(null);
+  const [ticketCostInput, setTicketCostInput] = useState<string>('');
+  const [ticketCostPostToFinance, setTicketCostPostToFinance] = useState<boolean>(true);
+  const [ticketCostCreditAccount, setTicketCostCreditAccount] = useState<number>(1010);
+  const [isSubmittingCost, setIsSubmittingCost] = useState<boolean>(false);
 
   // Modal: Contract Extension
   const [showExtensionModal, setShowExtensionModal] = useState(false);
@@ -250,25 +263,36 @@ export default function StaffAdmin() {
     }
 
     try {
-      const newTicket: Partial<Maintenance> = {
+      const parsedCost = Number(maintenanceForm.cost) || 0;
+      const willPostToFinance = Boolean(maintenanceForm.post_to_finance && parsedCost > 0);
+
+      const newTicket: Partial<Maintenance> & {
+        post_to_finance?: boolean;
+        debit_account_id?: number;
+        credit_account_id?: number;
+      } = {
         property_id: Number(maintenanceForm.property_id),
         room: maintenanceForm.room.trim(),
         title: maintenanceForm.title.trim(),
         priority: maintenanceForm.priority,
         desc_field: maintenanceForm.desc_field.trim() || 'Laporan operasional staf kos',
         tech: maintenanceForm.tech.trim() || 'Teknisi In-House',
-        cost: 0,
+        reported_by: maintenanceForm.reported_by.trim() || user?.name || 'Staff Lapangan',
+        cost: parsedCost,
         status: 'open',
-        date: new Date().toISOString().split('T')[0]
+        date: new Date().toISOString().split('T')[0],
+        post_to_finance: willPostToFinance,
+        debit_account_id: 5100,
+        credit_account_id: maintenanceForm.credit_account_id || 1010
       };
 
       await database.saveMaintenance(newTicket);
       await database.logActivity(
         user?.name || 'Staff Lapangan',
         'CREATE_MAINTENANCE',
-        `Tiket Perbaikan Kamar ${maintenanceForm.room}: ${maintenanceForm.title} (Prioritas: ${maintenanceForm.priority})`
+        `Tiket Perbaikan Kamar ${maintenanceForm.room}: ${maintenanceForm.title} (Pelapor: ${newTicket.reported_by}, Teknisi: ${newTicket.tech}${parsedCost > 0 ? `, Biaya: Rp ${parsedCost.toLocaleString('id-ID')}` : ''}${willPostToFinance ? ' [Masuk Laporan Keuangan]' : ''})`
       );
-      showToast(`Tiket perbaikan untuk Kamar ${maintenanceForm.room} berhasil dicatat.`);
+      showToast(`Tiket perbaikan untuk Kamar ${maintenanceForm.room} berhasil dicatat${willPostToFinance ? ' dan biaya otomatis masuk laporan keuangan!' : '.'}`);
       setShowMaintenanceModal(false);
       setMaintenanceForm({
         property_id: properties[0]?.id || 1,
@@ -276,7 +300,11 @@ export default function StaffAdmin() {
         title: '',
         priority: 'Normal',
         desc_field: '',
-        tech: 'Teknisi In-House'
+        tech: 'Teknisi In-House',
+        reported_by: '',
+        cost: '',
+        post_to_finance: true,
+        credit_account_id: 1010
       });
       await Promise.all([refetchMaintenance(), refetchActivityLogs()]);
     } catch (err: any) {
@@ -286,6 +314,15 @@ export default function StaffAdmin() {
 
   // Quick Update Maintenance Status
   const handleUpdateMaintenanceStatus = async (ticket: Maintenance, newStatus: 'open' | 'in-progress' | 'completed') => {
+    // If completing ticket and cost is currently 0, offer to input cost
+    if (newStatus === 'completed' && Number(ticket.cost || 0) === 0) {
+      setCostModalTicket(ticket);
+      setTicketCostInput('');
+      setTicketCostPostToFinance(true);
+      setTicketCostCreditAccount(1010);
+      return;
+    }
+
     try {
       await database.saveMaintenance({
         ...ticket,
@@ -300,6 +337,40 @@ export default function StaffAdmin() {
       await Promise.all([refetchMaintenance(), refetchActivityLogs()]);
     } catch (err: any) {
       showToast('Gagal memperbarui status perbaikan.', 'error');
+    }
+  };
+
+  // Submit / Update Maintenance Cost & Post to Financial Reports
+  const handleSaveTicketCost = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!costModalTicket) return;
+    try {
+      setIsSubmittingCost(true);
+      const parsedCost = Number(ticketCostInput) || 0;
+      const willPostToFinance = Boolean(ticketCostPostToFinance && parsedCost > 0);
+
+      await database.saveMaintenance({
+        ...costModalTicket,
+        cost: parsedCost,
+        status: 'completed', // auto mark as completed when final cost is settled
+        post_to_finance: willPostToFinance,
+        debit_account_id: 5100,
+        credit_account_id: ticketCostCreditAccount || 1010
+      });
+
+      await database.logActivity(
+        user?.name || 'Staff Lapangan',
+        'UPDATE_MAINTENANCE_COST',
+        `Biaya perbaikan Kamar ${costModalTicket.room} (${costModalTicket.title}) diselesaikan senilai Rp ${parsedCost.toLocaleString('id-ID')}${willPostToFinance ? ' [Masuk Laporan Keuangan]' : ''}`
+      );
+
+      showToast(`Biaya perbaikan Rp ${parsedCost.toLocaleString('id-ID')} tersimpan${willPostToFinance ? ' & otomatis masuk laporan keuangan!' : '.'}`);
+      setCostModalTicket(null);
+      await Promise.all([refetchMaintenance(), refetchActivityLogs()]);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menyimpan biaya perbaikan.', 'error');
+    } finally {
+      setIsSubmittingCost(false);
     }
   };
 
@@ -778,6 +849,21 @@ export default function StaffAdmin() {
               <span>Laporan Kerusakan</span>
               <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
                 {filteredMaintenance.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('assets')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'assets'
+                  ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Box size={15} />
+              <span>Aset & Pemeliharaan</span>
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+                {fixedAssets.length}
               </span>
             </button>
 
@@ -1357,37 +1443,98 @@ export default function StaffAdmin() {
                         </p>
                       )}
 
-                      <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                        <span>Teknisi: <strong className="text-slate-200">{item.tech || 'In-House'}</strong></span>
-                        <span>{item.date}</span>
+                      {/* Detail Teknisi dan Siapa yang Melaporkan */}
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs bg-slate-950 p-2.5 rounded-xl border border-slate-850">
+                        <div>
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wider font-mono">
+                            Teknisi:
+                          </span>
+                          <span className="font-bold text-slate-200 truncate block mt-0.5" title={item.tech || 'Teknisi In-House'}>
+                            {item.tech || 'Teknisi In-House'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wider font-mono">
+                            Pelapor:
+                          </span>
+                          <span className="font-bold text-teal-300 truncate block mt-0.5" title={item.reported_by || 'Staf Operasional'}>
+                            {item.reported_by || 'Staf Operasional'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                        <span>Tgl: <strong className="text-slate-300">{item.date}</strong></span>
+                        {Number(item.cost) > 0 ? (
+                          <div className="text-right">
+                            <span className="text-amber-300 font-bold">Rp {Number(item.cost).toLocaleString('id-ID')}</span>
+                            <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                              Laporan Keuangan
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-500">Belum ada estimasi biaya</span>
+                        )}
                       </div>
                     </div>
 
-                    {/* Maintenance Action Buttons */}
-                    <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
-                      {isOpen && (
+                    {/* Maintenance Action Buttons: Tombol Proses, Biaya, dan Selesai */}
+                    <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* Tombol Proses */}
                         <button
+                          disabled={isInProgress}
                           onClick={() => handleUpdateMaintenanceStatus(item, 'in-progress')}
-                          className="px-3 py-1.5 rounded-lg bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-600/30 text-xs font-bold transition-colors cursor-pointer"
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            isInProgress
+                              ? 'bg-blue-600 text-white shadow-xs cursor-default'
+                              : 'bg-slate-800 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30'
+                          }`}
+                          title="Klik untuk memproses perbaikan ini"
                         >
-                          Mulai Pengerjaan
+                          <Wrench size={12} />
+                          <span>{isInProgress ? 'Diproses' : 'Proses'}</span>
                         </button>
-                      )}
 
-                      {isInProgress && (
+                        {/* Tombol Input/Ubah Biaya & Masuk Keuangan */}
                         <button
-                          onClick={() => handleUpdateMaintenanceStatus(item, 'completed')}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer"
+                          onClick={() => {
+                            setCostModalTicket(item);
+                            setTicketCostInput(item.cost ? String(item.cost) : '');
+                            setTicketCostPostToFinance(true);
+                            setTicketCostCreditAccount(1010);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 bg-slate-800 hover:bg-teal-600/30 text-teal-300 border border-teal-500/30 transition-all cursor-pointer"
+                          title="Input atau perbarui biaya perbaikan & otomatis catat ke laporan keuangan"
                         >
-                          Selesai & Tutup Tiket
+                          <DollarSign size={12} />
+                          <span>{Number(item.cost) > 0 ? 'Biaya: Rp ' + Number(item.cost).toLocaleString('id-ID') : 'Input Biaya'}</span>
                         </button>
-                      )}
+
+                        {/* Tombol Selesai */}
+                        <button
+                          disabled={isCompleted}
+                          onClick={() => handleUpdateMaintenanceStatus(item, 'completed')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            isCompleted
+                              ? 'bg-emerald-600 text-white shadow-xs cursor-default'
+                              : 'bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30'
+                          }`}
+                          title="Klik jika perbaikan telah rampung/selesai"
+                        >
+                          <CheckCircle2 size={12} />
+                          <span>{isCompleted ? 'Selesai' : 'Selesai'}</span>
+                        </button>
+                      </div>
 
                       {isCompleted && (
-                        <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
-                          <CheckCircle2 size={13} />
-                          <span>Telah Diperbaiki</span>
-                        </span>
+                        <button
+                          onClick={() => handleUpdateMaintenanceStatus(item, 'open')}
+                          className="text-[10px] text-slate-500 hover:text-slate-300 underline cursor-pointer"
+                          title="Buka kembali jika masih bermasalah"
+                        >
+                          Buka Kembali
+                        </button>
                       )}
                     </div>
                   </div>
@@ -1400,6 +1547,21 @@ export default function StaffAdmin() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* TAB ASSETS: LIST ASSET & JANGKA WAKTU PEMELIHARAAN */}
+        {activeTab === 'assets' && (
+          <div className="space-y-4">
+            <AssetManagementSection
+              assets={fixedAssets}
+              properties={properties}
+              selectedPropertyId={selectedPropertyId}
+              readOnly={false}
+              userRole="staff"
+              onRefresh={refetchFixedAssets}
+              showToast={(msg, type) => setToastMessage({ text: msg, type: type || 'info' })}
+            />
           </div>
         )}
 
@@ -1826,6 +1988,37 @@ export default function StaffAdmin() {
                 />
               </div>
 
+              {/* Nama Teknisi & Siapa yang Melaporkan */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Nama Teknisi
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="contoh: Pak Bambang (AC) / Teknisi In-House"
+                    value={maintenanceForm.tech}
+                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, tech: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Siapa yang Melaporkan
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="contoh: Penghuni Kmr 101 / Staf Shift Pagi"
+                    value={maintenanceForm.reported_by}
+                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, reported_by: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
                   Keterangan Tambahan
@@ -1837,6 +2030,68 @@ export default function StaffAdmin() {
                   onChange={(e) => setMaintenanceForm({ ...maintenanceForm, desc_field: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500 resize-none"
                 />
+              </div>
+
+              {/* Biaya Perbaikan (Opsional) & Sinkron Laporan Keuangan */}
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-teal-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                    <DollarSign size={13} className="text-teal-400" />
+                    <span>Biaya Perbaikan / Sparepart (Opsional)</span>
+                  </label>
+                  <span className="text-[10px] text-slate-400">Kosongkan jika belum diketahui / gratis</span>
+                </div>
+
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono">
+                    Rp
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1000"
+                    placeholder="0 (Contoh: 150000)"
+                    value={maintenanceForm.cost}
+                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, cost: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3 text-white text-xs font-mono outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                {Number(maintenanceForm.cost) > 0 && (
+                  <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                    <label className="flex items-start gap-2.5 text-xs text-slate-200 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={maintenanceForm.post_to_finance}
+                        onChange={(e) => setMaintenanceForm({ ...maintenanceForm, post_to_finance: e.target.checked })}
+                        className="mt-0.5 rounded border-slate-700 text-teal-600 focus:ring-teal-500 bg-slate-900"
+                      />
+                      <span>
+                        <strong className="text-teal-300">Otomatis Catat ke Laporan Keuangan</strong>
+                        <span className="block text-[11px] text-slate-400 mt-0.5">
+                          Masuk sebagai Beban Pemeliharaan & Perbaikan (Akun 5100) di Laporan Laba Rugi & Buku Besar
+                        </span>
+                      </span>
+                    </label>
+
+                    {maintenanceForm.post_to_finance && (
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                          Sumber Dana Pengeluaran (Kredit)
+                        </label>
+                        <select
+                          value={maintenanceForm.credit_account_id}
+                          onChange={(e) => setMaintenanceForm({ ...maintenanceForm, credit_account_id: Number(e.target.value) })}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2 text-white text-xs outline-none focus:border-teal-500"
+                        >
+                          <option value={1010}>Kas Operasional Kos (1010)</option>
+                          <option value={1020}>Bank Mandiri Utama (1020)</option>
+                          <option value={1030}>Kas Kecil / Petty Cash (1030)</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
@@ -1852,6 +2107,110 @@ export default function StaffAdmin() {
                   className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold shadow-md cursor-pointer"
                 >
                   Catat Tiket
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: INPUT / UPDATE BIAYA PERBAIKAN & LAPORAN KEUANGAN                   */}
+      {/* ========================================================================= */}
+      {costModalTicket && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base font-black text-white font-display flex items-center gap-2">
+                  <DollarSign size={18} className="text-teal-400" />
+                  <span>Biaya Perbaikan & Laporan Keuangan</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Kamar {costModalTicket.room} — {costModalTicket.title}
+                </p>
+              </div>
+              <button
+                onClick={() => setCostModalTicket(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTicketCost} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider font-mono mb-1">
+                  Nominal Biaya Perbaikan (Rp)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono">
+                    Rp
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1000"
+                    required
+                    placeholder="Contoh: 250000"
+                    value={ticketCostInput}
+                    onChange={(e) => setTicketCostInput(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3 text-white text-sm font-mono font-bold outline-none focus:border-teal-500"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Isi nominal biaya teknisi / suku cadang yang dikeluarkan untuk unit ini.
+                </p>
+              </div>
+
+              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3 space-y-2.5">
+                <label className="flex items-start gap-2.5 text-xs text-slate-200 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={ticketCostPostToFinance}
+                    onChange={(e) => setTicketCostPostToFinance(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-700 text-teal-600 focus:ring-teal-500 bg-slate-900"
+                  />
+                  <span>
+                    <strong className="text-teal-300">Otomatis Masuk Laporan Keuangan</strong>
+                    <span className="block text-[11px] text-slate-400 mt-0.5">
+                      Tercatat langsung di Laporan Laba Rugi, Buku Besar, dan Jurnal Umum (Beban Perbaikan 5100).
+                    </span>
+                  </span>
+                </label>
+
+                {ticketCostPostToFinance && Number(ticketCostInput) > 0 && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                      Akun Sumber Pengeluaran
+                    </label>
+                    <select
+                      value={ticketCostCreditAccount}
+                      onChange={(e) => setTicketCostCreditAccount(Number(e.target.value))}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2 text-white text-xs outline-none focus:border-teal-500"
+                    >
+                      <option value={1010}>Kas Operasional Kos (1010)</option>
+                      <option value={1020}>Bank Mandiri Utama (1020)</option>
+                      <option value={1030}>Kas Kecil / Petty Cash (1030)</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCostModalTicket(null)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingCost}
+                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingCost ? 'Menyimpan...' : 'Simpan & Sinkron Keuangan'}
                 </button>
               </div>
             </form>

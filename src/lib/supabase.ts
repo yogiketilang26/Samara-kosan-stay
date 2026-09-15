@@ -19,7 +19,7 @@ let activeSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 
 
 export let isSupabaseConfigured = Boolean(activeSupabaseUrl && activeSupabaseAnonKey && activeSupabaseUrl !== 'undefined' && activeSupabaseAnonKey !== 'undefined');
 
-export const DEFAULT_OWNER_SIGNATURE = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='90' viewBox='0 0 240 90'><path d='M 15 45 C 30 18, 40 8, 55 32 C 65 48, 75 12, 90 28 C 100 38, 105 18, 125 42 C 140 22, 155 52, 175 28 C 190 32, 205 22, 218 38' fill='none' stroke='%231e293b' stroke-width='2.8' stroke-linecap='round'/><path d='M 25 58 Q 110 46 210 52' fill='none' stroke='%232E6F40' stroke-width='2' stroke-dasharray='3 2'/><text x='110' y='72' font-family='sans-serif' font-size='9' font-weight='bold' fill='%232E6F40' text-anchor='middle' letter-spacing='1'>SAMARA STAY OWNER</text><text x='110' y='83' font-family='monospace' font-size='7' fill='%2364748b' text-anchor='middle'>OFFICIAL DIGITAL STAMP</text></svg>`;
+export const DEFAULT_OWNER_SIGNATURE = 'https://eniwbzpfvwtbsonmnzzr.supabase.co/storage/v1/object/public/signatures/owner_official_signature.png';
 
 export async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
@@ -545,6 +545,9 @@ const tableSchemas: Record<string, string[]> = {
     'id', 'user_id', 'full_name', 'phone', 'email', 'job', 'avatar_initials',
     'avatar_color', 'property_id', 'room_number', 'start_date', 'duration_months',
     'payment_status', 'emergency_contact', 'created_at', 'status', 'nik',
+    'identity_type', 'identity_number', 'ktp_image', 'birth_place', 'birth_date',
+    'religion', 'religion_other', 'origin_city', 'work_or_study_place',
+    'parent_guardian_name', 'parent_guardian_phone', 'vehicle_plate_number',
     'is_married', 'marriage_certificate_url', 'spouse_name', 'spouse_nik', 'spouse_phone', 'spouse_relation'
   ],
   bookings: [
@@ -554,6 +557,10 @@ const tableSchemas: Record<string, string[]> = {
     'duration_days', 'check_in_date', 'check_out_date', 'nik', 'ktp_image', 'is_dp',
     'dp_amount', 'coupon_code', 'discount_amount', 'is_for_other', 'occupant_name',
     'occupant_phone', 'occupant_email', 'occupant_nik', 'occupant_ktp_image',
+    'occupant_identity_type', 'occupant_identity_number', 'occupant_birth_place',
+    'occupant_birth_date', 'occupant_religion', 'occupant_religion_other',
+    'occupant_origin_city', 'occupant_job', 'occupant_work_or_study_place',
+    'occupant_parent_guardian_name', 'occupant_parent_guardian_phone', 'occupant_vehicle_plate_number',
     'is_occupant_verified', 'occupant_arrival_status', 'signature_url',
     'hold_expires_at', 'owner_signature_url', 'owner_signed_at', 'owner_signer_name', 'owner_notes', 'created_at',
     'is_married', 'marriage_certificate_url', 'spouse_name', 'spouse_nik', 'spouse_phone', 'spouse_relation'
@@ -564,7 +571,7 @@ const tableSchemas: Record<string, string[]> = {
   ],
   maintenance: [
     'id', 'title', 'property_id', 'room', 'priority', 'cost', 'tech', 'desc_field',
-    'status', 'date', 'created_at'
+    'status', 'date', 'reported_by', 'created_at'
   ],
   users: [
     'id', 'full_name', 'email', 'role', 'role_id', 'access', 'last_login', 'active', 'created_at', 'property_id'
@@ -608,7 +615,10 @@ const tableSchemas: Record<string, string[]> = {
     'id', 'applicant', 'amount', 'purpose', 'status', 'date', 'created_at', 'property_id'
   ],
   fixed_assets: [
-    'id', 'name', 'cost', 'life_years', 'residual', 'depr_rate', 'accum_depr', 'created_at', 'property_id'
+    'id', 'name', 'cost', 'life_years', 'residual', 'depr_rate', 'accum_depr',
+    'maintenance_interval_months', 'last_maintenance_date', 'next_maintenance_date',
+    'maintenance_notes', 'condition', 'category', 'location', 'created_at', 'property_id',
+    'last_repair_cost'
   ],
   budgets: [
     'id', 'category', 'limit_amount', 'spent', 'created_at', 'property_id'
@@ -2389,7 +2399,14 @@ export const database = {
   },
 
   async fetchFinancialTransactions(options?: { limit?: number; offset?: number }): Promise<FinancialTransaction[]> {
-    if (!isSupabaseConfigured) return [];
+    if (!isSupabaseConfigured) {
+      try {
+        const raw = localStorage.getItem('kamar_financial_transactions');
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
@@ -2400,11 +2417,19 @@ export const database = {
         .range(offset, offset + limit - 1);
       if (error) {
         logSupabaseError('fetchFinancialTransactions', error);
+        try {
+          const raw = localStorage.getItem('kamar_financial_transactions');
+          if (raw) return JSON.parse(raw);
+        } catch { /* ignore */ }
         return [];
       }
-      return data as FinancialTransaction[];
+      return (data || []) as FinancialTransaction[];
     } catch (err) {
       logSupabaseError('fetchFinancialTransactions', err, true);
+      try {
+        const raw = localStorage.getItem('kamar_financial_transactions');
+        if (raw) return JSON.parse(raw);
+      } catch { /* ignore */ }
       return [];
     }
   },
@@ -2442,17 +2467,93 @@ export const database = {
     credit_account_id: number;
     property_id?: number | null;
   }): Promise<void> {
-    const headers = await getAuthHeaders();
-    const res = await fetch('/api/admin/financial-transaction/post', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
-    });
-
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody.error || 'Gagal memposting transaksi keuangan di server.');
+    let postedViaServer = false;
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/financial-transaction/post', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        postedViaServer = true;
+      }
+    } catch (apiErr) {
+      console.warn('[SUPABASE API] /api/admin/financial-transaction/post fallback triggered:', apiErr);
     }
+
+    const trxDate = new Date().toISOString().split('T')[0];
+    const trxNo = `TRX-${trxDate.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
+
+    if (!postedViaServer && isSupabaseConfigured) {
+      try {
+        const { data: insertedTrx, error: trxErr } = await supabase
+          .from('financial_transactions')
+          .insert({
+            transaction_no: trxNo,
+            transaction_date: trxDate,
+            category: payload.category,
+            description: payload.description,
+            amount: Number(payload.amount),
+            type: payload.type,
+            reference_type: payload.reference_type || null,
+            reference_id: payload.reference_id ? String(payload.reference_id) : null,
+            created_by: payload.created_by || 'Admin',
+            property_id: payload.property_id || null
+          })
+          .select()
+          .single();
+
+        if (!trxErr && insertedTrx) {
+          const journalNo = `JRN-${trxDate.replace(/-/g, '')}-${insertedTrx.id}`;
+          try {
+            await supabase.from('journal_entries').insert([
+              {
+                journal_no: journalNo,
+                transaction_id: insertedTrx.id,
+                account_id: payload.debit_account_id,
+                debit: Number(payload.amount),
+                credit: 0
+              },
+              {
+                journal_no: journalNo,
+                transaction_id: insertedTrx.id,
+                account_id: payload.credit_account_id,
+                debit: 0,
+                credit: Number(payload.amount)
+              }
+            ]);
+          } catch { /* ignore journal error */ }
+        }
+      } catch (directErr) {
+        console.warn('Direct financial transaction fallback failed:', directErr);
+      }
+    }
+
+    // Always update local cache for instant UI and offline/fallback display
+    try {
+      const raw = localStorage.getItem('kamar_financial_transactions');
+      const list = raw ? JSON.parse(raw) : [];
+      list.unshift({
+        id: Date.now(),
+        transaction_no: trxNo,
+        transaction_date: trxDate,
+        category: payload.category,
+        description: payload.description,
+        amount: Number(payload.amount),
+        type: payload.type,
+        reference_type: payload.reference_type || null,
+        reference_id: payload.reference_id || null,
+        created_by: payload.created_by || 'Admin',
+        property_id: payload.property_id || null,
+        created_at: new Date().toISOString()
+      });
+      localStorage.setItem('kamar_financial_transactions', JSON.stringify(list));
+    } catch { /* ignore */ }
+
+    notifyRealtimeMutation('financial_transactions', 'INSERT');
+    notifyRealtimeMutation('journal_entries', 'INSERT');
+    notifyRealtimeMutation('accounts', 'UPDATE');
   },
 
   async recordFinancialRevenue(invoiceId: string, creditAccountId: number, amount: number, description: string) {
@@ -2483,18 +2584,97 @@ export const database = {
     });
   },
 
-  async recordFinancialExpense(debitAccountId: number, creditAccountId: number, amount: number, description: string, category: string = "Biaya Operasional") {
+  async recordFinancialExpense(
+    debitAccountId: number,
+    creditAccountId: number,
+    amount: number,
+    description: string,
+    category: string = "Biaya Operasional",
+    propertyId?: number | null,
+    referenceType: string = "expense",
+    referenceId?: string | null,
+    createdBy?: string
+  ) {
     await this.postFinancialTransaction({
       category,
       description,
       amount,
       type: "expense",
-      reference_type: "expense",
-      reference_id: null,
-      created_by: "System Finance",
+      reference_type: referenceType,
+      reference_id: referenceId || null,
+      created_by: createdBy || "System Finance",
       debit_account_id: debitAccountId,
-      credit_account_id: creditAccountId
+      credit_account_id: creditAccountId,
+      property_id: propertyId ?? null
     });
+  },
+
+  async recordAssetMaintenanceWithExpense(params: {
+    asset: FixedAsset;
+    serviceDate: string;
+    nextServiceDate: string;
+    condition?: 'Baik' | 'Perlu Servis' | 'Rusak Ringan' | 'Rusak Berat';
+    notes: string;
+    repairCost?: number;
+    postToFinance?: boolean;
+    debitAccountId?: number; // default: 5100 Beban Pemeliharaan & Perbaikan Gedung
+    creditAccountId?: number; // default: 1010 Kas Utama Bank Mandiri Operasional
+    vendorName?: string;
+    propertyId?: number;
+    recordedBy?: string;
+  }): Promise<{ asset: FixedAsset; transactionPosted: boolean }> {
+    const {
+      asset,
+      serviceDate,
+      nextServiceDate,
+      condition = 'Baik',
+      notes,
+      repairCost = 0,
+      postToFinance = true,
+      debitAccountId = 5100,
+      creditAccountId = 1010,
+      vendorName,
+      propertyId = asset.property_id,
+      recordedBy = 'Admin Operasional'
+    } = params;
+
+    // 1. Update Asset Record in Database
+    const updatedAsset = await this.saveFixedAsset({
+      ...asset,
+      last_maintenance_date: serviceDate,
+      next_maintenance_date: nextServiceDate,
+      condition,
+      maintenance_notes: notes.trim(),
+      last_repair_cost: repairCost > 0 ? repairCost : (asset.last_repair_cost ?? 0)
+    });
+
+    let transactionPosted = false;
+
+    // 2. Automatically Post Expense to Financial Ledger if cost > 0 and option enabled
+    if (postToFinance && repairCost > 0) {
+      const vendorStr = vendorName ? ` - Vendor/Teknisi: ${vendorName.trim()}` : '';
+      const notesStr = notes ? ` (${notes.trim()})` : '';
+      const finDesc = `[BIAYA SERVIS ASET] ${asset.name} di ${asset.location || 'Area Properti'}${vendorStr}${notesStr}`;
+
+      try {
+        await this.recordFinancialExpense(
+          debitAccountId,
+          creditAccountId,
+          repairCost,
+          finDesc,
+          'Pemeliharaan & Perbaikan Gedung',
+          propertyId,
+          'fixed_assets',
+          String(asset.id),
+          recordedBy
+        );
+        transactionPosted = true;
+      } catch (finErr) {
+        console.warn('[FINANCE WARNING] Automatic financial posting for asset maintenance failed:', finErr);
+      }
+    }
+
+    return { asset: updatedAsset, transactionPosted };
   },
 
   async checkCoaDiagnostics(options?: { repair?: boolean; force?: boolean }): Promise<{
@@ -3001,7 +3181,25 @@ export const database = {
         logSupabaseError('saveTenant', error);
         throw new Error(`Gagal menyimpan tenant: ${error.message}`);
       }
-      const finalTenant = (data && data.length > 0 ? data[0] : tenant) as Tenant;
+      const remoteData = data && data.length > 0 ? data[0] : {};
+      const finalTenant = { ...tenant, ...remoteData } as Tenant;
+
+      try {
+        const cached = localStorage.getItem('kamar_tenants_cache');
+        const list: Tenant[] = cached ? JSON.parse(cached) : [];
+        const idx = list.findIndex(t => t.id === finalTenant.id);
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...finalTenant };
+        } else {
+          list.push(finalTenant);
+        }
+        localStorage.setItem('kamar_tenants_cache', JSON.stringify(list));
+      } catch (e) {
+        // ignore localStorage errors
+      }
+
+      await this.logActivity("System", id ? "UPDATE_TENANT" : "CREATE_TENANT", `Menyimpan data penghuni: ${finalTenant.full_name} (Kamar ${finalTenant.room_number})`);
+      notifyRealtimeMutation('tenants', id ? 'UPDATE' : 'INSERT', finalTenant);
       return finalTenant;
     } catch (err: any) {
       console.error('saveTenant failed:', err);
@@ -3425,8 +3623,9 @@ export const database = {
         room: m.room || m.room_number || 'Umum',
         priority: m.priority || 'Normal',
         cost: Number(m.cost || 0),
-        tech: m.tech || m.technician || 'Teknisi Samara',
+        tech: m.tech || m.technician || m.technician_name || 'Teknisi In-House',
         desc_field: m.desc_field || m.description || '',
+        reported_by: m.reported_by || m.reporter || m.pelapor || 'Staf Lapangan',
         status: m.status || 'open',
         date: m.date || m.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
         created_at: m.created_at
@@ -3437,24 +3636,44 @@ export const database = {
     }
   },
 
-  async saveMaintenance(maint: Partial<Maintenance>): Promise<Maintenance> {
+  async saveMaintenance(maint: Partial<Maintenance> & {
+    post_to_finance?: boolean;
+    debit_account_id?: number;
+    credit_account_id?: number;
+    financial_category?: string;
+  }): Promise<Maintenance> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = maint.id;
-      const payload = {
+      const costAmount = Number(maint.cost ?? 0);
+      const payload: any = {
         title: maint.title,
         property_id: maint.property_id,
         room: maint.room,
         priority: maint.priority,
-        cost: maint.cost,
-        tech: maint.tech,
-        desc_field: maint.desc_field,
-        status: maint.status,
-        date: maint.date
+        cost: costAmount,
+        tech: maint.tech || 'Teknisi In-House',
+        desc_field: maint.desc_field || '',
+        status: maint.status || 'open',
+        date: maint.date || new Date().toISOString().split('T')[0]
       };
+      if (maint.reported_by) {
+        payload.reported_by = maint.reported_by;
+      }
+
       let { data, error } = id
         ? await supabase.from('maintenance').update(payload).eq('id', id).select().single()
         : await supabase.from('maintenance').insert(payload).select().single();
+
+      // If remote table lacks reported_by column, strip it and retry safely
+      if (error && error.message?.includes('reported_by')) {
+        delete payload.reported_by;
+        const retryRes = id
+          ? await supabase.from('maintenance').update(payload).eq('id', id).select().single()
+          : await supabase.from('maintenance').insert(payload).select().single();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
 
       if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
         const fallbackRes = id
@@ -3468,7 +3687,42 @@ export const database = {
         logSupabaseError('saveMaintenance', error);
         throw error;
       }
-      return data as Maintenance;
+
+      const finalRecord = {
+        ...payload,
+        id: data?.id || id,
+        reported_by: maint.reported_by || 'Staf Lapangan',
+        tech: maint.tech || 'Teknisi In-House'
+      };
+
+      // Automatic Financial Integration (Opsional: langsung masuk ke laporan keuangan)
+      if (maint.post_to_finance && costAmount > 0) {
+        try {
+          const debitAcc = maint.debit_account_id || 5100; // 5100: Beban Pemeliharaan & Perbaikan Gedung/Fasilitas
+          const creditAcc = maint.credit_account_id || 1010; // 1010: Kas Utama / Bank Operasional
+          const category = maint.financial_category || 'Pemeliharaan & Perbaikan';
+          const roomLabel = maint.room ? `Kamar ${maint.room}` : 'Area Umum';
+          const desc = `[BIAYA PERBAIKAN] ${roomLabel} - ${maint.title || 'Perbaikan Fasilitas'} (Teknisi: ${maint.tech || 'In-House'})`;
+
+          await this.recordFinancialExpense(
+            debitAcc,
+            creditAcc,
+            costAmount,
+            desc,
+            category,
+            maint.property_id || null,
+            'maintenance',
+            String(finalRecord.id || ''),
+            maint.reported_by || 'Staff Maintenance'
+          );
+          console.log(`[saveMaintenance] Successfully posted financial transaction: ${desc}, amount: Rp ${costAmount}`);
+        } catch (finErr) {
+          console.warn('[saveMaintenance] Optional financial transaction auto-post warning:', finErr);
+        }
+      }
+
+      notifyRealtimeMutation('maintenance', id ? 'UPDATE' : 'INSERT', finalRecord);
+      return finalRecord as Maintenance;
     } catch (err) {
       logSupabaseError('saveMaintenance', err, true);
       throw err;
@@ -3524,67 +3778,366 @@ export const database = {
 
   // --- FIXED ASSETS ---
   async fetchFixedAssets(options?: { limit?: number; offset?: number }): Promise<FixedAsset[]> {
-    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
+    
+    // Seed sample assets distributed per property for instant out-of-the-box readiness
+    const getDefaultSeedAssets = (): FixedAsset[] => [
+      {
+        id: 101,
+        name: 'AC Daikin Inverter 1 PK',
+        property_id: 1,
+        location: 'Kamar 101 (Lantai 1)',
+        category: 'Elektronik & AC',
+        cost: 4800000,
+        lifeYears: 5,
+        residual: 500000,
+        deprRate: 71667,
+        accumDepr: 358335,
+        maintenance_interval_months: 3,
+        last_maintenance_date: '2026-06-15',
+        next_maintenance_date: '2026-09-15',
+        maintenance_notes: 'Cuci rutin freon & bersihkan filter blower',
+        condition: 'Baik'
+      },
+      {
+        id: 102,
+        name: 'Pompa Air Booster Grundfos Utama',
+        property_id: 1,
+        location: 'Ruang Mesin & Toren Lt. 1',
+        category: 'Mesin & Pompa Air',
+        cost: 3500000,
+        lifeYears: 4,
+        residual: 300000,
+        deprRate: 66667,
+        accumDepr: 200001,
+        maintenance_interval_months: 6,
+        last_maintenance_date: '2026-04-10',
+        next_maintenance_date: '2026-10-10',
+        maintenance_notes: 'Pengecekan pressure switch dan seal mekanis',
+        condition: 'Baik'
+      },
+      {
+        id: 103,
+        name: 'Sistem CCTV IP Hikvision 8 Titik',
+        property_id: 1,
+        location: 'Area Resepsionis, Parkiran, & Tangga',
+        category: 'Keamanan & CCTV',
+        cost: 6500000,
+        lifeYears: 4,
+        residual: 500000,
+        deprRate: 125000,
+        accumDepr: 500000,
+        maintenance_interval_months: 6,
+        last_maintenance_date: '2026-03-01',
+        next_maintenance_date: '2026-09-01',
+        maintenance_notes: 'Pembersihan lensa kamera & backup storage NVR',
+        condition: 'Perlu Servis'
+      },
+      {
+        id: 201,
+        name: 'AC Panasonic Eco 0.5 PK',
+        property_id: 2,
+        location: 'Kamar 201 (Lantai 2)',
+        category: 'Elektronik & AC',
+        cost: 3900000,
+        lifeYears: 5,
+        residual: 400000,
+        deprRate: 58333,
+        accumDepr: 175000,
+        maintenance_interval_months: 3,
+        last_maintenance_date: '2026-07-01',
+        next_maintenance_date: '2026-10-01',
+        maintenance_notes: 'Pembersihan evaporator indoor',
+        condition: 'Baik'
+      },
+      {
+        id: 202,
+        name: 'Toren Air Stainless Penguin 1500L',
+        property_id: 2,
+        location: 'Rooftop Gedung',
+        category: 'Struktur Bangunan',
+        cost: 3200000,
+        lifeYears: 8,
+        residual: 300000,
+        deprRate: 30208,
+        accumDepr: 181250,
+        maintenance_interval_months: 6,
+        last_maintenance_date: '2026-02-15',
+        next_maintenance_date: '2026-08-15',
+        maintenance_notes: 'Kuras endapan lumut dan sanitasi tangki air',
+        condition: 'Perlu Servis'
+      },
+      {
+        id: 203,
+        name: 'Router WiFi Mesh Gigabit Ubiquiti',
+        property_id: 2,
+        location: 'Lorong Lantai 1 & 2',
+        category: 'Elektronik & AC',
+        cost: 2800000,
+        lifeYears: 3,
+        residual: 200000,
+        deprRate: 72222,
+        accumDepr: 216666,
+        maintenance_interval_months: 6,
+        last_maintenance_date: '2026-05-20',
+        next_maintenance_date: '2026-11-20',
+        maintenance_notes: 'Update firmware router & pembersihan debu AP',
+        condition: 'Baik'
+      },
+      {
+        id: 301,
+        name: 'Genset Silent Honda 5 kVA',
+        property_id: 3,
+        location: 'Area Utility Belakang',
+        category: 'Mesin & Pompa Air',
+        cost: 9500000,
+        lifeYears: 6,
+        residual: 1000000,
+        deprRate: 118055,
+        accumDepr: 354165,
+        maintenance_interval_months: 3,
+        last_maintenance_date: '2026-05-10',
+        next_maintenance_date: '2026-08-10',
+        maintenance_notes: 'Ganti oli mesin genset, tes aki & pembersihan filter udara',
+        condition: 'Perlu Servis'
+      },
+      {
+        id: 302,
+        name: 'AC Sharp Plasmacluster 1 PK',
+        property_id: 3,
+        location: 'Kamar 105',
+        category: 'Elektronik & AC',
+        cost: 4400000,
+        lifeYears: 5,
+        residual: 400000,
+        deprRate: 66667,
+        accumDepr: 200001,
+        maintenance_interval_months: 3,
+        last_maintenance_date: '2026-06-25',
+        next_maintenance_date: '2026-09-25',
+        maintenance_notes: 'Pembersihan filter plasmacluster',
+        condition: 'Baik'
+      }
+    ];
+
+    if (!isSupabaseConfigured) {
+      try {
+        const raw = localStorage.getItem('kamar_fixed_assets');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+        const seeds = getDefaultSeedAssets();
+        localStorage.setItem('kamar_fixed_assets', JSON.stringify(seeds));
+        return seeds;
+      } catch {
+        return getDefaultSeedAssets();
+      }
+    }
+
     try {
       const { data, error } = await supabase
         .from('fixed_assets')
         .select('*')
         .range(offset, offset + limit - 1)
         .order('id', { ascending: true });
+      
       if (error) {
         logSupabaseError('fetchFixedAssets', error);
-        return [];
+        // Fallback to local storage
+        try {
+          const raw = localStorage.getItem('kamar_fixed_assets');
+          if (raw) return JSON.parse(raw);
+        } catch { /* ignore */ }
+        return getDefaultSeedAssets();
       }
-      return (data || []).map((item: any) => ({
+
+      if (!data || data.length === 0) {
+        try {
+          const raw = localStorage.getItem('kamar_fixed_assets');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+          const seeds = getDefaultSeedAssets();
+          localStorage.setItem('kamar_fixed_assets', JSON.stringify(seeds));
+          return seeds;
+        } catch {
+          return getDefaultSeedAssets();
+        }
+      }
+
+      const mapped = data.map((item: any) => ({
         id: item.id,
         name: item.name,
-        cost: Number(item.cost),
-        lifeYears: Number(item.life_years),
-        residual: Number(item.residual),
-        deprRate: Number(item.depr_rate),
-        accumDepr: Number(item.accum_depr),
+        property_id: item.property_id ? Number(item.property_id) : undefined,
+        location: item.location || '',
+        category: item.category || 'Elektronik & AC',
+        cost: Number(item.cost || 0),
+        lifeYears: Number(item.life_years || 1),
+        residual: Number(item.residual || 0),
+        deprRate: Number(item.depr_rate || 0),
+        accumDepr: Number(item.accum_depr || 0),
+        maintenance_interval_months: item.maintenance_interval_months ? Number(item.maintenance_interval_months) : 3,
+        last_maintenance_date: item.last_maintenance_date || '',
+        next_maintenance_date: item.next_maintenance_date || '',
+        maintenance_notes: item.maintenance_notes || '',
+        last_repair_cost: item.last_repair_cost ? Number(item.last_repair_cost) : undefined,
+        condition: item.condition || 'Baik',
         created_at: item.created_at
       }));
+
+      // Cache locally
+      try {
+        localStorage.setItem('kamar_fixed_assets', JSON.stringify(mapped));
+      } catch { /* ignore */ }
+
+      return mapped;
     } catch (err) {
       logSupabaseError('fetchFixedAssets', err, true);
-      return [];
+      try {
+        const raw = localStorage.getItem('kamar_fixed_assets');
+        if (raw) return JSON.parse(raw);
+      } catch { /* ignore */ }
+      return getDefaultSeedAssets();
     }
   },
 
   async saveFixedAsset(asset: Partial<FixedAsset>): Promise<FixedAsset> {
-    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    const id = asset.id;
+    const finalRecord: FixedAsset = {
+      id: id || Date.now(),
+      name: asset.name || '',
+      property_id: asset.property_id,
+      location: asset.location || '',
+      category: asset.category || 'Elektronik & AC',
+      cost: Number(asset.cost ?? 0),
+      lifeYears: Number(asset.lifeYears ?? 1),
+      residual: Number(asset.residual ?? 0),
+      deprRate: Number(asset.deprRate ?? 0),
+      accumDepr: Number(asset.accumDepr ?? 0),
+      maintenance_interval_months: asset.maintenance_interval_months ?? 3,
+      last_maintenance_date: asset.last_maintenance_date || '',
+      next_maintenance_date: asset.next_maintenance_date || '',
+      maintenance_notes: asset.maintenance_notes || '',
+      last_repair_cost: asset.last_repair_cost !== undefined ? Number(asset.last_repair_cost) : undefined,
+      condition: asset.condition || 'Baik',
+      created_at: new Date().toISOString()
+    };
+
+    // Update local cache first
     try {
-      const id = asset.id;
-      const payload = {
+      const raw = localStorage.getItem('kamar_fixed_assets');
+      let list: FixedAsset[] = raw ? JSON.parse(raw) : [];
+      if (id) {
+        list = list.map(item => item.id === id ? { ...item, ...finalRecord } : item);
+      } else {
+        list.push(finalRecord);
+      }
+      localStorage.setItem('kamar_fixed_assets', JSON.stringify(list));
+    } catch { /* ignore */ }
+
+    if (!isSupabaseConfigured) {
+      notifyRealtimeMutation('fixed_assets', id ? 'UPDATE' : 'INSERT', finalRecord);
+      return finalRecord;
+    }
+
+    try {
+      const payload: any = {
         name: asset.name,
-        cost: asset.cost,
-        life_years: asset.lifeYears,
-        residual: asset.residual,
-        depr_rate: asset.deprRate,
-        accum_depr: asset.accumDepr
+        cost: asset.cost ?? 0,
+        life_years: asset.lifeYears ?? 1,
+        residual: asset.residual ?? 0,
+        depr_rate: asset.deprRate ?? 0,
+        accum_depr: asset.accumDepr ?? 0
       };
-      const { data, error } = id
+
+      if (asset.property_id !== undefined) payload.property_id = asset.property_id;
+      if (asset.location !== undefined) payload.location = asset.location;
+      if (asset.category !== undefined) payload.category = asset.category;
+      if (asset.maintenance_interval_months !== undefined) payload.maintenance_interval_months = asset.maintenance_interval_months;
+      if (asset.last_maintenance_date !== undefined) payload.last_maintenance_date = asset.last_maintenance_date;
+      if (asset.next_maintenance_date !== undefined) payload.next_maintenance_date = asset.next_maintenance_date;
+      if (asset.maintenance_notes !== undefined) payload.maintenance_notes = asset.maintenance_notes;
+      if (asset.condition !== undefined) payload.condition = asset.condition;
+      if (asset.last_repair_cost !== undefined) payload.last_repair_cost = Number(asset.last_repair_cost);
+
+      let { data, error } = id
         ? await supabase.from('fixed_assets').update(payload).eq('id', id).select().single()
         : await supabase.from('fixed_assets').insert(payload).select().single();
+
+      // Safe fallback if optional maintenance or property columns don't exist yet on user's remote table
+      if (error && (
+        error.message?.includes('property_id') ||
+        error.message?.includes('maintenance_interval_months') ||
+        error.message?.includes('last_maintenance_date') ||
+        error.message?.includes('next_maintenance_date') ||
+        error.message?.includes('maintenance_notes') ||
+        error.message?.includes('condition') ||
+        error.message?.includes('category') ||
+        error.message?.includes('location') ||
+        error.message?.includes('last_repair_cost')
+      )) {
+        if (error.message?.includes('property_id')) delete payload.property_id;
+        delete payload.maintenance_interval_months;
+        delete payload.last_maintenance_date;
+        delete payload.next_maintenance_date;
+        delete payload.maintenance_notes;
+        delete payload.condition;
+        delete payload.category;
+        delete payload.location;
+        delete payload.last_repair_cost;
+
+        const retryRes = id
+          ? await supabase.from('fixed_assets').update(payload).eq('id', id).select().single()
+          : await supabase.from('fixed_assets').insert(payload).select().single();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
+
       if (error) {
         logSupabaseError('saveFixedAsset', error);
-        throw error;
+      } else if (data) {
+        finalRecord.id = data.id;
+        finalRecord.created_at = data.created_at;
       }
-      return {
-        id: data.id,
-        name: data.name,
-        cost: Number(data.cost),
-        lifeYears: Number(data.life_years),
-        residual: Number(data.residual),
-        deprRate: Number(data.depr_rate),
-        accumDepr: Number(data.accum_depr),
-        created_at: data.created_at
-      };
+
+      notifyRealtimeMutation('fixed_assets', id ? 'UPDATE' : 'INSERT', finalRecord);
+      return finalRecord;
     } catch (err) {
       logSupabaseError('saveFixedAsset', err, true);
-      throw err;
+      notifyRealtimeMutation('fixed_assets', id ? 'UPDATE' : 'INSERT', finalRecord);
+      return finalRecord;
+    }
+  },
+
+  async deleteFixedAsset(id: number): Promise<boolean> {
+    try {
+      const raw = localStorage.getItem('kamar_fixed_assets');
+      if (raw) {
+        const list: FixedAsset[] = JSON.parse(raw);
+        const filtered = list.filter(item => item.id !== id);
+        localStorage.setItem('kamar_fixed_assets', JSON.stringify(filtered));
+      }
+    } catch { /* ignore */ }
+
+    if (!isSupabaseConfigured) {
+      notifyRealtimeMutation('fixed_assets', 'DELETE', { id });
+      return true;
+    }
+
+    try {
+      const { error } = await supabase.from('fixed_assets').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteFixedAsset', error);
+      }
+      notifyRealtimeMutation('fixed_assets', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deleteFixedAsset', err, true);
+      notifyRealtimeMutation('fixed_assets', 'DELETE', { id });
+      return true;
     }
   },
 

@@ -20,6 +20,7 @@ import InvoiceCard from '../components/transaction/InvoiceCard';
 import { CoaDiagnosticModal } from '../components/accounting/CoaDiagnosticModal';
 import { AccountingIntegrityAuditModal } from '../components/accounting/AccountingIntegrityAuditModal';
 import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
+import { AssetManagementSection } from '../components/AssetManagementSection';
 import { formatRupiah } from '../utils/formatCurrency';
 import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
 import { calculateOccupancy, calculateTotalInflow, calculateTotalExpenses, calculateNOI, calculateGrossPipeline } from '../lib/financialMetrics';
@@ -33,7 +34,7 @@ import {
   Sparkles, Landmark, Coins, ShoppingBag, Wrench, Wallet, Percent, Shield, ShieldCheck,
   TrendingUp, TrendingDown, Calculator, Layers, Clock, ArrowRightLeft, AlertTriangle,
   FileSignature, PenTool, Upload, CheckCircle2, Scale, KeyRound, Key,
-  SlidersHorizontal, MonitorCheck, ArrowUp, ArrowDown
+  SlidersHorizontal, MonitorCheck, ArrowUp, ArrowDown, Briefcase
 } from 'lucide-react';
 
 interface AdminProps {}
@@ -722,7 +723,7 @@ export default function Admin({}: AdminProps) {
   const { data: pettyCashRequestsData, refetch: refetchPettyCashRequests } = useRealtimeTable<PettyCashRequest>(
     'petty_cash_requests',
     () => database.fetchPettyCashRequests());
-  const { data: assetsData } = useRealtimeTable<FixedAsset>(
+  const { data: assetsData, refetch: refetchAssets } = useRealtimeTable<FixedAsset>(
     'fixed_assets',
     () => database.fetchFixedAssets());
   const { data: budgetsData } = useRealtimeTable<Budget>(
@@ -966,6 +967,19 @@ export default function Admin({}: AdminProps) {
     phone: '',
     email: '',
     nik: '',
+    identity_type: 'KTP', // 'KTP' | 'SIM' | 'Kartu Mahasiswa'
+    identity_number: '',
+    ktp_image: '',
+    birth_place: '',
+    birth_date: '',
+    religion: 'Islam',
+    religion_other: '',
+    origin_city: '',
+    job: '',
+    work_or_study_place: '',
+    parent_guardian_name: '',
+    parent_guardian_phone: '',
+    vehicle_plate_number: '',
     property_id: 0,
     room_number: '',
     start_date: '',
@@ -981,7 +995,9 @@ export default function Admin({}: AdminProps) {
   const [selectedTenantForDetail, setSelectedTenantForDetail] = useState<Tenant | null>(null);
   const [showTenantDetailModal, setShowTenantDetailModal] = useState(false);
   const [certificatePreviewModal, setCertificatePreviewModal] = useState<string | null>(null);
+  const [ktpPreviewModal, setKtpPreviewModal] = useState<string | null>(null);
   const [isUploadingTenantCert, setIsUploadingTenantCert] = useState(false);
+  const [isUploadingTenantKtp, setIsUploadingTenantKtp] = useState(false);
 
   // Property modal triggers
   const [showPropertyModal, setShowPropertyModal] = useState(false);
@@ -2640,12 +2656,26 @@ export default function Admin({}: AdminProps) {
 
   const handleSaveTenant = async (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanReligion = tenantForm.religion === 'Yang lain' ? (tenantForm.religion_other || 'Yang lain') : (tenantForm.religion || 'Islam');
     const payload: Partial<Tenant> = {
       ...(activeTenantEdit ? { id: activeTenantEdit.id } : {}),
       full_name: tenantForm.full_name,
       phone: tenantForm.phone,
       email: tenantForm.email || 'tenant@samarastay.com',
-      nik: tenantForm.nik || undefined,
+      nik: tenantForm.identity_number || tenantForm.nik || undefined,
+      identity_type: tenantForm.identity_type || 'KTP',
+      identity_number: tenantForm.identity_number || tenantForm.nik || undefined,
+      ktp_image: tenantForm.ktp_image || undefined,
+      birth_place: tenantForm.birth_place || undefined,
+      birth_date: tenantForm.birth_date || undefined,
+      religion: cleanReligion,
+      religion_other: tenantForm.religion_other || undefined,
+      origin_city: tenantForm.origin_city || undefined,
+      job: tenantForm.job || undefined,
+      work_or_study_place: tenantForm.work_or_study_place || undefined,
+      parent_guardian_name: tenantForm.parent_guardian_name || undefined,
+      parent_guardian_phone: tenantForm.parent_guardian_phone || undefined,
+      vehicle_plate_number: tenantForm.vehicle_plate_number || undefined,
       avatar_initials: tenantForm.full_name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(),
       avatar_color: "bg-teal-600",
       property_id: Number(tenantForm.property_id) || properties[0]?.id || 1,
@@ -2675,6 +2705,19 @@ export default function Admin({}: AdminProps) {
         phone: '',
         email: '',
         nik: '',
+        identity_type: 'KTP',
+        identity_number: '',
+        ktp_image: '',
+        birth_place: '',
+        birth_date: '',
+        religion: 'Islam',
+        religion_other: '',
+        origin_city: '',
+        job: '',
+        work_or_study_place: '',
+        parent_guardian_name: '',
+        parent_guardian_phone: '',
+        vehicle_plate_number: '',
         property_id: properties[0]?.id || 1,
         room_number: '',
         start_date: new Date().toISOString().split('T')[0],
@@ -5056,7 +5099,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
  
                  {/* SUBTAB 5: FIXED ASSET LEDGER & WORK-ORDER REPAIR (Module 6 & 7) */}
                  {activeFinanceSubTab === 'assets' && (
-                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                   <div className="space-y-6 animate-fade-in">
+                     <AssetManagementSection
+                       assets={assetsState}
+                       properties={properties}
+                       selectedPropertyId="all"
+                       readOnly={false}
+                       userRole="admin"
+                       onRefresh={refetchAssets}
+                       showToast={(msg) => alert(msg)}
+                     />
+
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                      
                      {/* Left Panel: Asset Depreciation scheduler */}
                      <div className="lg:col-span-2 bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
@@ -5191,6 +5245,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                        </div>
                      </div>
                    </div>
+                 </div>
                  )}
  
                  {/* SUBTAB 6: PETTY CASH & BANK RECONCILIATION */}
@@ -6519,12 +6574,27 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             type="button"
                             onClick={() => {
                               setActiveTenantEdit(t);
+                              const standardReligions = ['Islam', 'Kristen Protestan', 'Kristen Katolik', 'Buddha', 'Hindu', 'Konghucu'];
+                              const isOther = t.religion && !standardReligions.includes(t.religion);
                               setTenantForm({
                                 full_name: t.full_name,
                                 phone: t.phone,
                                 email: t.email || '',
-                                nik: t.nik || '',
-                                property_id: t.property_id,
+                                nik: t.nik || t.identity_number || '',
+                                identity_type: t.identity_type || 'KTP',
+                                identity_number: t.identity_number || t.nik || '',
+                                ktp_image: t.ktp_image || '',
+                                birth_place: t.birth_place || '',
+                                birth_date: t.birth_date || '',
+                                religion: isOther ? 'Yang lain' : (t.religion || 'Islam'),
+                                religion_other: isOther ? (t.religion || '') : (t.religion_other || ''),
+                                origin_city: t.origin_city || '',
+                                job: t.job || '',
+                                work_or_study_place: t.work_or_study_place || '',
+                                parent_guardian_name: t.parent_guardian_name || '',
+                                parent_guardian_phone: t.parent_guardian_phone || '',
+                                vehicle_plate_number: t.vehicle_plate_number || '',
+                                property_id: t.property_id || properties[0]?.id || 1,
                                 room_number: t.room_number,
                                 start_date: t.start_date,
                                 duration_months: t.duration_months || 1,
@@ -8182,6 +8252,21 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           );
         })()}
 
+        {/* TAB: Fixed Assets & Maintenance Ledger */}
+        {activeTab === 'assets' && (
+          <div className="space-y-6">
+            <AssetManagementSection
+              assets={assetsState}
+              properties={properties}
+              selectedPropertyId="all"
+              readOnly={false}
+              userRole="admin"
+              onRefresh={refetchAssets}
+              showToast={(msg) => alert(msg)}
+            />
+          </div>
+        )}
+
         {/* TAB: Staff Operations & Monitoring */}
         {activeTab === 'staff_ops' && (
           <StaffOperationsSection
@@ -9053,56 +9138,412 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           setShowTenantModal(false);
           setActiveTenantEdit(null);
         }}
-        title={activeTenantEdit ? "UBAH INFORMASI PENGHUNI" : "PENDAFTARAN PENGHUNI MANUAL"}
+        title={activeTenantEdit ? "UPDATE DATA PENGHUNI" : "PENDAFTARAN PENGHUNI MANUAL"}
       >
-        <form onSubmit={handleSaveTenant} className="space-y-4 font-sans text-xs text-[#3A444D]">
-          <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap Penghuni</label>
-            <input 
-              type="text" required
-              value={tenantForm.full_name}
-              onChange={(e) => setTenantForm({ ...tenantForm, full_name: e.target.value })}
-              placeholder="Contoh: Rian Pratama"
-              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs font-semibold focus:border-[#0D9488]"
-            />
+        <form onSubmit={handleSaveTenant} className="space-y-4 font-sans text-xs text-[#3A444D] max-h-[80vh] overflow-y-auto pr-1">
+          <div className="bg-teal-50 border border-teal-200/80 p-3 rounded-xl text-[11px] text-teal-800 leading-relaxed">
+            <strong>Informasi Data Penghuni:</strong> Formulir pembaruan data penghuni terhubung langsung ke Supabase. Kolom bertanda bintang (<span className="text-rose-500 font-bold">*</span>) wajib diisi.
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* 1. Kontak & Akun Utama */}
+          <div className="border border-[#E2E8F0] rounded-2xl p-3.5 bg-white space-y-3 shadow-2xs">
+            <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5 pb-1 border-b border-slate-100">
+              <Mail size={13} className="text-[#0D9488]" />
+              Akun & Kontak Penghuni
+            </h4>
+
+            {/* Email * */}
             <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">No. WhatsApp / HP</label>
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                <span>Email</span>
+                <span className="text-rose-500">*</span>
+              </label>
               <input 
-                type="tel" required
-                value={tenantForm.phone}
-                onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
-                placeholder="Contoh: 08129837482"
-                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono text-xs focus:border-[#0D9488]"
+                type="email" required
+                value={tenantForm.email}
+                onChange={(e) => setTenantForm({ ...tenantForm, email: e.target.value })}
+                placeholder="contoh: ryan@email.com"
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs focus:border-[#0D9488]"
               />
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Nama Lengkap * */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <span>Nama Lengkap</span>
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input 
+                  type="text" required
+                  value={tenantForm.full_name}
+                  onChange={(e) => setTenantForm({ ...tenantForm, full_name: e.target.value })}
+                  placeholder="Contoh: Rian Pratama"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs font-semibold focus:border-[#0D9488]"
+                />
+              </div>
+
+              {/* No. Telepon * */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <span>No. Telepon / WhatsApp</span>
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input 
+                  type="tel" required
+                  value={tenantForm.phone}
+                  onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
+                  placeholder="Contoh: 08129837482"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono text-xs focus:border-[#0D9488]"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 2. Kamar & Identitas Resmi */}
+          <div className="border border-[#E2E8F0] rounded-2xl p-3.5 bg-white space-y-3 shadow-2xs">
+            <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5 pb-1 border-b border-slate-100">
+              <Key size={13} className="text-[#0D9488]" />
+              Kamar & Dokumen Identitas Resmi
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Properti Kos */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Gedung Properti Kos</label>
+                <select
+                  value={tenantForm.property_id}
+                  onChange={(e) => setTenantForm({ ...tenantForm, property_id: Number(e.target.value) })}
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl cursor-pointer text-xs font-bold focus:border-[#0D9488]"
+                >
+                  {properties.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* No. Kamar * */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <span>No. Kamar</span>
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input 
+                  type="text" required
+                  value={tenantForm.room_number}
+                  onChange={(e) => setTenantForm({ ...tenantForm, room_number: e.target.value })}
+                  placeholder="Contoh: R201"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono font-bold text-xs focus:border-[#0D9488]"
+                />
+              </div>
+            </div>
+
+            {/* No. Identitas (KTP/SIM/Kartu Mahasiswa) * */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center justify-between">
+                <span className="flex items-center gap-1">
+                  <span>No. Identitas (KTP/SIM/Kartu Mahasiswa)</span>
+                  <span className="text-rose-500">*</span>
+                </span>
+                <span className="text-[9px] text-slate-400 font-normal normal-case">Pilih jenis kartu identitas</span>
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="sm:col-span-1">
+                  <select
+                    value={tenantForm.identity_type || 'KTP'}
+                    onChange={(e) => setTenantForm({ ...tenantForm, identity_type: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl cursor-pointer text-xs font-bold focus:border-[#0D9488]"
+                  >
+                    <option value="KTP">KTP (e-KTP)</option>
+                    <option value="SIM">SIM</option>
+                    <option value="Kartu Mahasiswa">Kartu Mahasiswa</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <input 
+                    type="text" required
+                    value={tenantForm.identity_number || tenantForm.nik}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setTenantForm({ ...tenantForm, identity_number: val, nik: val });
+                    }}
+                    placeholder={`Nomor ${tenantForm.identity_type || 'KTP/SIM/Kartu Mahasiswa'} valid`}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono text-xs focus:border-[#0D9488]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* KTP * Upload 1 file yang didukung. Maks 10 GB. */}
+            <div className="space-y-1.5 pt-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center justify-between">
+                <span className="flex items-center gap-1">
+                  <span>KTP</span>
+                  <span className="text-rose-500">*</span>
+                </span>
+                <span className="text-[10px] text-slate-500 font-normal normal-case font-mono">
+                  Upload 1 file yang didukung. Maks 10 GB.
+                </span>
+              </label>
+
+              <div className="border-2 border-dashed border-[#CBD5E1] hover:border-[#0D9488] rounded-2xl p-4 bg-[#F8FAFC] transition-all text-center">
+                <div className="flex flex-col items-center justify-center gap-2">
+                  <FileText className="text-[#0D9488]" size={26} />
+                  <p className="text-[11px] text-slate-600 font-medium">
+                    Upload 1 file yang didukung (JPG, PNG, atau PDF). Maks 10 GB.
+                  </p>
+                  <label className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-bold text-xs cursor-pointer shadow-xs transition">
+                    <Upload size={13} />
+                    <span>Pilih Berkas KTP</span>
+                    <input 
+                      type="file"
+                      accept="image/*,.pdf"
+                      disabled={isUploadingTenantKtp}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setIsUploadingTenantKtp(true);
+                        try {
+                          const res = await uploadToSupabaseStorage(file, 'samara-documents', 'tenant_ktp');
+                          if (res && res.publicUrl) {
+                            setTenantForm(prev => ({ ...prev, ktp_image: res.publicUrl }));
+                            showToast('Berkas KTP berhasil diunggah!');
+                          } else {
+                            showToast('Gagal mengunggah berkas KTP', 'error');
+                          }
+                        } catch (err: any) {
+                          showToast(err.message || 'Gagal upload KTP', 'error');
+                        } finally {
+                          setIsUploadingTenantKtp(false);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                  {isUploadingTenantKtp && (
+                    <div className="flex items-center gap-1.5 text-xs text-[#0D9488] font-bold">
+                      <RotateCw size={13} className="animate-spin" />
+                      <span>Mengunggah file KTP...</span>
+                    </div>
+                  )}
+                </div>
+
+                {tenantForm.ktp_image && (
+                  <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between gap-3 text-left">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-300 overflow-hidden flex items-center justify-center shrink-0">
+                        <img src={tenantForm.ktp_image} alt="KTP Preview" className="w-full h-full object-cover" onError={(e)=>{ (e.target as any).src = 'https://placehold.co/100x100?text=KTP'; }} />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[11px] font-bold text-slate-800 block truncate">Berkas KTP Terlampir</span>
+                        <span className="text-[10px] text-emerald-600 font-medium">✓ Siap tersimpan di Supabase</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setKtpPreviewModal(tenantForm.ktp_image)}
+                        className="text-[10px] font-bold text-[#0D9488] bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
+                      >
+                        <Eye size={11} /> Lihat
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTenantForm(prev => ({ ...prev, ktp_image: '' }))}
+                        className="text-[10px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-1 rounded-lg transition cursor-pointer"
+                      >
+                        Hapus
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Tempat, Tanggal Lahir, Agama & Asal Daerah */}
+          <div className="border border-[#E2E8F0] rounded-2xl p-3.5 bg-white space-y-3 shadow-2xs">
+            <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5 pb-1 border-b border-slate-100">
+              <UserCheck size={13} className="text-[#0D9488]" />
+              Biodata Kependudukan
+            </h4>
+
+            {/* Tempat, Tanggal Lahir * */}
             <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Email Penghuni</label>
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                <span>Tempat, Tanggal Lahir</span>
+                <span className="text-rose-500">*</span>
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input 
+                  type="text" required
+                  value={tenantForm.birth_place}
+                  onChange={(e) => setTenantForm({ ...tenantForm, birth_place: e.target.value })}
+                  placeholder="Tempat Lahir (Contoh: Bandung)"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs focus:border-[#0D9488]"
+                />
+                <input 
+                  type="date" required
+                  value={tenantForm.birth_date}
+                  onChange={(e) => setTenantForm({ ...tenantForm, birth_date: e.target.value })}
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs font-mono focus:border-[#0D9488]"
+                />
+              </div>
+            </div>
+
+            {/* Agama * */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                <span>Agama</span>
+                <span className="text-rose-500">*</span>
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {['Islam', 'Kristen Protestan', 'Kristen Katolik', 'Buddha', 'Hindu', 'Konghucu', 'Yang lain'].map((rel) => {
+                  const isSelected = tenantForm.religion === rel;
+                  return (
+                    <button
+                      key={rel}
+                      type="button"
+                      onClick={() => setTenantForm({ ...tenantForm, religion: rel })}
+                      className={`p-2 rounded-xl text-[11px] font-bold border transition text-left cursor-pointer flex items-center justify-between ${
+                        isSelected 
+                          ? 'bg-[#0D9488] text-white border-[#0D9488] shadow-xs' 
+                          : 'bg-[#F8FAFC] text-slate-700 border-[#E2E8F0] hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>{rel === 'Yang lain' ? 'Yang lain:' : rel}</span>
+                      {isSelected && <Check size={11} className="shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {tenantForm.religion === 'Yang lain' && (
+                <div className="pt-1">
+                  <input 
+                    type="text" required
+                    value={tenantForm.religion_other}
+                    onChange={(e) => setTenantForm({ ...tenantForm, religion_other: e.target.value })}
+                    placeholder="Tuliskan agama atau aliran kepercayaan..."
+                    className="w-full bg-[#F8FAFC] border border-[#0D9488] p-2.5 rounded-xl outline-none text-xs"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Asal Daerah * */}
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                <span>Asal Daerah</span>
+                <span className="text-rose-500">*</span>
+              </label>
               <input 
-                type="email"
-                value={tenantForm.email}
-                onChange={(e) => setTenantForm({ ...tenantForm, email: e.target.value })}
-                placeholder="penghuni@gmail.com"
+                type="text" required
+                value={tenantForm.origin_city}
+                onChange={(e) => setTenantForm({ ...tenantForm, origin_city: e.target.value })}
+                placeholder="Contoh: Kota Bandung, Jawa Barat"
                 className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs focus:border-[#0D9488]"
               />
             </div>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Nomor Induk Kependudukan (NIK KTP)</label>
-            <input 
-              type="text"
-              maxLength={16}
-              value={tenantForm.nik}
-              onChange={(e) => setTenantForm({ ...tenantForm, nik: e.target.value.replace(/[^0-9]/g, '') })}
-              placeholder="16 Digit NIK KTP Penghuni"
-              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono text-xs focus:border-[#0D9488]"
-            />
+          {/* 4. Pekerjaan & Lembaga */}
+          <div className="border border-[#E2E8F0] rounded-2xl p-3.5 bg-white space-y-3 shadow-2xs">
+            <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5 pb-1 border-b border-slate-100">
+              <Briefcase size={13} className="text-[#0D9488]" />
+              Pekerjaan & Pendidikan
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Pekerjaan * */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <span>Pekerjaan</span>
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input 
+                  type="text" required
+                  value={tenantForm.job}
+                  onChange={(e) => setTenantForm({ ...tenantForm, job: e.target.value })}
+                  placeholder="Contoh: Mahasiswa / Software Engineer"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs focus:border-[#0D9488]"
+                />
+              </div>
+
+              {/* Tempat Bekerja/ Kuliah * */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <span>Tempat Bekerja/ Kuliah</span>
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input 
+                  type="text" required
+                  value={tenantForm.work_or_study_place}
+                  onChange={(e) => setTenantForm({ ...tenantForm, work_or_study_place: e.target.value })}
+                  placeholder="Contoh: Universitas Indonesia / PT GoTo"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs focus:border-[#0D9488]"
+                />
+              </div>
+            </div>
           </div>
 
+          {/* 5. Orang Tua / Wali & Kendaraan */}
+          <div className="border border-[#E2E8F0] rounded-2xl p-3.5 bg-white space-y-3 shadow-2xs">
+            <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5 pb-1 border-b border-slate-100">
+              <Users size={13} className="text-[#0D9488]" />
+              Kontak Orang Tua / Wali & Kendaraan
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Nama Orang Tua/ Wali * */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <span>Nama Orang Tua/ Wali</span>
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input 
+                  type="text" required
+                  value={tenantForm.parent_guardian_name}
+                  onChange={(e) => setTenantForm({ ...tenantForm, parent_guardian_name: e.target.value })}
+                  placeholder="Nama lengkap Ayah/Ibu/Wali"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none text-xs focus:border-[#0D9488]"
+                />
+              </div>
+
+              {/* No. Telepon Orang Tua/ Wali * */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                  <span>No. Telepon Orang Tua/ Wali</span>
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input 
+                  type="tel" required
+                  value={tenantForm.parent_guardian_phone}
+                  onChange={(e) => setTenantForm({ ...tenantForm, parent_guardian_phone: e.target.value })}
+                  placeholder="Contoh: 081298765432"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono text-xs focus:border-[#0D9488]"
+                />
+              </div>
+            </div>
+
+            {/* No. Plat Kendaraan * */}
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono flex items-center gap-1">
+                <span>No. Plat Kendaraan</span>
+                <span className="text-rose-500">*</span>
+              </label>
+              <input 
+                type="text" required
+                value={tenantForm.vehicle_plate_number}
+                onChange={(e) => setTenantForm({ ...tenantForm, vehicle_plate_number: e.target.value.toUpperCase() })}
+                placeholder="Contoh: B 1234 ABC atau 'Tidak Ada Kendaraan'"
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono font-bold text-xs uppercase focus:border-[#0D9488]"
+              />
+            </div>
+          </div>
+
+          {/* 6. Legalitas Pasangan / Pasutri */}
           <div className="bg-emerald-50/70 border border-emerald-200/90 rounded-2xl p-3.5 space-y-3">
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2.5 cursor-pointer select-none">
@@ -9217,7 +9658,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <button
                         type="button"
                         onClick={() => setTenantForm(prev => ({ ...prev, marriage_certificate_url: '' }))}
-                        className="text-rose-600 hover:text-rose-700 text-[10px] font-bold"
+                        className="text-rose-600 hover:text-rose-700 text-[10px] font-bold cursor-pointer"
                       >
                         Hapus
                       </button>
@@ -9228,33 +9669,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Pilih Properti Kos</label>
-              <select
-                value={tenantForm.property_id}
-                onChange={(e) => setTenantForm({ ...tenantForm, property_id: Number(e.target.value) })}
-                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl cursor-pointer text-xs font-bold focus:border-[#0D9488]"
-              >
-                {properties.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Nomor Kamar Alokasi</label>
-              <input 
-                type="text" required
-                value={tenantForm.room_number}
-                onChange={(e) => setTenantForm({ ...tenantForm, room_number: e.target.value })}
-                placeholder="Contoh: R201"
-                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl outline-none font-mono font-bold text-xs focus:border-[#0D9488]"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* 7. Periode Sewa & Pembayaran */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Tanggal Mulai Sewa</label>
               <input 
@@ -9289,7 +9705,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </div>
           </div>
 
-          <div className="flex gap-2 pt-2">
+          <div className="flex gap-2 pt-3 border-t border-slate-100">
             <button
               type="button"
               disabled={isSavingOccupant}
@@ -9304,15 +9720,15 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             <button
               type="submit"
               disabled={isSavingOccupant}
-              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all text-xs cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+              className="flex-1 py-2.5 rounded-xl bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold transition-all text-xs cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-xs"
             >
               {isSavingOccupant ? (
                 <>
                   <RotateCw size={13} className="animate-spin text-white" />
-                  <span>Menyimpan...</span>
+                  <span>Menyimpan ke Supabase...</span>
                 </>
               ) : (
-                'Simpan Penghuni'
+                'Simpan Data Penghuni'
               )}
             </button>
           </div>
@@ -9378,9 +9794,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-0.5">
-                    <span className="text-[10px] text-slate-500 font-mono uppercase">Nomor Induk Kependudukan (NIK)</span>
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">
+                      No. Identitas ({t.identity_type || 'KTP'})
+                    </span>
                     <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
-                      {t.nik || 'Belum diisi'}
+                      {t.identity_number || t.nik || 'Belum diisi'}
                     </p>
                   </div>
                   <div className="space-y-0.5">
@@ -9416,6 +9834,55 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   </div>
                 </div>
 
+                {/* Berkas KTP Penghuni */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-700 font-mono uppercase flex items-center gap-1.5">
+                      <FileText size={13} className="text-[#0D9488]" />
+                      Berkas KTP (Kartu Tanda Penduduk)
+                    </span>
+                    {t.ktp_image && (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setKtpPreviewModal(t.ktp_image || null)}
+                          className="text-[10px] font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-300 px-2.5 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Eye size={11} /> Perbesar KTP
+                        </button>
+                        <a
+                          href={t.ktp_image}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-2.5 py-1 rounded-lg transition flex items-center gap-1"
+                        >
+                          <ExternalLink size={11} /> Buka Asli
+                        </a>
+                      </div>
+                    )}
+                  </div>
+
+                  {t.ktp_image ? (
+                    <div 
+                      onClick={() => setKtpPreviewModal(t.ktp_image || null)}
+                      className="relative rounded-xl border border-slate-200 overflow-hidden bg-slate-900 group cursor-pointer max-h-48 flex items-center justify-center"
+                    >
+                      <img 
+                        src={t.ktp_image} 
+                        alt="Berkas KTP" 
+                        className="max-h-48 w-auto object-contain transition-transform group-hover:scale-105"
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white font-bold text-xs gap-2">
+                        <Eye size={16} /> Klik untuk melihat KTP ukuran penuh
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-500 text-[11px] italic">
+                      Berkas gambar KTP belum diunggah untuk penghuni ini.
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100 text-[11px]">
                   <div>
                     <span className="text-[10px] text-slate-500 font-mono uppercase block">Mulai Sewa</span>
@@ -9428,6 +9895,84 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   <div>
                     <span className="text-[10px] text-slate-500 font-mono uppercase block">Selesai Sewa</span>
                     <strong className="text-slate-800 font-mono">{dateEnd}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 1.5: Biodata Lengkap Kependudukan & Latar Belakang */}
+              <div className="border border-slate-200 rounded-2xl p-4 bg-white space-y-3 shadow-2xs">
+                <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5 pb-2 border-b border-slate-100">
+                  <UserCheck size={13} className="text-[#0D9488]" />
+                  Biodata Kependudukan & Pendidikan / Pekerjaan
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Tempat, Tanggal Lahir</span>
+                    <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                      {t.birth_place ? `${t.birth_place}, ${t.birth_date || '-'}` : (t.birth_date || '-')}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Agama</span>
+                    <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                      {t.religion || '-'}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Asal Daerah</span>
+                    <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                      {t.origin_city || '-'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Pekerjaan</span>
+                    <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                      {t.job || '-'}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Tempat Bekerja / Kuliah</span>
+                    <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                      {t.work_or_study_place || '-'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Nama Orang Tua / Wali</span>
+                    <p className="font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                      {t.parent_guardian_name || '-'}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">No. Telp Orang Tua / Wali</span>
+                    <div className="flex items-center gap-1.5">
+                      <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 flex-1 truncate">
+                        {t.parent_guardian_phone || '-'}
+                      </p>
+                      {t.parent_guardian_phone && (
+                        <a
+                          href={`https://wa.me/${(t.parent_guardian_phone || '').replace(/[^0-9]/g, '').replace(/^0/, '62')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold transition shrink-0"
+                          title="WhatsApp Wali"
+                        >
+                          WA
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">No. Plat Kendaraan</span>
+                    <p className="font-mono font-extrabold text-[#0D9488] text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 uppercase">
+                      {t.vehicle_plate_number || 'Tidak Ada'}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -9562,12 +10107,27 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   onClick={() => {
                     setShowTenantDetailModal(false);
                     setActiveTenantEdit(t);
+                    const standardReligions = ['Islam', 'Kristen Protestan', 'Kristen Katolik', 'Buddha', 'Hindu', 'Konghucu'];
+                    const isOther = t.religion && !standardReligions.includes(t.religion);
                     setTenantForm({
                       full_name: t.full_name,
                       phone: t.phone,
                       email: t.email || '',
-                      nik: t.nik || '',
-                      property_id: t.property_id,
+                      nik: t.nik || t.identity_number || '',
+                      identity_type: t.identity_type || 'KTP',
+                      identity_number: t.identity_number || t.nik || '',
+                      ktp_image: t.ktp_image || '',
+                      birth_place: t.birth_place || '',
+                      birth_date: t.birth_date || '',
+                      religion: isOther ? 'Yang lain' : (t.religion || 'Islam'),
+                      religion_other: isOther ? (t.religion || '') : (t.religion_other || ''),
+                      origin_city: t.origin_city || '',
+                      job: t.job || '',
+                      work_or_study_place: t.work_or_study_place || '',
+                      parent_guardian_name: t.parent_guardian_name || '',
+                      parent_guardian_phone: t.parent_guardian_phone || '',
+                      vehicle_plate_number: t.vehicle_plate_number || '',
+                      property_id: t.property_id || properties[0]?.id || 1,
                       room_number: t.room_number,
                       start_date: t.start_date,
                       duration_months: t.duration_months || 1,
@@ -9639,6 +10199,65 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <button
                 type="button"
                 onClick={() => setCertificatePreviewModal(null)}
+                className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Tutup Pratinjau
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox Modal Pratinjau Berkas KTP Penghuni */}
+      {ktpPreviewModal && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setKtpPreviewModal(null)}
+        >
+          <div 
+            className="bg-white rounded-3xl max-w-2xl w-full p-5 space-y-4 shadow-2xl relative border border-white/20"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-teal-100 text-[#0D9488] flex items-center justify-center font-bold">
+                  <FileText size={18} />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-800">BERKAS IDENTITAS KTP PENGHUNI</h3>
+                  <p className="text-[10px] text-slate-500 font-mono">Dokumen kartu identitas resmi penghuni yang terdaftar</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setKtpPreviewModal(null)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-950 rounded-2xl overflow-hidden max-h-[70vh] flex items-center justify-center p-2">
+              <img 
+                src={ktpPreviewModal} 
+                alt="Kartu Tanda Penduduk (KTP)" 
+                className="max-h-[65vh] w-auto object-contain rounded-lg"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <a
+                href={ktpPreviewModal}
+                download="ktp_penghuni_samarastay"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+              >
+                <Download size={13} /> Unduh Berkas KTP
+              </a>
+              <button
+                type="button"
+                onClick={() => setKtpPreviewModal(null)}
                 className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Tutup Pratinjau

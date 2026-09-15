@@ -10,6 +10,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
+import { renderAsync } from '@resvg/resvg-js';
 
 declare global {
   namespace Express {
@@ -1016,6 +1017,14 @@ async function startServer() {
       try {
         const formattedPrice = 'Rp ' + Number(totalAmount).toLocaleString('id-ID');
         const subject = `[Samara Stay] Bukti Pembayaran Perpanjangan Kontrak - Unit ${tenant.room_number}`;
+        let extOwnerSigUrl = 'https://eniwbzpfvwtbsonmnzzr.supabase.co/storage/v1/object/public/signatures/owner_official_signature.png';
+        try {
+          const { data: setRow } = await supabase.from('settings').select('owner_signature_url').eq('id', 1).maybeSingle();
+          if (setRow?.owner_signature_url) {
+            extOwnerSigUrl = setRow.owner_signature_url;
+          }
+        } catch (sErr) {}
+
         const text = `Halo ${tenant.full_name}, pembayaran perpanjangan kontrak sewa kamar Anda di ${propertyName} (Unit ${tenant.room_number}) selama ${extensionMonths} bulan telah berhasil dilunasi!`;
         const html = `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
@@ -1033,9 +1042,19 @@ async function startServer() {
               <p style="margin: 5px 0;"><strong>Metode Bayar:</strong> ${paymentType}</p>
               <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #059669; font-weight: bold;">LUNAS (KONTRAK DIPERPANJANG)</span></p>
             </div>
+
+            <!-- PENGESAHAN TANDA TANGAN RESMI OWNER -->
+            <div style="margin-top: 25px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 12px; background-color: #ffffff; text-align: center;">
+              <p style="font-size: 10px; color: #475569; font-weight: 800; margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 0.5px;">PENGESAHAN DOKUMEN DIGITAL:</p>
+              <div style="display: inline-block; min-height: 55px; text-align: center;">
+                <img src="cid:owner-signature" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+              </div>
+              <p style="font-size: 10px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">SAMARA STAY MANAGEMENT</p>
+              <p style="font-size: 8px; color: #059669; font-weight: bold; margin: 2px 0 0 0; font-family: monospace;">[ RESMI & TERVERIFIKASI ]</p>
+            </div>
           </div>
         `;
-        sendServerEmail(tenant.email, subject, text, html);
+        sendServerEmail(tenant.email, subject, text, html, { ownerSigUrl: extOwnerSigUrl });
       } catch (emErr) {
         console.warn('[SETTLE EXTENSION] Email send warning:', emErr);
       }
@@ -1666,6 +1685,35 @@ async function startServer() {
                     ${propertyAddress}
                   </div>
 
+                  <!-- PENGESAHAN TANDA TANGAN DUA PIHAK (OWNER & PEMESAN) -->
+                  <div style="margin-top: 25px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 12px; background-color: #ffffff;">
+                    <p style="font-size: 10px; color: #475569; font-weight: 800; margin: 0 0 10px 0; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">PENGESAHAN TANDA TANGAN RESMI:</p>
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
+                      <tr>
+                        <td width="50%" align="center" style="padding: 10px; border-right: 1px solid #e2e8f0; vertical-align: bottom;">
+                          <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                          <div style="min-height: 55px; text-align: center;">
+                            <img src="cid:owner-signature" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                          </div>
+                          <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">SAMARA STAY MANAGEMENT</p>
+                          <p style="font-size: 8px; color: #059669; font-weight: bold; margin: 2px 0 0 0; font-family: monospace;">[ STAMP RESMI ]</p>
+                        </td>
+                        <td width="50%" align="center" style="padding: 10px; vertical-align: bottom;">
+                          <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                          <div style="min-height: 55px; text-align: center;">
+                            ${finalBooking.signature_url ? `
+                              <img src="cid:tenant-signature" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                            ` : `
+                              <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">✓ DISETUJUI DIGITAL</p>
+                            `}
+                          </div>
+                          <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${finalBooking.tenant_name || 'PENYEWA'}</p>
+                          <p style="font-size: 8px; color: #64748b; margin: 2px 0 0 0; font-family: monospace;">TERVERIFIKASI SISTEM</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </div>
+
                   <div style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 25px;">
                     <h4 style="color: #1e293b; margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Petunjuk Check-In:</h4>
                     <ol style="font-size: 13px; color: #475569; padding-left: 20px; line-height: 1.7; margin: 0;">
@@ -1683,7 +1731,18 @@ async function startServer() {
                 </div>
               `;
 
-              await sendServerEmail(targetEmail, subject, text, html);
+              let approveOwnerSig = 'https://eniwbzpfvwtbsonmnzzr.supabase.co/storage/v1/object/public/signatures/owner_official_signature.png';
+              try {
+                const { data: setRow } = await supabaseAdmin.from('settings').select('owner_signature_url').eq('id', 1).maybeSingle();
+                if (setRow?.owner_signature_url) {
+                  approveOwnerSig = setRow.owner_signature_url;
+                }
+              } catch (sErr) {}
+
+              await sendServerEmail(targetEmail, subject, text, html, {
+                ownerSigUrl: approveOwnerSig,
+                tenantSigUrl: finalBooking.signature_url
+              });
             } catch (emailErr) {
               console.warn('[Admin API approve_booking] Background email dispatch notice:', emailErr);
             }
@@ -2764,10 +2823,10 @@ async function startServer() {
       // Real API Call using Node fetch with Base64 authentication header
       const authHeader = Buffer.from(`${serverKey}:`).toString('base64');
       
-      // Dynamic Production / Sandbox detection
-      const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true' || process.env.NODE_ENV === 'production';
+      // Dynamic Production / Sandbox detection (explicitly controlled by MIDTRANS_IS_PRODUCTION)
+      const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
       const midtransUrl = isProduction 
-        ? 'https://app.snap.midtrans.com/snap/v1/transactions' 
+        ? 'https://app.midtrans.com/snap/v1/transactions' 
         : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
 
       const payload = {
@@ -3097,12 +3156,198 @@ async function startServer() {
     return logEmailEventToDatabase(recipient, subject, 'failed', errorReason);
   }
 
+  // =========================================================================
+  // DIGITAL SIGNATURE STORAGE & HOSTING ENGINE (FOR INLINE ATTACHMENTS & EMAILS)
+  // =========================================================================
+  const signatureStore = new Map<string, { data: string; createdAt: number }>();
+
+  // Cleanup old signature store items every 30 minutes
+  setInterval(() => {
+    const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000);
+    for (const [id, item] of signatureStore.entries()) {
+      if (item.createdAt < twoHoursAgo || signatureStore.size > 500) {
+        signatureStore.delete(id);
+      }
+    }
+  }, 30 * 60 * 1000);
+
+  interface MailerSendAttachment {
+    id?: string;
+    filename: string;
+    content: string; // Base64
+    disposition?: 'inline' | 'attachment';
+  }
+
   interface MailerSendPayload {
     from: { email: string; name: string };
     to: Array<{ email: string; name: string }>;
     subject: string;
     text: string;
     html: string;
+    attachments?: MailerSendAttachment[];
+  }
+
+  let cachedOwnerSigBase64: string = '';
+
+  async function getOfficialOwnerSigBase64(customUrl?: string): Promise<string> {
+    if (customUrl && customUrl.startsWith('data:image/')) {
+      return customUrl.includes(',') ? customUrl.split(',')[1] : customUrl;
+    }
+    if (!customUrl && cachedOwnerSigBase64) {
+      return cachedOwnerSigBase64;
+    }
+
+    const targetUrl = customUrl || 'https://eniwbzpfvwtbsonmnzzr.supabase.co/storage/v1/object/public/signatures/owner_official_signature.png';
+    try {
+      const res = await fetch(targetUrl, { signal: AbortSignal.timeout(6000) });
+      if (res.ok) {
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const b64 = buffer.toString('base64');
+        if (!customUrl) cachedOwnerSigBase64 = b64;
+        return b64;
+      }
+    } catch (err) {
+      console.warn('[SIGNATURE HELPER] Failed to fetch remote signature URL, generating vector fallback:', err);
+    }
+
+    // Fast vector render using @resvg/resvg-js
+    try {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="180" viewBox="0 0 240 90"><path d="M 15 45 C 30 18, 40 8, 55 32 C 65 48, 75 12, 90 28 C 100 38, 105 18, 125 42 C 140 22, 155 52, 175 28 C 190 32, 205 22, 218 38" fill="none" stroke="#1e293b" stroke-width="2.8" stroke-linecap="round"/><path d="M 25 58 Q 110 46 210 52" fill="none" stroke="#2E6F40" stroke-width="2" stroke-dasharray="3 2"/><text x="110" y="72" font-family="sans-serif" font-size="9" font-weight="bold" fill="#2E6F40" text-anchor="middle" letter-spacing="1">SAMARA STAY OWNER</text><text x="110" y="83" font-family="monospace" font-size="7" fill="#64748b" text-anchor="middle">OFFICIAL DIGITAL STAMP</text></svg>';
+      const png = await renderAsync(svg, { fitTo: { mode: 'width', value: 480 } });
+      const b64 = png.asPng().toString('base64');
+      if (!customUrl) cachedOwnerSigBase64 = b64;
+      return b64;
+    } catch (renderErr) {
+      console.warn('[SIGNATURE HELPER] Fallback vector render error:', renderErr);
+      return '';
+    }
+  }
+
+  async function processEmailHtmlAndSignatures(
+    rawHtml: string,
+    options?: { ownerSigUrl?: string; tenantSigUrl?: string }
+  ): Promise<{ html: string; attachments: MailerSendAttachment[] }> {
+    let html = rawHtml || '';
+    const attachments: MailerSendAttachment[] = [];
+
+    // 1. Resolve & embed Owner Signature
+    const hasOwnerSigTag = html.includes('alt="Tanda Tangan Owner"') ||
+      html.includes('alt="TTD Owner"') ||
+      html.includes('alt="Tanda Tangan Pemilik"') ||
+      html.includes('class="sig-img"') ||
+      html.includes('cid:owner-signature') ||
+      html.includes('owner_official_signature');
+
+    if (hasOwnerSigTag || options?.ownerSigUrl) {
+      let detectedOwnerUrl = options?.ownerSigUrl || '';
+      if (!detectedOwnerUrl) {
+        const match = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*alt=["'][^"']*(?:Owner|Pemilik)[^"']*["']/i) ||
+                      html.match(/<img[^>]*alt=["'][^"']*(?:Owner|Pemilik)[^"']*["'][^>]+src=["']([^"']+)["']/i);
+        if (match && match[1]) {
+          detectedOwnerUrl = match[1];
+        }
+      }
+
+      let ownerBase64 = '';
+      if (detectedOwnerUrl.startsWith('data:image/svg+xml')) {
+        try {
+          const rawSvg = decodeURIComponent(detectedOwnerUrl.replace(/^data:image\/svg\+xml;?(?:utf8,)?,/i, ''));
+          const png = await renderAsync(rawSvg, { fitTo: { mode: 'width', value: 480 } });
+          ownerBase64 = png.asPng().toString('base64');
+        } catch (e) {
+          console.warn('[SIGNATURE HELPER] SVG render error, falling back to official signature:', e);
+        }
+      } else if (detectedOwnerUrl.startsWith('data:image/')) {
+        ownerBase64 = detectedOwnerUrl.includes(',') ? detectedOwnerUrl.split(',')[1] : detectedOwnerUrl;
+      } else if (detectedOwnerUrl.includes('/api/signatures/')) {
+        const sigMatch = detectedOwnerUrl.match(/\/api\/signatures\/([a-zA-Z0-9_-]+)\.png/);
+        if (sigMatch && sigMatch[1]) {
+          const item = signatureStore.get(sigMatch[1]);
+          if (item) ownerBase64 = item.data;
+        }
+      }
+
+      if (!ownerBase64) {
+        ownerBase64 = await getOfficialOwnerSigBase64(detectedOwnerUrl.startsWith('http') ? detectedOwnerUrl : undefined);
+      }
+
+      if (ownerBase64) {
+        attachments.push({
+          id: 'owner-signature',
+          filename: 'owner_signature.png',
+          content: ownerBase64,
+          disposition: 'inline'
+        });
+
+        // Replace the owner signature img src with cid:owner-signature
+        html = html.replace(
+          /(<img\b[^>]*?\balt=["'][^"']*(?:Owner|Pemilik)[^"']*["'][^>]*?\bsrc=["'])([^"']+)(["'][^>]*?>)/gi,
+          '$1cid:owner-signature$3'
+        );
+        html = html.replace(
+          /(<img\b[^>]*?\bsrc=["'])([^"']+)(["'][^>]*?\balt=["'][^"']*(?:Owner|Pemilik)[^"']*["'][^>]*?>)/gi,
+          '$1cid:owner-signature$3'
+        );
+      }
+    }
+
+    // 2. Resolve & embed Tenant / Pemesan Signature if present
+    const hasTenantSigTag = html.includes('alt="Tanda Tangan Pemesan"') ||
+      html.includes('alt="TTD Pemesan"') ||
+      html.includes('alt="TTD Penyewa"') ||
+      html.includes('cid:tenant-signature');
+
+    if (hasTenantSigTag || options?.tenantSigUrl) {
+      let detectedTenantUrl = options?.tenantSigUrl || '';
+      if (!detectedTenantUrl) {
+        const match = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*alt=["'][^"']*(?:Pemesan|Penyewa)[^"']*["']/i) ||
+                      html.match(/<img[^>]*alt=["'][^"']*(?:Pemesan|Penyewa)[^"']*["'][^>]+src=["']([^"']+)["']/i);
+        if (match && match[1]) {
+          detectedTenantUrl = match[1];
+        }
+      }
+
+      let tenantBase64 = '';
+      if (detectedTenantUrl.startsWith('data:image/')) {
+        tenantBase64 = detectedTenantUrl.includes(',') ? detectedTenantUrl.split(',')[1] : detectedTenantUrl;
+      } else if (detectedTenantUrl.includes('/api/signatures/')) {
+        const sigMatch = detectedTenantUrl.match(/\/api\/signatures\/([a-zA-Z0-9_-]+)\.png/);
+        if (sigMatch && sigMatch[1]) {
+          const item = signatureStore.get(sigMatch[1]);
+          if (item) tenantBase64 = item.data;
+        }
+      } else if (detectedTenantUrl.startsWith('http')) {
+        try {
+          const res = await fetch(detectedTenantUrl, { signal: AbortSignal.timeout(6000) });
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            tenantBase64 = buf.toString('base64');
+          }
+        } catch (e) {
+          console.warn('[SIGNATURE HELPER] Failed to fetch remote tenant signature URL:', e);
+        }
+      }
+
+      if (tenantBase64) {
+        attachments.push({
+          id: 'tenant-signature',
+          filename: 'tenant_signature.png',
+          content: tenantBase64,
+          disposition: 'inline'
+        });
+
+        html = html.replace(
+          /(<img\b[^>]*?\balt=["'][^"']*(?:Pemesan|Penyewa)[^"']*["'][^>]*?\bsrc=["'])([^"']+)(["'][^>]*?>)/gi,
+          '$1cid:tenant-signature$3'
+        );
+        html = html.replace(
+          /(<img\b[^>]*?\bsrc=["'])([^"']+)(["'][^>]*?\balt=["'][^"']*(?:Pemesan|Penyewa)[^"']*["'][^>]*?>)/gi,
+          '$1cid:tenant-signature$3'
+        );
+      }
+    }
+
+    return { html, attachments };
   }
 
   // Core MailerSend API fetcher with max 3 retries and exponential backoff (1s, 2s, 4s)
@@ -3179,8 +3424,14 @@ async function startServer() {
     return { success: false, status: lastStatus, dataText: lastResponseText, error: lastError };
   }
 
-  // Helper function to send email via MailerSend API with non-blocking retry
-  async function sendServerEmail(to: string, subject: string, text: string, html: string) {
+  // Helper function to send email via MailerSend API with non-blocking retry & inline signatures
+  async function sendServerEmail(
+    to: string,
+    subject: string,
+    text: string,
+    rawHtml: string,
+    options?: { ownerSigUrl?: string; tenantSigUrl?: string }
+  ) {
     // Non-blocking background execution using setImmediate
     setImmediate(async () => {
       try {
@@ -3199,15 +3450,18 @@ async function startServer() {
         const fromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
         const fromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
+        const { html, attachments } = await processEmailHtmlAndSignatures(rawHtml, options);
+
         const payload: MailerSendPayload = {
           from: { email: fromEmail, name: fromName },
           to: [{ email: to, name: to.split('@')[0] }],
           subject,
           text,
-          html
+          html,
+          attachments: attachments.length > 0 ? attachments : undefined
         };
 
-        console.log('[SERVER EMAIL TRIGGER] Initiating non-blocking send with retry:', subject, 'to:', to);
+        console.log('[SERVER EMAIL TRIGGER] Initiating non-blocking send with retry:', subject, 'to:', to, 'inline attachments:', attachments.length);
         await sendEmailWithRetry(apiKey, payload, to, subject);
       } catch (err) {
         console.error('[SERVER EMAIL TRIGGER ERROR]', err);
@@ -3491,6 +3745,14 @@ async function startServer() {
         const propertyName = property?.name || 'Samara Stay Premium Residence';
         const propertyAddress = property?.address || 'Premium Boarding Area';
         const formattedPrice = 'Rp ' + (booking.total_price || grossAmount || 0).toLocaleString('id-ID');
+        let settleOwnerSig = 'https://eniwbzpfvwtbsonmnzzr.supabase.co/storage/v1/object/public/signatures/owner_official_signature.png';
+        try {
+          const { data: setRow } = await supabase.from('settings').select('owner_signature_url').eq('id', 1).maybeSingle();
+          if (setRow?.owner_signature_url) {
+            settleOwnerSig = setRow.owner_signature_url;
+          }
+        } catch (sErr) {}
+
         const subject = `[Samara Stay] Konfirmasi & Pelunasan Sewa Kamar - Unit ${booking.room_number}`;
         const text = `Halo ${booking.tenant_name}, pembayaran sewa kamar Anda di ${propertyName} (Unit ${booking.room_number}) telah lunas dan kamar berhasil dikunci!`;
         const html = `
@@ -3510,12 +3772,45 @@ async function startServer() {
             <div style="font-size: 13px; color: #475569; margin: 15px 0; padding: 12px; background-color: #f1f5f9; border-radius: 8px;">
               <strong>Alamat Properti:</strong> ${propertyAddress}
             </div>
-            <p style="color: #64748b; font-size: 13px;">Kamar Anda kini telah terkunci aman di sistem kami dan tidak dapat dipesan oleh siapapun. Silakan tunjukkan invoice atau email ini saat check-in fisik di lokasi.</p>
+
+            <!-- PENGESAHAN TANDA TANGAN DUA PIHAK (OWNER & PEMESAN) -->
+            <div style="margin-top: 25px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 12px; background-color: #ffffff;">
+              <p style="font-size: 10px; color: #475569; font-weight: 800; margin: 0 0 10px 0; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">PENGESAHAN TANDA TANGAN RESMI:</p>
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
+                <tr>
+                  <td width="50%" align="center" style="padding: 10px; border-right: 1px solid #e2e8f0; vertical-align: bottom;">
+                    <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK PERTAMA (OWNER)</p>
+                    <div style="min-height: 55px; text-align: center;">
+                      <img src="cid:owner-signature" alt="Tanda Tangan Owner" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                    </div>
+                    <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">SAMARA STAY MANAGEMENT</p>
+                    <p style="font-size: 8px; color: #059669; font-weight: bold; margin: 2px 0 0 0; font-family: monospace;">[ STAMP RESMI ]</p>
+                  </td>
+                  <td width="50%" align="center" style="padding: 10px; vertical-align: bottom;">
+                    <p style="font-size: 9px; color: #64748b; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase;">PIHAK KEDUA (PEMESAN)</p>
+                    <div style="min-height: 55px; text-align: center;">
+                      ${booking.signature_url ? `
+                        <img src="cid:tenant-signature" alt="Tanda Tangan Pemesan" style="max-height: 55px; max-width: 140px; display: inline-block;" />
+                      ` : `
+                        <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">✓ DISETUJUI DIGITAL</p>
+                      `}
+                    </div>
+                    <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${effectiveTenantName}</p>
+                    <p style="font-size: 8px; color: #64748b; margin: 2px 0 0 0; font-family: monospace;">TERVERIFIKASI SISTEM</p>
+                  </td>
+                </tr>
+              </table>
+            </div>
+
+            <p style="color: #64748b; font-size: 13px; margin-top: 20px;">Kamar Anda kini telah terkunci aman di sistem kami dan tidak dapat dipesan oleh siapapun. Silakan tunjukkan invoice atau email ini saat check-in fisik di lokasi.</p>
           </div>
         `;
         for (const recipientEmail of recipientEmails) {
           console.log(`[SETTLE BOOKING] Dispatching confirmation email to recipient: ${recipientEmail}`);
-          sendServerEmail(recipientEmail, subject, text, html);
+          sendServerEmail(recipientEmail, subject, text, html, {
+            ownerSigUrl: settleOwnerSig,
+            tenantSigUrl: booking.signature_url
+          });
         }
       } catch (emErr) {
         console.warn('[SETTLE BOOKING] Email send warning:', emErr);
@@ -4433,7 +4728,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'MIDTRANS_SERVER_KEY belum dikonfigurasi.' });
       }
 
-      const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true' || process.env.NODE_ENV === 'production';
+      const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
       const baseUrl = isProduction ? 'https://api.midtrans.com' : 'https://api.sandbox.midtrans.com';
       const authHeader = Buffer.from(`${serverKey}:`).toString('base64');
 
@@ -4484,18 +4779,6 @@ async function startServer() {
   // =========================================================================
   // DIGITAL SIGNATURE STORAGE & HOSTING API (FOR EMAILS & RECEIVING)
   // =========================================================================
-  // Signature memory store with max capacity limit (500 items max) to prevent memory leak
-  const signatureStore = new Map<string, { data: string; createdAt: number }>();
-
-  // Cleanup old signature store items every 30 minutes (older than 2 hours)
-  setInterval(() => {
-    const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000);
-    for (const [id, item] of signatureStore.entries()) {
-      if (item.createdAt < twoHoursAgo || signatureStore.size > 500) {
-        signatureStore.delete(id);
-      }
-    }
-  }, 30 * 60 * 1000);
 
   // MailerSend Send Email API endpoint (rate-limited for security, strict recipient validation)
   app.post('/api/email/send', apiRateLimiter(60000, 20), async (req, res) => {
@@ -4526,32 +4809,19 @@ async function startServer() {
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
       const resolvedFromName = fromName || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
-      let finalHtml = html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`;
-
-      if (finalHtml && typeof finalHtml === 'string') {
-        // A. Replace any localhost / signature API URLs with direct Base64 Data URLs so external email clients (Gmail) render signatures inline
-        finalHtml = finalHtml.replace(/https?:\/\/[^\/]+\/api\/signatures\/([a-zA-Z0-9_-]+)\.png/g, (match, sigId) => {
-          const item = signatureStore.get(sigId);
-          return item ? `data:image/png;base64,${item.data}` : match;
-        });
-        finalHtml = finalHtml.replace(/\/api\/signatures\/([a-zA-Z0-9_-]+)\.png/g, (match, sigId) => {
-          const item = signatureStore.get(sigId);
-          return item ? `data:image/png;base64,${item.data}` : match;
-        });
-
-        // B. Fix double quotes inside owner SVG data URLs that break img src attributes
-        finalHtml = finalHtml.replace(/src="data:image\/svg\+xml;utf8,<svg xmlns="[^"]*"/gi, `src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='90' viewBox='0 0 240 90'>"`);
-      }
+      const rawHtml = html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`;
+      const { html: processedHtml, attachments } = await processEmailHtmlAndSignatures(rawHtml);
 
       const payload: MailerSendPayload = {
         from: { email: resolvedFromEmail, name: resolvedFromName },
         to: [{ email: to, name: to.split('@')[0] }],
         subject: subject || 'Notifikasi Samara Stay',
         text: text || 'Ini adalah notifikasi penting dari Samara Stay.',
-        html: finalHtml
+        html: processedHtml,
+        attachments: attachments.length > 0 ? attachments : undefined
       };
 
-      console.log('[API MAILERSEND] Dispatching email with retry policy to:', to, 'Subject:', payload.subject);
+      console.log('[API MAILERSEND] Dispatching email with retry policy to:', to, 'Subject:', payload.subject, 'inline attachments:', attachments.length);
 
       const result = await sendEmailWithRetry(apiKey, payload, to, payload.subject);
 

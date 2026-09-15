@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, Building2, BedDouble, GraduationCap, 
   Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail, Sparkles,
-  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass, DoorOpen, Wrench
+  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass, DoorOpen, Wrench, Box
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -22,6 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'coupons', name: 'Promo Diskon', icon: Ticket },
     { id: 'bookings_history', name: 'Riwayat Sewa', icon: History },
     { id: 'tenants', name: 'Daftar Penghuni', icon: Users },
+    { id: 'assets', name: 'Aset & Inventaris', icon: Box },
     { id: 'staff_ops', name: 'Operasional & Staf', icon: Wrench },
     { id: 'settings', name: 'Pengaturan & Ttd Owner', icon: FileSignature },
     { id: 'user_roles', name: 'User & Akses', icon: UserCog },

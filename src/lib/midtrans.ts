@@ -33,10 +33,10 @@ export const loadMidtransSnapScript = (forceSandbox: boolean = false): Promise<b
     }
 
     let clientKey = getMidtransClientKey();
-    // Force Sandbox URL as requested to ensure secure sandbox testing
-    let isProduction = false;
-
-    const snapUrl = 'https://app.sandbox.midtrans.com/snap/snap.js';
+    const isProduction = !forceSandbox && (Boolean((import.meta as any).env?.VITE_MIDTRANS_IS_PRODUCTION === 'true') || Boolean((import.meta as any).env?.MIDTRANS_IS_PRODUCTION === 'true'));
+    const snapUrl = isProduction 
+      ? 'https://app.midtrans.com/snap/snap.js'
+      : 'https://app.sandbox.midtrans.com/snap/snap.js';
 
     console.log('[MIDTRANS SDK] Initializing Snap Script with properties:', {
       url: snapUrl,
