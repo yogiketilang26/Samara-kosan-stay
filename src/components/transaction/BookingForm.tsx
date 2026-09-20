@@ -131,7 +131,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       const cleanOwnerName = (bookingForm.fullName || 'pasutri').replace(/[^a-zA-Z0-9]/g, '_');
       const uploadResult = await uploadToSupabaseStorage(
         file,
-        'documents',
+        'tenant-documents',
         `nikah_${cleanOwnerName}`,
         { maxFileSizeMB: 15 }
       );

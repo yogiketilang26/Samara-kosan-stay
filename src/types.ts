@@ -231,7 +231,7 @@ export interface Profile {
   id: string; // uuid
   full_name?: string | null;
   whatsapp?: string | null;
-  role: 'user' | 'admin' | 'super_admin' | 'owner' | 'finance' | 'staff';
+  role: 'user' | 'admin' | 'super_admin' | 'owner' | 'finance' | 'staff' | 'anak_owner' | 'anak owner';
   created_at?: string;
 }
 
@@ -239,12 +239,13 @@ export interface UserSystem {
   id: string;
   full_name: string;
   email: string;
-  role: 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user';
-  role_id: number; // 1=super/super_admin/owner, 2=admin, 3=finance, 4=user/staff/tenant
+  role: 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user' | 'anak_owner' | 'anak owner';
+  role_id: number; // 1=super/super_admin/owner, 2=admin/anak_owner, 3=finance, 4=user/staff/tenant
   access: string;
   last_login?: string;
   active: boolean;
   property_id?: number | null;
+  password?: string;
   created_at?: string;
 }
 
@@ -363,6 +364,7 @@ export interface SystemSettings {
   standard_facilities?: string;
   why_choose_us?: string;
   faqs?: string;
+  testimonials?: string;
   owner_signature_url?: string;
   updated_at?: string;
 }

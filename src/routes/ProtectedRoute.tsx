@@ -15,9 +15,14 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   requiredPortal = 'admin'
 }) => {
   const { user, loading, login, signup, logout } = useAuth();
+  const isAnakOwnerPortal = typeof window !== 'undefined' && (
+    window.location.search.includes('anak_owner') || 
+    window.location.hash.includes('anak_owner')
+  );
+
   const [isSignUp, setIsSignUp] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(() => isAnakOwnerPortal ? 'anakowner@samarastay.co.id' : '');
+  const [password, setPassword] = useState(() => isAnakOwnerPortal ? 'admin123' : '');
   const [fullName, setFullName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +96,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' 
                 : isStaffPortal
                 ? 'bg-teal-500/10 border-teal-500/30 text-teal-400'
+                : isAnakOwnerPortal
+                ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
                 : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
             }`}>
               {isOwnerPortal ? <Building2 size={26} /> : <Shield size={26} />}
@@ -101,9 +108,11 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
                 : isStaffPortal
                 ? 'bg-teal-500/20 text-teal-300 border-teal-500/30'
+                : isAnakOwnerPortal
+                ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
                 : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
             }`}>
-              {isOwnerPortal ? 'Owner & Investor Portal' : isStaffPortal ? 'Portal Staff Admin Operasional' : 'Super Admin Management'}
+              {isOwnerPortal ? 'Owner & Investor Portal' : isStaffPortal ? 'Portal Staff Admin Operasional' : isAnakOwnerPortal ? 'Portal Panel Anak Owner' : 'Super Admin Management'}
             </span>
 
             <h2 className="text-xl font-black text-white uppercase tracking-wider font-display pt-1">
@@ -113,6 +122,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                     ? 'MASUK OWNER PORTAL' 
                     : isStaffPortal 
                     ? 'MASUK STAFF ADMIN' 
+                    : isAnakOwnerPortal
+                    ? 'MASUK PANEL ANAK OWNER'
                     : 'MASUK ADMIN PANEL')}
             </h2>
 
@@ -125,6 +136,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                     ? 'Akses khusus Pemilik / Investor Properti Samara Stay untuk memantau performa bisnis dan pengesahan dokumen.'
                     : isStaffPortal
                     ? 'Akses khusus Staff Admin Operasional kos untuk mengelola unit kamar, survey tamu, check-in/out, dan perbaikan harian.'
+                    : isAnakOwnerPortal
+                    ? 'Akses khusus Anak Owner untuk pengawasan operasional, okupansi unit kamar, reservasi, dan pembukuan kos.'
                     : 'Akses khusus Super Administrator untuk manajemen operasional, reservasi, tarif, dan pembukuan kos.')}
             </p>
           </div>
@@ -190,8 +203,16 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                     </button>
                     <button
                       type="button"
+                      onClick={() => handleQuickFill('anakowner@samarastay.co.id', 'admin123')}
+                      className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-300 text-[10px] font-bold p-2 rounded-xl text-left transition-all cursor-pointer flex flex-col"
+                    >
+                      <span className="font-extrabold text-purple-200">Anak Owner</span>
+                      <span className="text-[9px] text-slate-400 truncate">anakowner@samarastay.co.id</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => handleQuickFill('yogiketilang33@gmail.com', 'admin123')}
-                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[10px] font-bold p-2 rounded-xl text-left transition-all cursor-pointer flex flex-col"
+                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[10px] font-bold p-2 rounded-xl text-left transition-all cursor-pointer flex flex-col sm:col-span-2"
                     >
                       <span className="font-extrabold text-white">Akun Admin (Yogi)</span>
                       <span className="text-[9px] text-slate-400 truncate">yogiketilang33@gmail.com</span>

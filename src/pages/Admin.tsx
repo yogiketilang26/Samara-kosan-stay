@@ -7,6 +7,7 @@ import { observability, useRenderCounter } from '../lib/observability';
 import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, MidtransClearingTransaction, BankReconciliationMatch, Maintenance } from '../types';
 import { loadMidtransSnapScript, requestSnapTokenFromServer } from '../lib/midtrans';
 import Sidebar from '../components/layout/Sidebar';
+import { useAuth } from '../hooks/useAuth';
 import { Button } from '../components/common/Button';
 import { Loader } from '../components/common/Loader';
 import { Modal } from '../components/common/Modal';
@@ -21,6 +22,7 @@ import { CoaDiagnosticModal } from '../components/accounting/CoaDiagnosticModal'
 import { AccountingIntegrityAuditModal } from '../components/accounting/AccountingIntegrityAuditModal';
 import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
 import { AssetManagementSection } from '../components/AssetManagementSection';
+import { can, canManageRole, canAssignProperty, canAccessProperty, maskNik, UserRole } from '../lib/permissions';
 import { formatRupiah } from '../utils/formatCurrency';
 import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
 import { calculateOccupancy, calculateTotalInflow, calculateTotalExpenses, calculateNOI, calculateGrossPipeline } from '../lib/financialMetrics';
@@ -428,7 +430,56 @@ export default function Admin({}: AdminProps) {
     transactionsLoading || activityLogsLoading || usersLoading || tenantsLoading || accountsLoading ||
     journalEntriesLoading || paymentsLoading || settingsLoading || masterFacilitiesLoading;
 
+  const { user } = useAuth();
+  const rawRole = (user?.raw_role || user?.role || '').trim().toLowerCase();
+  const userEmail = (user?.email || '').toLowerCase();
+  const userAccess = ((user as any)?.access || '').toLowerCase();
+  const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin' || userEmail === 'yogiketilang33@gmail.com' || userEmail.includes('superadmin')));
+
+  const [simulatedRole, setSimulatedRole] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search).get('role') || new URLSearchParams(window.location.search).get('portal');
+      if (p === 'anak_owner') return 'anak_owner';
+      return localStorage.getItem('samara_simulated_role');
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      setSimulatedRole(e.detail?.role || null);
+    };
+    window.addEventListener('samara-role-simulate', handler);
+    return () => window.removeEventListener('samara-role-simulate', handler);
+  }, []);
+
+  const isAnakOwner = 
+    rawRole === 'anak_owner' || 
+    rawRole === 'anak owner' ||
+    userAccess.includes('anak owner') ||
+    userEmail.includes('anakowner') ||
+    userEmail === 'sabita@samarastay.co' ||
+    simulatedRole === 'anak_owner';
+
+  const currentActorRole: UserRole = (
+    simulatedRole === 'anak_owner' || isAnakOwner ? 'anak_owner' :
+    isSuper ? 'super' :
+    rawRole === 'owner' ? 'owner' :
+    rawRole === 'admin' ? 'admin' :
+    rawRole === 'finance' ? 'finance' :
+    rawRole === 'staff' ? 'staff' : 'user'
+  );
+
+  const canReadPii = can(currentActorRole, 'pii_docs', 'read');
+
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+
+  // Proteksi role Anak Owner: larang akses ke 5 modul teknis/privilege
+  useEffect(() => {
+    if (isAnakOwner && ['email_integration', 'midtrans_logs', 'observability', 'activity_logs', 'user_roles'].includes(activeTab)) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, isAnakOwner]);
   
   // Observability real-time state trigger
   const [, setObservabilityTrigger] = useState(0);
@@ -952,10 +1003,11 @@ export default function Admin({}: AdminProps) {
   const [userForm, setUserForm] = useState({
     fullName: '',
     email: '',
-    role: 'staff' as 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user',
+    role: 'staff' as 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user' | 'anak_owner' | 'anak owner',
     access: 'Staff akses terbatas',
     active: true,
-    property_id: null as number | null
+    property_id: null as number | null,
+    password: ''
   });
 
 
@@ -1252,20 +1304,20 @@ export default function Admin({}: AdminProps) {
   };
 
   useEffect(() => {
-    if (activeTab === 'midtrans_logs') {
+    if (activeTab === 'midtrans_logs' && !isAnakOwner) {
       fetchMidtransLogs();
     }
-  }, [activeTab]);
+  }, [activeTab, isAnakOwner]);
 
   useEffect(() => {
     let interval: any;
-    if (activeTab === 'midtrans_logs' && autoRefreshLogs) {
+    if (activeTab === 'midtrans_logs' && autoRefreshLogs && !isAnakOwner) {
       interval = setInterval(() => {
         fetchMidtransLogs();
       }, 5000);
     }
     return () => clearInterval(interval);
-  }, [activeTab, autoRefreshLogs]);
+  }, [activeTab, autoRefreshLogs, isAnakOwner]);
 
   useEffect(() => {
     const sett = settingsData && settingsData.length > 0 ? settingsData[0] : null;
@@ -2521,6 +2573,11 @@ export default function Admin({}: AdminProps) {
   };
 
   const handleQuickPropertyChange = async (u: UserSystem, propIdVal: string) => {
+    const propCheck = canAssignProperty(currentActorRole, u.role as UserRole);
+    if (!propCheck.allowed) {
+      showToast(propCheck.reason || 'Anda tidak berhak mengatur penugasan properti pengguna ini.', 'error');
+      return;
+    }
     startItemProcessing(u.id);
     try {
       const targetPropId = propIdVal === '' ? null : Number(propIdVal);
@@ -2539,10 +2596,32 @@ export default function Admin({}: AdminProps) {
   };
 
   const handleQuickRoleChange = async (u: UserSystem, newRole: UserSystem['role']) => {
+    const checkCurrent = canManageRole(currentActorRole, u.role as UserRole, 'update');
+    if (!checkCurrent.allowed) {
+      showToast(checkCurrent.reason || 'Anda tidak berhak mengubah pengguna ini.', 'error');
+      return;
+    }
+    const checkNew = canManageRole(currentActorRole, newRole as UserRole, 'create');
+    if (!checkNew.allowed) {
+      showToast(checkNew.reason || 'Anda tidak berhak menetapkan peran ini.', 'error');
+      return;
+    }
     startItemProcessing(u.id);
     try {
-      const roleId = (newRole === 'super' || newRole === 'super_admin' || newRole === 'owner') ? 1 : newRole === 'admin' ? 2 : newRole === 'finance' ? 3 : 4;
-      const accessDesc = (newRole === 'super' || newRole === 'super_admin') ? 'Akses penuh sistem, log audit & database' : newRole === 'owner' ? 'Akses pemilik properti & eksekutif' : newRole === 'admin' ? 'Akses kontrol panel asrama & inventaris' : newRole === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas';
+      const isSuper = newRole === 'super' || newRole === 'super_admin';
+      const isAnakOwnerRole = newRole === 'anak_owner' || newRole === 'anak owner';
+      const roleId = (isSuper || newRole === 'owner') ? 1 : (newRole === 'admin' || isAnakOwnerRole) ? 2 : newRole === 'finance' ? 3 : 4;
+      const accessDesc = isSuper 
+        ? 'Akses penuh sistem, log audit & database' 
+        : newRole === 'owner' 
+        ? 'Akses pemilik properti & eksekutif' 
+        : isAnakOwnerRole
+        ? 'Akses operasional, hunian & keuangan (Anak Owner)'
+        : newRole === 'admin' 
+        ? 'Akses kontrol panel asrama & inventaris' 
+        : newRole === 'finance' 
+        ? 'Akses ledger keuangan & setoran PBJT' 
+        : 'Akses operasional lapangan terbatas';
 
       await database.saveUser({
         id: u.id,
@@ -2567,13 +2646,43 @@ export default function Admin({}: AdminProps) {
 
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const roleId = (userForm.role === 'super' || userForm.role === 'super_admin' || userForm.role === 'owner') ? 1 : userForm.role === 'admin' ? 2 : userForm.role === 'finance' ? 3 : 4;
+    if (activeUserEdit) {
+      const checkCurrent = canManageRole(currentActorRole, activeUserEdit.role as UserRole, 'update');
+      if (!checkCurrent.allowed) {
+        showToast(checkCurrent.reason || 'Anda tidak berhak mengubah pengguna ini.', 'error');
+        return;
+      }
+      const checkNew = canManageRole(currentActorRole, userForm.role as UserRole, 'create');
+      if (!checkNew.allowed) {
+        showToast(checkNew.reason || 'Anda tidak berhak menetapkan peran ini.', 'error');
+        return;
+      }
+    } else {
+      const checkNew = canManageRole(currentActorRole, userForm.role as UserRole, 'create');
+      if (!checkNew.allowed) {
+        showToast(checkNew.reason || 'Anda tidak berhak membuat pengguna dengan peran ini.', 'error');
+        return;
+      }
+    }
+    const isSuper = userForm.role === 'super' || userForm.role === 'super_admin';
+    const isAnakOwnerRole = userForm.role === 'anak_owner' || userForm.role === 'anak owner';
+    const roleId = (isSuper || userForm.role === 'owner') ? 1 : (userForm.role === 'admin' || isAnakOwnerRole) ? 2 : userForm.role === 'finance' ? 3 : 4;
     const propName = userForm.property_id ? properties.find(p => p.id === userForm.property_id)?.name : null;
     const accessDesc = userForm.property_id
       ? `Akses Terbatas: Properti ${propName || userForm.property_id}`
-      : (userForm.role === 'super' || userForm.role === 'super_admin') ? 'Akses penuh sistem, log audit & database' : userForm.role === 'owner' ? 'Akses pemilik properti & eksekutif' : userForm.role === 'admin' ? 'Akses kontrol panel asrama & inventaris' : userForm.role === 'finance' ? 'Akses ledger keuangan & setoran PBJT' : 'Akses operasional lapangan terbatas';
+      : isSuper 
+      ? 'Akses penuh sistem, log audit & database' 
+      : userForm.role === 'owner' 
+      ? 'Akses pemilik properti & eksekutif' 
+      : isAnakOwnerRole
+      ? 'Akses operasional, hunian & keuangan (Anak Owner)'
+      : userForm.role === 'admin' 
+      ? 'Akses kontrol panel asrama & inventaris' 
+      : userForm.role === 'finance' 
+      ? 'Akses ledger keuangan & setoran PBJT' 
+      : 'Akses operasional lapangan terbatas';
 
-    const payload: Partial<UserSystem> = {
+    const payload: Partial<UserSystem> & { password?: string } = {
       ...(activeUserEdit ? { id: activeUserEdit.id } : {}),
       full_name: userForm.fullName,
       email: userForm.email,
@@ -2581,7 +2690,8 @@ export default function Admin({}: AdminProps) {
       role_id: roleId,
       access: accessDesc,
       active: userForm.active,
-      property_id: userForm.property_id ?? null
+      property_id: userForm.property_id ?? null,
+      ...(userForm.password ? { password: userForm.password } : {})
     };
     setIsSavingUser(true);
     try {
@@ -2594,7 +2704,7 @@ export default function Admin({}: AdminProps) {
       }
       await database.saveUser(payload);
       setShowUserModal(false);
-      setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true, property_id: null });
+      setUserForm({ fullName: '', email: '', role: 'staff', access: 'Staff akses terbatas', active: true, property_id: null, password: '' });
       setActiveUserEdit(null);
       startModuleRefresh('users');
       await refetchUsers();
@@ -2609,6 +2719,14 @@ export default function Admin({}: AdminProps) {
   };
 
   const handleDeleteUser = async (id: string) => {
+    const target = users.find(u => u.id === id);
+    if (target) {
+      const checkDel = canManageRole(currentActorRole, target.role as UserRole, 'delete');
+      if (!checkDel.allowed) {
+        showToast(checkDel.reason || 'Anda tidak berhak mencabut hak akses pengguna ini.', 'error');
+        return;
+      }
+    }
     customConfirm(
       'Cabut Hak Akses',
       'Apakah Anda yakin ingin mencabut seluruh hak akses fungsionaris ini?',
@@ -2864,10 +2982,40 @@ export default function Admin({}: AdminProps) {
       </div>
       
       {/* Sidebar layouts controls */}
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isAnakOwner={isAnakOwner} />
 
       {/* Primary tab views switcher */}
       <div className="flex-1 bg-white border border-[#E2E8F0] rounded-[24px] p-6 sm:p-8 shadow-sm space-y-6 min-h-[70vh]">
+        {/* Banner Simulasi Anak Owner untuk Super Admin */}
+        {isSuper && simulatedRole === 'anak_owner' && (
+          <div className="bg-purple-900 text-white rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+            <div className="flex items-center gap-3 text-left">
+              <div className="w-9 h-9 rounded-xl bg-purple-800/80 border border-purple-600 flex items-center justify-center text-purple-200 shrink-0">
+                <UserCheck size={18} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-sm">Mode Perspektif: Panel Anak Owner</h4>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-800 border border-purple-600 text-purple-200 font-mono">Simulasi Super Admin</span>
+                </div>
+                <p className="text-xs text-purple-200/90 mt-0.5">
+                  Tampilan disesuaikan: 5 modul teknis disembunyikan. Fokus pada operasional kamar, reservasi, tarif, dan pembukuan keuangan.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                localStorage.removeItem('samara_simulated_role');
+                setSimulatedRole(null);
+                window.dispatchEvent(new CustomEvent('samara-role-simulate', { detail: { role: null } }));
+              }}
+              className="px-3.5 py-2 rounded-xl bg-white text-purple-950 hover:bg-purple-50 font-bold text-xs shadow transition-all cursor-pointer shrink-0 flex items-center gap-1.5"
+            >
+              <Shield size={13} className="text-emerald-700" />
+              Kembali ke Super Admin
+            </button>
+          </div>
+        )}
         
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
@@ -5767,30 +5915,24 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                            </tr>
                          </thead>
                          <tbody className="divide-y divide-gray-100 font-medium text-slate-600">
-                           {/* Seeded and dynamic logs representing audit trail */}
-                           <tr className="hover:bg-slate-50/50 transition-colors">
-                             <td className="py-2.5 px-3 font-mono text-[10px] text-gray-400">{new Date().toISOString().slice(0, 10)} 15:42</td>
-                             <td className="py-2.5 px-3 font-bold text-slate-800">Admin Utama</td>
-                             <td className="py-2.5 px-3 uppercase font-mono text-[9px] text-indigo-700 font-extrabold">DEPRECIATION</td>
-                             <td className="py-2.5 px-3 text-slate-500 font-sans">Posting otomatisasi depresiasi bulanan tetap kos</td>
-                             <td className="py-2.5 px-3 font-mono text-gray-400 text-[10px]">182.16.2.221</td>
-                           </tr>
-                           <tr className="hover:bg-slate-50/50 transition-colors">
-                             <td className="py-2.5 px-3 font-mono text-[10px] text-gray-400">{new Date().toISOString().slice(0, 10)} 14:15</td>
-                             <td className="py-2.5 px-3 font-bold text-slate-800">System Webhook</td>
-                             <td className="py-2.5 px-3 uppercase font-mono text-[9px] text-emerald-600 font-extrabold font-sans">AUTO_POSTING</td>
-                             <td className="py-2.5 px-3 text-slate-500 font-sans">Pembayaran booking kamar R201 oleh Yogi Atmaja, post revenue ke akun 4000</td>
-                             <td className="py-2.5 px-3 font-mono text-gray-400 text-[10px]">104.244.42.1</td>
-                           </tr>
                            {(activityLogs || []).slice(0, 100).map((log, index) => (
-                             <tr key={index} className="hover:bg-slate-50/50 transition-colors">
-                               <td className="py-2.5 px-3 font-mono text-[10px] text-gray-400">{new Date().toISOString().slice(0, 10)} {10 + (index % 12)}:{(index * 7) % 60}</td>
+                             <tr key={log.id || index} className="hover:bg-slate-50/50 transition-colors">
+                               <td className="py-2.5 px-3 font-mono text-[10px] text-gray-400">
+                                 {log.created_at ? new Date(log.created_at).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }) : (log.time || '-')}
+                               </td>
                                <td className="py-2.5 px-3 font-bold text-slate-800">{log.admin_name || 'Admin'}</td>
-                               <td className="py-2.5 px-3 uppercase font-mono text-[9px] text-slate-700 font-extrabold font-sans">{log.action}</td>
+                               <td className="py-2.5 px-3 uppercase font-mono text-[9px] text-indigo-700 font-extrabold">{log.action}</td>
                                <td className="py-2.5 px-3 text-slate-500 font-sans">{log.detail}</td>
-                               <td className="py-2.5 px-3 font-mono text-gray-400 text-[10px]">182.16.2.221</td>
+                               <td className="py-2.5 px-3 font-mono text-gray-400 text-[10px]">{log.ip_address || '-'}</td>
                              </tr>
                            ))}
+                           {(!activityLogs || activityLogs.length === 0) && (
+                             <tr>
+                               <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                                 Belum ada catatan aktivitas audit trail.
+                               </td>
+                             </tr>
+                           )}
                          </tbody>
                        </table>
                      </div>
@@ -6275,7 +6417,9 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           </div>
                           <div>
                             <span className="block text-[9px] text-[#64748B] uppercase font-mono">NIK KTP</span>
-                            <strong className="text-slate-800 font-mono">{b.occupant_nik || b.nik || '-'}</strong>
+                            <strong className="text-slate-800 font-mono">
+                              {b.occupant_nik || b.nik ? (canReadPii ? (b.occupant_nik || b.nik) : maskNik(b.occupant_nik || b.nik)) : '-'}
+                            </strong>
                           </div>
                         </div>
 
@@ -6303,7 +6447,9 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                               </div>
                               <div>
                                 <span className="text-emerald-700 block text-[9px] uppercase font-mono">NIK Pasangan</span>
-                                <span className="font-mono font-bold">{b.spouse_nik || '-'}</span>
+                                <span className="font-mono font-bold">
+                                  {b.spouse_nik ? (canReadPii ? b.spouse_nik : maskNik(b.spouse_nik)) : '-'}
+                                </span>
                               </div>
                               <div>
                                 <span className="text-emerald-700 block text-[9px] uppercase font-mono">No. WhatsApp</span>
@@ -6626,7 +6772,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                       <div className="space-y-1 text-[#64748B] text-[11px]">
                         <p> Kamar Alokasi: <strong className="text-[#0D9488] font-bold font-mono">Kamar {t.room_number}</strong></p>
-                        <p> NIK KTP: <span className="font-mono text-[#3A444D] font-bold">{t.nik || '-'}</span></p>
+                        <p> NIK KTP: <span className="font-mono text-[#3A444D] font-bold">{t.nik ? (canReadPii ? t.nik : maskNik(t.nik)) : '-'}</span></p>
                         <p> No. WhatsApp: <span className="font-mono text-[#3A444D]">{t.phone}</span></p>
                         <p> Jangka Pemesanan: <span className="font-mono text-[#3A444D] font-bold">{t.duration_months || 1} Bulan</span></p>
                         <p className="text-[10px] text-[#64748B] mt-1">
@@ -6652,7 +6798,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             )}
                           </div>
                           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-emerald-800">
-                            <span>NIK: <strong className="font-mono">{t.spouse_nik || '-'}</strong></span>
+                            <span>NIK: <strong className="font-mono">{t.spouse_nik ? (canReadPii ? t.spouse_nik : maskNik(t.spouse_nik)) : '-'}</strong></span>
                             <span>WA: <strong className="font-mono">{t.spouse_phone || '-'}</strong></span>
                           </div>
                         </div>
@@ -6921,7 +7067,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
 
-        {activeTab === 'user_roles' && (
+        {!isAnakOwner && activeTab === 'user_roles' && (
           <div className="space-y-4">
             {refreshingModule['users'] && (
               <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">
@@ -6944,7 +7090,8 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     role: 'staff',
                     access: 'Staff akses terbatas',
                     active: true,
-                    property_id: null
+                    property_id: null,
+                    password: ''
                   });
                   setShowUserModal(true);
                 }}
@@ -6964,13 +7111,15 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <span className={`text-[8px] font-mono font-bold uppercase px-2 py-0.5 rounded-full ${
                         u.role === 'super' || u.role === 'super_admin' || u.role === 'admin' 
                           ? 'bg-amber-500/10 text-[#0D9488] font-bold border border-amber-500/20' 
-                          : u.role === 'owner'
-                            ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
-                            : u.role === 'finance'
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                              : 'bg-[#0D9488]/10 text-[#0D9488]'
+                          : (u.role === 'anak_owner' || u.role === 'anak owner')
+                            ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                            : u.role === 'owner'
+                              ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                              : u.role === 'finance'
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                : 'bg-[#0D9488]/10 text-[#0D9488]'
                       }`}>
-                        {u.role === 'super' || u.role === 'super_admin' ? 'SUPER ADMIN' : u.role === 'owner' ? 'OWNER / PEMILIK' : u.role === 'admin' ? 'SYSTEM ADMIN' : u.role === 'finance' ? 'CHIEF FINANCIAL' : 'FIELD OPERATOR'}
+                        {u.role === 'super' || u.role === 'super_admin' ? 'SUPER ADMIN' : (u.role === 'anak_owner' || u.role === 'anak owner') ? 'ANAK OWNER' : u.role === 'owner' ? 'OWNER / PEMILIK' : u.role === 'admin' ? 'SYSTEM ADMIN' : u.role === 'finance' ? 'CHIEF FINANCIAL' : 'FIELD OPERATOR'}
                       </span>
                     </div>
                     <p className="text-[10px] text-[#64748B]"> Email: <span className="font-mono text-[#3A444D]">{u.email}</span></p>
@@ -6990,71 +7139,91 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0 md:ml-auto w-full md:w-auto mt-2 md:mt-0 flex-wrap">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-slate-400 font-mono font-bold">Role:</span>
-                      <select
-                        value={u.role}
-                        onChange={(e) => handleQuickRoleChange(u, e.target.value as any)}
-                        disabled={processingItems[u.id]}
-                        className="bg-slate-950 text-slate-200 border border-slate-750 text-[10px] font-bold py-1 px-2 rounded-lg cursor-pointer outline-none focus:border-amber-500 disabled:opacity-50"
-                      >
-                        <option value="super">SUPER ADMIN</option>
-                        <option value="admin">SYSTEM ADMIN</option>
-                        <option value="owner">OWNER / PEMILIK</option>
-                        <option value="finance">BENDAHARA (FINANCE)</option>
-                        <option value="staff">SURVEYOR (STAFF)</option>
-                      </select>
-                    </div>
+                    {(() => {
+                      const canUpdate = canManageRole(currentActorRole, u.role as UserRole, 'update').allowed;
+                      const canAssign = canAssignProperty(currentActorRole, u.role as UserRole).allowed;
+                      const canDelete = canManageRole(currentActorRole, u.role as UserRole, 'delete').allowed;
+                      const availableRoles = [
+                        { value: 'super', label: 'SUPER ADMIN' },
+                        { value: 'admin', label: 'SYSTEM ADMIN' },
+                        { value: 'anak_owner', label: 'ANAK OWNER' },
+                        { value: 'owner', label: 'OWNER / PEMILIK' },
+                        { value: 'finance', label: 'BENDAHARA (FINANCE)' },
+                        { value: 'staff', label: 'SURVEYOR (STAFF)' },
+                      ].filter(opt => opt.value === u.role || canManageRole(currentActorRole, opt.value as UserRole, 'create').allowed);
 
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-slate-400 font-mono font-bold">Properti:</span>
-                      <select
-                        value={u.property_id ?? ''}
-                        onChange={(e) => handleQuickPropertyChange(u, e.target.value)}
-                        disabled={processingItems[u.id]}
-                        className="bg-slate-950 text-slate-200 border border-slate-750 text-[10px] font-bold py-1 px-2 rounded-lg cursor-pointer outline-none focus:border-amber-500 disabled:opacity-50 max-w-[130px] truncate"
-                      >
-                        <option value="">Global / Semua</option>
-                        {properties.map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                    </div>
+                      return (
+                        <>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-slate-400 font-mono font-bold">Role:</span>
+                            <select
+                              value={u.role}
+                              onChange={(e) => handleQuickRoleChange(u, e.target.value as any)}
+                              disabled={!canUpdate || processingItems[u.id]}
+                              title={!canUpdate ? 'Anda tidak berhak mengubah jabatan pengguna ini' : undefined}
+                              className="bg-slate-950 text-slate-200 border border-slate-750 text-[10px] font-bold py-1 px-2 rounded-lg cursor-pointer outline-none focus:border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {availableRoles.map(r => (
+                                <option key={r.value} value={r.value}>{r.label}</option>
+                              ))}
+                            </select>
+                          </div>
 
-                    
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveUserEdit(u);
-                        setUserForm({
-                          fullName: u.full_name,
-                          email: u.email,
-                          role: u.role,
-                          access: u.access,
-                          active: u.active,
-                          property_id: u.property_id ?? null
-                        });
-                        setShowUserModal(true);
-                      }}
-                      disabled={processingItems[u.id]}
-                      className="p-1.5 px-3 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Edit2 size={11} />
-                      Ubah Izin
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteUser(u.id)}
-                      disabled={processingItems[u.id]}
-                      className="p-1.5 px-3 bg-red-950/25 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {processingItems[u.id] ? (
-                        <RotateCw size={11} className="animate-spin text-red-400" />
-                      ) : (
-                        <Trash2 size={11} />
-                      )}
-                      Cabut Akses
-                    </button>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-slate-400 font-mono font-bold">Properti:</span>
+                            <select
+                              value={u.property_id ?? ''}
+                              onChange={(e) => handleQuickPropertyChange(u, e.target.value)}
+                              disabled={!canAssign || processingItems[u.id]}
+                              title={!canAssign ? 'Anda tidak berhak mengatur properti untuk peran ini' : undefined}
+                              className="bg-slate-950 text-slate-200 border border-slate-750 text-[10px] font-bold py-1 px-2 rounded-lg cursor-pointer outline-none focus:border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed max-w-[130px] truncate"
+                            >
+                              <option value="">Global / Semua</option>
+                              {properties.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveUserEdit(u);
+                              setUserForm({
+                                fullName: u.full_name,
+                                email: u.email,
+                                role: u.role,
+                                access: u.access,
+                                active: u.active,
+                                property_id: u.property_id ?? null,
+                                password: ''
+                              });
+                              setShowUserModal(true);
+                            }}
+                            disabled={!canUpdate || processingItems[u.id]}
+                            title={!canUpdate ? 'Anda tidak berhak menyunting pengguna ini' : undefined}
+                            className="p-1.5 px-3 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-750 text-slate-200 rounded-lg border border-slate-750 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            <Edit2 size={11} />
+                            Ubah Izin
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUser(u.id)}
+                            disabled={!canDelete || processingItems[u.id]}
+                            title={!canDelete ? 'Anda tidak berhak mencabut akses pengguna ini' : undefined}
+                            className="p-1.5 px-3 bg-red-950/25 hover:bg-red-500 text-red-400 hover:text-white rounded-lg border border-red-500/20 transition text-[10px] cursor-pointer flex items-center gap-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {processingItems[u.id] ? (
+                              <RotateCw size={11} className="animate-spin text-red-400" />
+                            ) : (
+                              <Trash2 size={11} />
+                            )}
+                            Cabut Akses
+                          </button>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               ))}
@@ -7062,7 +7231,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
 
-        {activeTab === 'activity_logs' && (
+        {!isAnakOwner && activeTab === 'activity_logs' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
@@ -7107,7 +7276,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
 
-        {activeTab === 'midtrans_logs' && (
+        {!isAnakOwner && activeTab === 'midtrans_logs' && (
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-800 pb-3 gap-2">
               <div>
@@ -7353,7 +7522,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           />
         )}
 
-        {activeTab === 'email_integration' && (
+        {!isAnakOwner && activeTab === 'email_integration' && (
           <div className="space-y-6">
             <div className="border-b border-slate-800 pb-3">
               <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
@@ -7604,7 +7773,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
 
-        {activeTab === 'observability' && (() => {
+        {!isAnakOwner && activeTab === 'observability' && (() => {
           const rtHealth = observability.getRealtimeHealth();
           const apiStats = observability.getApiStats();
           const apiMetrics = observability.getApiMetrics();
@@ -8863,6 +9032,19 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </select>
           </div>
 
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">
+              {activeUserEdit ? 'Ganti Password Akun (Opsional)' : 'Password Akun Petugas (Default: admin123)'}
+            </label>
+            <input 
+              type="password"
+              value={userForm.password}
+              onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+              placeholder={activeUserEdit ? 'Kosongkan jika tidak ingin diubah' : 'Kosongkan jika ingin default: admin123'}
+              className="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl text-slate-200 outline-none text-xs font-mono"
+            />
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Jabatan / Role</label>
@@ -8871,11 +9053,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 onChange={(e) => setUserForm({ ...userForm, role: e.target.value as any })}
                 className="w-full bg-slate-950 border border-slate-805 p-2.5 rounded-xl text-slate-200 cursor-pointer font-bold text-xs"
               >
-                <option value="super">SUPER ADMIN</option>
-                <option value="admin">SISTEM ADMIN</option>
-                <option value="owner">OWNER / PEMILIK</option>
-                <option value="finance">BENDAHARA (FINANCE)</option>
-                <option value="staff">SURVEYOR (STAFF)</option>
+                {[
+                  { value: 'super', label: 'SUPER ADMIN' },
+                  { value: 'admin', label: 'SISTEM ADMIN' },
+                  { value: 'anak_owner', label: 'ANAK OWNER' },
+                  { value: 'owner', label: 'OWNER / PEMILIK' },
+                  { value: 'finance', label: 'BENDAHARA (FINANCE)' },
+                  { value: 'staff', label: 'SURVEYOR (STAFF)' },
+                ]
+                  .filter(opt => (activeUserEdit && opt.value === activeUserEdit.role) || canManageRole(currentActorRole, opt.value as UserRole, 'create').allowed)
+                  .map(r => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
               </select>
             </div>
 
@@ -9798,7 +9987,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       No. Identitas ({t.identity_type || 'KTP'})
                     </span>
                     <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
-                      {t.identity_number || t.nik || 'Belum diisi'}
+                      {(t.identity_number || t.nik) ? (canReadPii ? (t.identity_number || t.nik) : maskNik(t.identity_number || t.nik)) : 'Belum diisi'}
                     </p>
                   </div>
                   <div className="space-y-0.5">
@@ -10009,7 +10198,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <div className="space-y-0.5">
                         <span className="text-[10px] text-slate-500 font-mono uppercase">NIK KTP Pasangan</span>
                         <p className="font-mono font-bold text-slate-800 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80">
-                          {t.spouse_nik || '-'}
+                          {t.spouse_nik ? (canReadPii ? t.spouse_nik : maskNik(t.spouse_nik)) : '-'}
                         </p>
                       </div>
                       <div className="space-y-0.5">

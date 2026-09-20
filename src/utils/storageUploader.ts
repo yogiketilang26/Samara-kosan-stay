@@ -207,9 +207,17 @@ export async function uploadToSupabaseStorage(
 ): Promise<StorageUploadResult> {
   const maxFileSizeMB = options.maxFileSizeMB || 20;
 
-  // 1. Validation for File size
-  if (input instanceof File && input.size > maxFileSizeMB * 1024 * 1024) {
-    throw new Error(`Ukuran file melebihi batas maksimal ${maxFileSizeMB}MB.`);
+  // 1. Validation for File size & MIME type
+  const ALLOWED_MIME_TYPES = [
+    'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/avif', 'application/pdf'
+  ];
+  if (input instanceof File) {
+    if (input.size > maxFileSizeMB * 1024 * 1024) {
+      throw new Error(`Ukuran file melebihi batas maksimal ${maxFileSizeMB}MB.`);
+    }
+    if (input.type && !ALLOWED_MIME_TYPES.includes(input.type)) {
+      throw new Error(`Format berkas "${input.type}" tidak didukung. Hanya gambar (JPEG, PNG, WebP) dan dokumen PDF yang diperbolehkan.`);
+    }
   }
 
   // 2. Compress and optimize image to HD quality
@@ -252,11 +260,14 @@ export async function uploadToSupabaseStorage(
     }
   }
 
-  // Generate unique storage path
+  // Generate unique storage path with anti-path traversal sanitization
   const ext = mimeType === 'image/png' ? 'png' : mimeType === 'application/pdf' ? 'pdf' : 'webp';
   const timestamp = Date.now();
   const randomHash = Math.random().toString(36).substring(2, 9);
-  const cleanPrefix = pathPrefix ? pathPrefix.replace(/^\/+|\/+$/g, '') + '/' : '';
+  const sanitizedPrefix = pathPrefix
+    ? pathPrefix.replace(/\.\./g, '').replace(/^\/+|\/+$/g, '').replace(/[^a-zA-Z0-9_\-\/]/g, '_')
+    : '';
+  const cleanPrefix = sanitizedPrefix ? sanitizedPrefix + '/' : '';
   const fileName = `${cleanPrefix}${timestamp}_${randomHash}.${ext}`;
 
   if (!isSupabaseConfigured) {
@@ -291,24 +302,13 @@ export async function uploadToSupabaseStorage(
 
       if (error) {
         lastError = error;
-        const isBucketNotFound = error.message?.toLowerCase().includes('bucket not found') || (error as any).statusCode === '404' || (error as any).status === 404;
+        const errMsg = (error.message || '').toLowerCase();
+        const isBucketNotFound = errMsg.includes('bucket not found') || (error as any).statusCode === '404' || (error as any).status === 404;
+        const isUnauthorized = errMsg.includes('row-level security') || errMsg.includes('policy') || (error as any).statusCode === '403' || (error as any).status === 403;
         
-        if (isBucketNotFound) {
-          // Attempt to dynamically create bucket if missing
-          let bucketCreated = false;
-          try {
-            const { error: createErr } = await supabase.storage.createBucket(bucketName, { public: true });
-            if (!createErr) {
-              bucketCreated = true;
-            }
-          } catch (createErr) {
-            bucketCreated = false;
-          }
-
-          if (!bucketCreated) {
-            console.info(`[StorageUploader] Supabase storage bucket '${bucketName}' not available. Using Server storage API fallback.`);
-            break; // Skip further retries and immediately proceed to server fallback
-          }
+        if (isBucketNotFound || isUnauthorized) {
+          console.info(`[StorageUploader] Supabase storage bucket '${bucketName}' unavailable (${isUnauthorized ? 'RLS Policy' : 'Not Found'}). Using Server API fallback.`);
+          break; // Skip further retries and immediately proceed to server fallback
         } else {
           console.warn(`[StorageUploader] Upload attempt ${attempts} failed:`, error.message);
         }

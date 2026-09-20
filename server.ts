@@ -11,6 +11,8 @@ import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import { renderAsync } from '@resvg/resvg-js';
+import { can, canManageRole, canAccessProperty, maskNik, canAssignProperty } from './src/lib/permissions';
+import type { AppResource, ActionType } from './src/lib/permissions';
 
 declare global {
   namespace Express {
@@ -528,6 +530,10 @@ async function startServer() {
   app.use(express.json());
 
   // Boot-time configuration & service role key validation
+  if (process.env.ALLOW_DEV_AUTH_BYPASS === 'true' && process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL SECURITY ERROR: ALLOW_DEV_AUTH_BYPASS cannot be set to true when NODE_ENV is production!');
+  }
+
   try {
     getServiceRoleKeyOrThrow();
     console.log('[SERVER BOOT] Supabase Service Role Key verified successfully.');
@@ -559,13 +565,36 @@ async function startServer() {
   // RBAC WHITELIST SECURITY HELPERS (EXACT MATCH ONLY)
   // =========================================================================
   function getSuperAdminEmails(): string[] {
-    const envEmails = process.env.SUPER_ADMIN_EMAILS || 'admin@samarastay.co.id,yogiketilang33@gmail.com';
-    return envEmails.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const envEmails = process.env.SUPER_ADMIN_EMAILS;
+    if (envEmails) {
+      return envEmails.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    }
+    if (process.env.STRICT_WHITELIST_ENV === 'true') {
+      return [];
+    }
+    return ['admin@samarastay.co.id', 'superadmin@samarastay.co.id'];
   }
 
   function getOwnerEmails(): string[] {
-    const envEmails = process.env.OWNER_EMAILS || 'owner@samarastay.co.id';
-    return envEmails.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const envEmails = process.env.OWNER_EMAILS;
+    if (envEmails) {
+      return envEmails.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    }
+    if (process.env.STRICT_WHITELIST_ENV === 'true') {
+      return [];
+    }
+    return ['owner@samarastay.co.id'];
+  }
+
+  function getAnakOwnerEmails(): string[] {
+    const envEmails = process.env.ANAK_OWNER_EMAILS;
+    if (envEmails) {
+      return envEmails.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    }
+    if (process.env.STRICT_WHITELIST_ENV === 'true') {
+      return [];
+    }
+    return ['anakowner@samarastay.co.id'];
   }
 
   function isSuperAdminEmail(email: string): boolean {
@@ -578,41 +607,145 @@ async function startServer() {
     return getOwnerEmails().includes(clean);
   }
 
+  function isAnakOwnerEmail(email: string): boolean {
+    const clean = (email || '').trim().toLowerCase();
+    return getAnakOwnerEmails().includes(clean);
+  }
+
+  function isEmailConfirmationEnforced(): boolean {
+    const envVal = process.env.REQUIRE_EMAIL_CONFIRMED || process.env.REQUIRE_EMAIL_CONFIRMATION;
+    if (envVal !== undefined && envVal.trim() !== '') {
+      return envVal.trim().toLowerCase() === 'true';
+    }
+    // Default to true in production, false in development
+    return process.env.NODE_ENV === 'production';
+  }
+
+  function resolveEffectiveRole(userData: any, email: string, emailConfirmed: boolean = true): string {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    
+    // Whitelist roles are only granted if email is confirmed
+    if (emailConfirmed) {
+      if (isSuperAdminEmail(cleanEmail)) return 'super';
+      if (isOwnerEmail(cleanEmail)) return 'owner';
+      if (isAnakOwnerEmail(cleanEmail)) return 'anak_owner';
+    }
+
+    const role = (userData?.role || '').trim().toLowerCase();
+    if (role === 'anak_owner' || role === 'anak owner') {
+      return 'anak_owner';
+    }
+
+    // If RBAC_V2 is not active, check if user has access marked with anak owner
+    if (process.env.RBAC_V2_ENABLED !== 'true') {
+      const accessStr = String(userData?.access || '').toLowerCase();
+      if (role === 'admin' && accessStr.includes('anak owner')) {
+        return 'anak_owner';
+      }
+    }
+
+    return userData?.role || 'user';
+  }
+
   function checkPropertyAccess(authProfile: any, targetPropertyId: any): { allowed: boolean; reason?: string } {
-    const role = (authProfile?.role || '').toLowerCase();
-    // Super admins, super_admin, and owners have access to all property portfolios
-    if (['super', 'super_admin', 'owner'].includes(role)) {
-      return { allowed: true };
-    }
-
-    const assignedPropertyId = authProfile?.property_id;
-
-    // Un-scoped global admin/finance (where property_id is null/undefined) has broad access
-    if (['admin', 'finance'].includes(role) && (assignedPropertyId === null || assignedPropertyId === undefined)) {
-      return { allowed: true };
-    }
-
-    // Branch staff or property-scoped finance
-    if (assignedPropertyId !== null && assignedPropertyId !== undefined) {
-      if (targetPropertyId === null || targetPropertyId === undefined) {
-        return { allowed: false, reason: 'Staff/Finance cabang wajib menyertakan ID properti yang ditugaskan.' };
+    if (!canAccessProperty(authProfile, targetPropertyId)) {
+      const role = authProfile?.role;
+      if (role === 'staff' && (authProfile?.property_id === null || authProfile?.property_id === undefined)) {
+        return { allowed: false, reason: 'Akun Staff belum ditugaskan ke properti mana pun. Hubungi Super Admin.' };
       }
-      if (String(assignedPropertyId) !== String(targetPropertyId)) {
-        return { allowed: false, reason: `Akses ditolak. Anda hanya berwenang untuk Properti ID ${assignedPropertyId}, bukan Properti ID ${targetPropertyId}.` };
-      }
-      return { allowed: true };
+      return { allowed: false, reason: `Akses ditolak. Peran Anda (${role}) tidak berwenang mengakses Properti ID ${targetPropertyId ?? 'Global'}.` };
     }
-
-    // Staff without assigned property cannot mutate property-scoped financial/operational records
-    if (role === 'staff') {
-      return { allowed: false, reason: 'Akun Staff belum ditugaskan ke properti mana pun. Hubungi Super Admin.' };
-    }
-
     return { allowed: true };
   }
 
-  // Middleware for Admin authentication check
-  async function requireAdminAuth(req: any, res: any, next: any) {
+  function enforcePropertyScope(req: any, res: any, propertyId: number | string | null | undefined): boolean {
+    const authProfile = req.authProfile;
+    if (!authProfile) {
+      res.status(401).json({ success: false, error: 'Akses ditolak. Profil pengguna tidak teridentifikasi.' });
+      return false;
+    }
+    const check = checkPropertyAccess(authProfile, propertyId);
+    if (!check.allowed) {
+      res.status(403).json({ success: false, error: check.reason || 'Akses ditolak ke properti ini.' });
+      return false;
+    }
+    return true;
+  }
+
+  // Find user by email across public.users and auth.admin.listUsers pagination
+  async function findAuthUserByEmail(adminClient: any, email: string): Promise<any | null> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) return null;
+
+    try {
+      const { data: dbUser } = await adminClient
+        .from('users')
+        .select('id, email, full_name, role')
+        .eq('email', cleanEmail)
+        .maybeSingle();
+      if (dbUser?.id) {
+        return { id: dbUser.id, email: dbUser.email, user_metadata: { full_name: dbUser.full_name }, role: dbUser.role };
+      }
+    } catch (e) {}
+
+    try {
+      let page = 1;
+      const perPage = 1000;
+      while (true) {
+        const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
+        if (error || !data?.users || data.users.length === 0) break;
+        const found = data.users.find((u: any) => (u.email || '').trim().toLowerCase() === cleanEmail);
+        if (found) return found;
+        if (data.users.length < perPage) break;
+        page++;
+      }
+    } catch (err) {
+      console.warn('[findAuthUserByEmail] listUsers notice:', err);
+    }
+    return null;
+  }
+
+  // In-memory rate limiting for failed login attempts (per IP and per email)
+  interface FailedLoginRecord {
+    count: number;
+    resetAt: number;
+  }
+  const loginFailuresMap = new Map<string, FailedLoginRecord>();
+  const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+  const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+  function isLoginRateLimited(key: string): boolean {
+    const now = Date.now();
+    const record = loginFailuresMap.get(key);
+    if (!record) return false;
+    if (record.resetAt < now) {
+      loginFailuresMap.delete(key);
+      return false;
+    }
+    return record.count >= MAX_FAILED_LOGIN_ATTEMPTS;
+  }
+
+  function recordLoginFailure(key: string): void {
+    const now = Date.now();
+    if (loginFailuresMap.size > 2000) {
+      for (const [k, v] of loginFailuresMap.entries()) {
+        if (v.resetAt < now) loginFailuresMap.delete(k);
+      }
+    }
+    const record = loginFailuresMap.get(key);
+    if (!record || record.resetAt < now) {
+      loginFailuresMap.set(key, { count: 1, resetAt: now + LOGIN_LOCKOUT_MS });
+    } else {
+      record.count += 1;
+    }
+  }
+
+  function clearLoginFailures(key: string): void {
+    loginFailuresMap.delete(key);
+  }
+
+  // Centralized authentication context resolver
+  async function resolveAuthContext(req: any, res: any): Promise<{ user: any; profile: any } | null> {
     try {
       let accessToken = getCookie(req, 'sb-access-token');
       if (!accessToken && req.headers.authorization) {
@@ -640,19 +773,20 @@ async function startServer() {
       }
 
       if (!accessToken) {
-        // In container development mode, allow dev admin session if no token is passed
-        if (process.env.NODE_ENV !== 'production') {
-          req.authUser = { id: 'dev-admin-id', email: 'admin@samarastay.co.id' };
-          req.authProfile = { id: 'dev-admin-id', email: 'admin@samarastay.co.id', role: 'super', full_name: 'Developer Admin' };
-          return next();
+        const remoteIp = req.socket?.remoteAddress || req.ip || '';
+        const isLoopback = remoteIp === '127.0.0.1' || remoteIp === '::1' || remoteIp === '::ffff:127.0.0.1';
+        if (process.env.ALLOW_DEV_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production' && isLoopback) {
+          console.warn('[SECURITY WARNING] ALLOW_DEV_AUTH_BYPASS active for localhost development mode.');
+          const devUser = { id: 'dev-admin-id', email: 'admin@samarastay.co.id' };
+          const devProfile = { id: 'dev-admin-id', email: 'admin@samarastay.co.id', role: 'super', full_name: 'Developer Admin', property_id: null };
+          return { user: devUser, profile: devProfile };
         }
-        return res.status(401).json({ success: false, error: 'Akses ditolak. Token autentikasi tidak ditemukan.' });
+        return null;
       }
 
       const client = getSupabaseServerClient(accessToken);
       let { data: { user }, error } = await client.auth.getUser(accessToken);
 
-      // If token expired, try refreshing
       if (error || !user) {
         const refreshToken = getCookie(req, 'sb-refresh-token') || req.headers['x-refresh-token'];
         if (refreshToken) {
@@ -663,43 +797,155 @@ async function startServer() {
             accessToken = refData.session.access_token;
             setAuthCookies(res, refData.session.access_token, refData.session.refresh_token, refData.session.expires_in);
           } else {
-            return res.status(401).json({ success: false, error: 'Sesi tidak valid atau telah kadaluarsa.' });
+            return null;
           }
         } else {
-          return res.status(401).json({ success: false, error: 'Sesi tidak valid atau telah kadaluarsa.' });
+          return null;
         }
       }
 
-      let profileRole: string | null = null;
-      try {
-        const { data: profile } = await client.from('profiles').select('role').eq('id', user.id).maybeSingle();
-        if (profile?.role) {
-          profileRole = profile.role;
-        }
-      } catch (pErr) {
-        console.warn('[requireAdminAuth] Non-blocking profiles table check notice:', pErr);
-      }
-
+      const isEmailConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at || !isEmailConfirmationEnforced());
       const userData = await getOrMigrateUserProfile(client, user);
-      const isSuper = isSuperAdminEmail(user.email || '');
-      const isOwner = isOwnerEmail(user.email || '');
-      const effectiveRole = profileRole || userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
-      const isAuthorized = ['admin', 'super', 'super_admin', 'finance', 'staff', 'owner'].includes(effectiveRole);
+      const effectiveRole = resolveEffectiveRole(userData, user.email || '', isEmailConfirmed);
+
+      const profile = {
+        ...(userData || {}),
+        role: effectiveRole,
+        property_id: userData?.property_id !== undefined ? userData.property_id : null
+      };
+
+      return { user, profile };
+    } catch (err: any) {
+      console.warn('[resolveAuthContext] Exception:', err?.message || err);
+      return null;
+    }
+  }
+
+  // Middleware for Admin authentication check (Strict)
+  async function requireAdminAuth(req: any, res: any, next: any) {
+    try {
+      const auth = await resolveAuthContext(req, res);
+      if (!auth) {
+        return res.status(401).json({ success: false, error: 'Akses ditolak. Token autentikasi tidak ditemukan atau tidak valid.' });
+      }
+
+      const effectiveRole = String(auth.profile?.role || '').trim().toLowerCase();
+      const isAuthorized = ['admin', 'super', 'super_admin', 'finance', 'staff', 'owner', 'anak_owner'].includes(effectiveRole);
 
       if (!isAuthorized) {
         return res.status(403).json({ success: false, error: 'Akses ditolak. Peran Anda tidak memiliki izin admin.' });
       }
 
-      req.authUser = user;
-      req.authProfile = { 
-        ...(userData || {}), 
-        role: effectiveRole,
-        property_id: userData?.property_id !== undefined ? userData.property_id : null
-      };
+      // Staff without assigned property cannot access admin endpoints
+      if (effectiveRole === 'staff' && (auth.profile.property_id === null || auth.profile.property_id === undefined)) {
+        return res.status(403).json({ success: false, error: 'Akun Staff belum ditugaskan ke properti. Hubungi Super Admin.' });
+      }
+
+      req.authUser = auth.user;
+      req.authProfile = auth.profile;
       next();
     } catch (err: any) {
       return res.status(500).json({ success: false, error: 'Terjadi kesalahan pada verifikasi autentikasi.' });
     }
+  }
+
+  // Middleware for Optional Admin authentication (Non-blocking)
+  async function optionalAdminAuth(req: any, res: any, next: any) {
+    try {
+      const auth = await resolveAuthContext(req, res);
+      if (auth) {
+        const effectiveRole = String(auth.profile?.role || '').trim().toLowerCase();
+        if (['admin', 'super', 'super_admin', 'finance', 'staff', 'owner', 'anak_owner'].includes(effectiveRole)) {
+          if (!(effectiveRole === 'staff' && (auth.profile.property_id === null || auth.profile.property_id === undefined))) {
+            req.authUser = auth.user;
+            req.authProfile = auth.profile;
+          }
+        }
+      }
+      next();
+    } catch (err: any) {
+      next();
+    }
+  }
+
+  // Middleware factory enforcing granular RBAC via src/lib/permissions.ts
+  function requirePermission(resource: AppResource, action: ActionType = 'read') {
+    return (req: any, res: any, next: any) => {
+      const authProfile = req.authProfile;
+      const role = authProfile?.role;
+      if (!role) {
+        return res.status(401).json({ success: false, error: 'Akses ditolak. Profil pengguna tidak teridentifikasi.' });
+      }
+
+      if (!can(role, resource, action)) {
+        return res.status(403).json({
+          success: false,
+          error: `Akses ditolak. Peran "${role}" tidak memiliki izin "${action}" pada modul "${resource}".`
+        });
+      }
+
+      // Check property scoping using canAccessProperty
+      const targetPropId = req.body?.property_id || req.body?.propertyId || req.query?.property_id || req.query?.propertyId || req.params?.property_id || req.params?.propertyId;
+      if (targetPropId !== undefined && targetPropId !== null && targetPropId !== '') {
+        if (!canAccessProperty(authProfile, targetPropId)) {
+          return res.status(403).json({
+            success: false,
+            error: `Akses ditolak. Peran Anda (${role}) tidak berwenang mengakses Properti ID ${targetPropId}.`
+          });
+        }
+      }
+
+      next();
+    };
+  }
+
+  function sanitizePiiResponse(arg1: any, arg2: any, customFields?: string[]): any {
+    let data: any;
+    let role = '';
+
+    // Handle both (data, role) and (role, data, [fields]) calls
+    if (typeof arg1 === 'string') {
+      role = arg1;
+      data = arg2;
+    } else if (typeof arg2 === 'string') {
+      role = arg2;
+      data = arg1;
+    } else {
+      data = arg1;
+      role = (arg2 && typeof arg2 === 'object' && arg2.role) ? arg2.role : '';
+    }
+
+    if (!data) return data;
+    if (role && can(role, 'pii_docs', 'read')) {
+      return data;
+    }
+    if (Array.isArray(data)) {
+      return data.map(item => sanitizePiiResponse(item, role, customFields));
+    }
+    if (typeof data === 'object') {
+      const copy = { ...data };
+      if ('nik' in copy && copy.nik) copy.nik = maskNik(copy.nik);
+      if ('nik_pasangan' in copy && copy.nik_pasangan) copy.nik_pasangan = maskNik(copy.nik_pasangan);
+      if ('spouse_nik' in copy && copy.spouse_nik) copy.spouse_nik = maskNik(copy.spouse_nik);
+      if ('identity_number' in copy && copy.identity_number) copy.identity_number = maskNik(copy.identity_number);
+      if ('ktp_url' in copy) copy.ktp_url = null;
+      if ('marriage_book_url' in copy) copy.marriage_book_url = null;
+      if ('marriage_certificate_url' in copy) copy.marriage_certificate_url = null;
+      if ('family_card_url' in copy) copy.family_card_url = null;
+      if (customFields && Array.isArray(customFields)) {
+        for (const field of customFields) {
+          if (field in copy) {
+            if (field.includes('nik') || field.includes('identity')) {
+              copy[field] = maskNik(copy[field]);
+            } else {
+              copy[field] = null;
+            }
+          }
+        }
+      }
+      return copy;
+    }
+    return data;
   }
 
   // =========================================================================
@@ -730,7 +976,7 @@ async function startServer() {
   }
 
   // Midtrans Logs Retrieval API
-  app.get('/api/midtrans/logs', requireAdminAuth, (req, res) => {
+  app.get('/api/midtrans/logs', requireAdminAuth, requirePermission('midtrans_logs', 'read'), (req, res) => {
     return res.json({ logs: midtransLogs });
   });
 
@@ -743,24 +989,48 @@ async function startServer() {
     });
   });
 
-  // Client-Side Logs Submission API
+  // Client-Side Logs Submission API (Sanitized & Rate-Limited)
   app.post('/api/midtrans/logs', apiRateLimiter(60000, 60), express.json(), (req, res) => {
-    const { orderId, customerName, customerEmail, amount, type, status, message, details } = req.body;
+    const { orderId, customerName, customerEmail, amount, type, status, message, details } = req.body || {};
+
+    if (!orderId || typeof orderId !== 'string' || !/^[A-Za-z0-9_-]{3,80}$/.test(orderId)) {
+      return res.status(400).json({ status: 'ERROR', message: 'Format orderId tidak valid.' });
+    }
+
+    const cleanCustomerName = customerName ? String(customerName).slice(0, 100) : undefined;
+    const cleanCustomerEmail = customerEmail ? String(customerEmail).slice(0, 100) : undefined;
+    const cleanMessage = message ? String(message).slice(0, 255) : 'Client event recorded';
+    const cleanType = type ? String(type).slice(0, 50) : 'client_event';
+    const cleanStatus = status ? String(status).slice(0, 50) : 'info';
+
+    let safeDetails = details;
+    if (details !== undefined) {
+      try {
+        const str = typeof details === 'string' ? details : JSON.stringify(details);
+        safeDetails = str.length > 2000 ? JSON.parse(str.slice(0, 2000) + '..."') : details;
+      } catch {
+        safeDetails = String(details).slice(0, 1000);
+      }
+    }
+
+    const validTypes = ['error', 'charge', 'webhook', 'client_event', 'simulation'] as const;
+    const resolvedType = validTypes.includes(cleanType as any) ? (cleanType as typeof validTypes[number]) : 'client_event';
+
     addMidtransLog({
-      orderId: orderId || 'unknown',
-      customerName,
-      customerEmail,
-      amount: amount ? Number(amount) : undefined,
-      type: type || 'client_event',
-      status: status || 'info',
-      message: message || 'Client event recorded',
-      details
+      orderId,
+      customerName: cleanCustomerName,
+      customerEmail: cleanCustomerEmail,
+      amount: amount && !isNaN(Number(amount)) ? Number(amount) : undefined,
+      type: resolvedType,
+      status: cleanStatus,
+      message: cleanMessage,
+      details: safeDetails
     });
     return res.json({ status: 'OK' });
   });
 
   // Clear Midtrans Logs
-  app.post('/api/midtrans/logs/clear', requireAdminAuth, (req, res) => {
+  app.post('/api/midtrans/logs/clear', requireAdminAuth, requirePermission('midtrans_logs', 'delete'), (req, res) => {
     midtransLogs.length = 0;
     return res.json({ status: 'OK' });
   });
@@ -1070,7 +1340,7 @@ async function startServer() {
   }
 
   // Admin API: Contract Extension Settlement (Secured via requireAdminAuth + service_role)
-  app.post('/api/admin/contract-extension/settle', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/contract-extension/settle', requireAdminAuth, requirePermission('bookings', 'approve'), express.json(), async (req, res) => {
     try {
       const {
         tenantId,
@@ -1134,7 +1404,7 @@ async function startServer() {
   });
 
   // Admin API: Financial Transaction Post (Secured via requireAdminAuth)
-  app.post('/api/admin/financial-transaction/post', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/financial-transaction/post', requireAdminAuth, requirePermission('journals', 'create'), express.json(), async (req, res) => {
     try {
       const {
         category,
@@ -1247,18 +1517,10 @@ async function startServer() {
     }
   });
 
-  // Admin API: Assign property to staff/finance user (Restricted to Super Admin & Owner)
-  app.patch('/api/admin/users/:id/assign-property', requireAdminAuth, express.json(), async (req, res) => {
+  // Admin API: Assign property to staff/finance user (Restricted by Role Hierarchy)
+  app.patch('/api/admin/users/:id/assign-property', requireAdminAuth, requirePermission('users', 'update'), express.json(), async (req, res) => {
     try {
       const callerRole = req.authProfile?.role;
-      const isPrivileged = ['super', 'super_admin', 'owner'].includes(callerRole);
-      if (!isPrivileged) {
-        return res.status(403).json({ 
-          success: false, 
-          error: 'Hanya Super Admin atau Owner yang memiliki izin untuk menugaskan properti ke pengguna.' 
-        });
-      }
-
       const targetUserId = req.params.id;
       if (!targetUserId) {
         return res.status(400).json({ success: false, error: 'User ID target wajib disertakan.' });
@@ -1287,6 +1549,23 @@ async function startServer() {
       }
       if (!targetUser) {
         return res.status(404).json({ success: false, error: 'Pengguna target tidak ditemukan.' });
+      }
+
+      // Hierarchy validation using permissions helper
+      const chkAssign = canAssignProperty(callerRole, targetUser.role);
+      if (!chkAssign.allowed) {
+        return res.status(403).json({
+          success: false,
+          error: chkAssign.reason || `Akses ditolak. Peran "${callerRole}" tidak memiliki hak mengelola penugasan peran "${targetUser.role}".`
+        });
+      }
+
+      // Prohibit assigning property to super or owner unless caller is super admin
+      if (['super', 'super_admin'].includes(targetUser.role) && !['super', 'super_admin'].includes(callerRole)) {
+        return res.status(403).json({ success: false, error: 'Tidak dapat mengubah penugasan properti Super Admin.' });
+      }
+      if (targetUser.role === 'owner' && !['super', 'super_admin'].includes(callerRole)) {
+        return res.status(403).json({ success: false, error: 'Tidak dapat mengubah penugasan properti Owner.' });
       }
 
       // 2. If assigning to a specific property, verify property exists
@@ -1320,7 +1599,7 @@ async function startServer() {
           access: updatedAccess
         })
         .eq('id', targetUserId)
-        .select('*')
+        .select('id, email, full_name, role, role_id, access, active, property_id, created_at')
         .single();
 
       if (updateErr) {
@@ -1352,8 +1631,380 @@ async function startServer() {
     }
   });
 
+  // Admin API: Get list of users / fungsionaris (Filtered by Role Visibility)
+  app.get('/api/admin/users', requireAdminAuth, requirePermission('users', 'read'), async (req, res) => {
+    try {
+      const callerRole = (req.authProfile?.role || '').toLowerCase();
+      const serviceKey = getServiceRoleKeyOrThrow();
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const adminClient = createClient(supabaseUrl, serviceKey, {
+        auth: { autoRefreshToken: false, persistSession: false }
+      });
+
+      let query = adminClient
+        .from('users')
+        .select('id, email, full_name, role, role_id, access, active, property_id, created_at')
+        .order('id', { ascending: false });
+
+      // Owner sees all EXCEPT super and super_admin
+      if (callerRole === 'owner') {
+        query = query.not('role', 'in', '("super","super_admin")');
+      }
+      // Anak Owner can ONLY see staff, admin, and user
+      else if (callerRole === 'anak_owner') {
+        query = query.in('role', ['staff', 'admin', 'user']);
+      }
+      // Staff / other non-supers cannot see higher roles
+      else if (!['super', 'super_admin'].includes(callerRole)) {
+        query = query.in('role', ['staff', 'user']);
+      }
+
+      const { data: users, error } = await query;
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.status(200).json({ success: true, users: users || [] });
+    } catch (err: any) {
+      console.error('[Admin API] get users failed:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Internal server error.' });
+    }
+  });
+
+  // Admin API: Create or update user fungsionaris (Super Admin / Owner / Anak Owner / Admin)
+  app.post('/api/admin/users/save', requireAdminAuth, requirePermission('users', 'create'), express.json(), async (req, res) => {
+    try {
+      const callerRole = req.authProfile?.role;
+      const { id, full_name, email, role, access, active, property_id, password } = req.body;
+      if (!email || !email.trim()) {
+        return res.status(400).json({ success: false, error: 'Email resmi wajib diisi.' });
+      }
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanFullName = (full_name || cleanEmail.split('@')[0]).trim();
+      const cleanRole = (role || 'staff').trim().toLowerCase();
+      
+      // Derive role_id strictly from role (ignore client provided role_id)
+      const cleanRoleId = ['super', 'super_admin', 'owner'].includes(cleanRole) ? 1 
+        : (['admin', 'anak_owner'].includes(cleanRole) ? 2 
+        : (cleanRole === 'finance' ? 3 : 4));
+      
+      const targetPropertyId = (property_id === null || property_id === undefined || property_id === '' || property_id === 0) ? null : Number(property_id);
+      const cleanActive = active !== undefined ? Boolean(active) : true;
+
+      const serviceKey = getServiceRoleKeyOrThrow();
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const adminClient = createClient(supabaseUrl, serviceKey, {
+        auth: { autoRefreshToken: false, persistSession: false }
+      });
+
+      // Validate targetPropertyId against properties table if specified
+      if (targetPropertyId !== null) {
+        const { data: propCheck } = await adminClient
+          .from('properties')
+          .select('id')
+          .eq('id', targetPropertyId)
+          .maybeSingle();
+        if (!propCheck) {
+          return res.status(400).json({ success: false, error: `Properti dengan ID ${targetPropertyId} tidak ditemukan.` });
+        }
+      }
+
+      // Hierarchy validation: caller can only manage roles lower or equal per RBAC matrix
+      const chkRole = canManageRole(callerRole, cleanRole);
+      if (!chkRole.allowed) {
+        return res.status(403).json({
+          success: false,
+          error: chkRole.reason || `Akses ditolak. Peran "${callerRole}" tidak memiliki hak untuk membuat atau menetapkan peran "${cleanRole}".`
+        });
+      }
+
+      let userId = id;
+      let previousRole: string | null = null;
+
+      // If updating an existing user, check target user's current role hierarchy
+      if (userId) {
+        const { data: existingTargetUser } = await adminClient
+          .from('users')
+          .select('id, role')
+          .eq('id', userId)
+          .maybeSingle();
+
+        if (existingTargetUser) {
+          previousRole = existingTargetUser.role;
+          const chkExisting = canManageRole(callerRole, existingTargetUser.role);
+          if (!chkExisting.allowed) {
+            return res.status(403).json({
+              success: false,
+              error: chkExisting.reason || `Akses ditolak. Peran "${callerRole}" tidak memiliki hak untuk mengubah akun pengguna dengan peran "${existingTargetUser.role}".`
+            });
+          }
+
+          // Prevent self-role modification
+          if (req.authProfile?.id === userId && cleanRole !== (existingTargetUser.role || '').toLowerCase()) {
+            return res.status(400).json({
+              success: false,
+              error: 'Anda tidak dapat mengubah peran Anda sendiri.'
+            });
+          }
+
+          // Protect the last super admin from demotion
+          if (['super', 'super_admin'].includes((existingTargetUser.role || '').toLowerCase()) && !['super', 'super_admin'].includes(cleanRole)) {
+            const { count } = await adminClient
+              .from('users')
+              .select('id', { count: 'exact', head: true })
+              .in('role', ['super', 'super_admin'])
+              .eq('active', true);
+            if ((count || 0) <= 1) {
+              return res.status(400).json({
+                success: false,
+                error: 'Tidak dapat menurunkan wewenang akun Super Admin terakhir di sistem.'
+              });
+            }
+          }
+
+          // Protect the last owner from demotion
+          if ((existingTargetUser.role || '').toLowerCase() === 'owner' && cleanRole !== 'owner') {
+            const { count } = await adminClient
+              .from('users')
+              .select('id', { count: 'exact', head: true })
+              .eq('role', 'owner')
+              .eq('active', true);
+            if ((count || 0) <= 1) {
+              return res.status(400).json({
+                success: false,
+                error: 'Tidak dapat menurunkan wewenang akun Owner terakhir di sistem.'
+              });
+            }
+          }
+        }
+      }
+
+      // 1. If no ID provided, check if user already exists in auth or public.users by email
+      if (!userId) {
+        const existingAuth = await findAuthUserByEmail(adminClient, cleanEmail);
+        if (existingAuth?.id) {
+          userId = existingAuth.id;
+          previousRole = existingAuth.role || null;
+          const chkAuthUser = canManageRole(callerRole, existingAuth.role || 'user');
+          if (!chkAuthUser.allowed) {
+            return res.status(403).json({
+              success: false,
+              error: chkAuthUser.reason || `Akses ditolak. Peran "${callerRole}" tidak memiliki hak mengelola pengguna ini.`
+            });
+          }
+        }
+      }
+
+      // 2. If creating a new user or auth account needed
+      if (!userId) {
+        const securePassword = (password && password.trim().length >= 8)
+          ? password.trim()
+          : crypto.randomBytes(12).toString('base64url');
+
+        try {
+          const { data: createdAuth, error: createAuthErr } = await adminClient.auth.admin.createUser({
+            email: cleanEmail,
+            password: securePassword,
+            email_confirm: true,
+            user_metadata: { full_name: cleanFullName }
+          });
+          if (createAuthErr) {
+            console.warn('[Admin Save User] createUser notice:', createAuthErr.message);
+          } else if (createdAuth?.user?.id) {
+            userId = createdAuth.user.id;
+          }
+        } catch (authErr) {
+          console.warn('[Admin Save User] Auth account provisioning notice:', authErr);
+        }
+      }
+
+      // 3. Fallback UUID if auth client couldn't provide one
+      if (!userId) {
+        userId = crypto.randomUUID();
+      }
+
+      // 4. Update auth password or metadata if password was provided and user exists in auth
+      if (password && password.trim().length >= 6) {
+        try {
+          await adminClient.auth.admin.updateUserById(userId, {
+            password: password.trim(),
+            user_metadata: { full_name: cleanFullName }
+          });
+        } catch (passErr) {
+          console.warn('[Admin Save User] Password update notice:', passErr);
+        }
+      }
+
+      const defaultAccess = targetPropertyId !== null
+        ? `Akses Terbatas: Properti ${targetPropertyId}`
+        : (['super', 'super_admin'].includes(cleanRole)
+            ? 'Semua Properti (Super Admin)'
+            : cleanRole === 'owner'
+              ? 'Owner Investor Portfolio'
+              : (cleanRole === 'anak_owner' || cleanRole === 'anak owner')
+                ? 'Akses operasional, hunian & keuangan (Anak Owner)'
+                : cleanRole === 'finance'
+                  ? 'Akses ledger keuangan & setoran PBJT'
+                  : 'Staff akses terbatas');
+
+      const dbRole = cleanRole;
+
+      const userRecord = {
+        id: userId,
+        full_name: cleanFullName,
+        email: cleanEmail,
+        role: dbRole,
+        role_id: cleanRoleId,
+        access: access || defaultAccess,
+        active: cleanActive,
+        property_id: targetPropertyId,
+        created_at: new Date().toISOString()
+      };
+
+      const { data: savedData, error: upsertErr } = await adminClient
+        .from('users')
+        .upsert(userRecord, { onConflict: 'id' })
+        .select('id, email, full_name, role, role_id, access, active, property_id, created_at')
+        .single();
+
+      if (upsertErr) {
+        console.error('[Admin Save User] Upsert error in users table:', upsertErr);
+        return res.status(500).json({ success: false, error: `Gagal menyimpan user: ${upsertErr.message}` });
+      }
+
+      // Also ensure profiles table matches
+      try {
+        const profileDbRole = dbRole === 'super' ? 'super_admin' : dbRole;
+        await adminClient.from('profiles').upsert({
+          id: userId,
+          full_name: cleanFullName,
+          role: profileDbRole
+        }, { onConflict: 'id' });
+      } catch (pErr) {}
+
+      // Log activity
+      try {
+        const roleChangeDetail = previousRole && previousRole !== cleanRole 
+          ? `(Peran diubah dari ${previousRole} -> ${cleanRole})` 
+          : `(${cleanRole})`;
+        await adminClient.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authProfile?.email || 'Admin',
+          action: id ? 'UPDATE_USER' : 'CREATE_USER',
+          detail: `Menyimpan fungsionaris ${cleanFullName} ${roleChangeDetail} - Email: ${cleanEmail}`,
+          created_at: new Date().toISOString()
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({
+        success: true,
+        data: savedData || userRecord
+      });
+    } catch (err: any) {
+      console.error('[Admin Save User] Unexpected error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Gagal menyimpan otorisasi pengguna.' });
+    }
+  });
+
+  // Admin API: Delete user (Super Admin / Owner / Anak Owner / Admin)
+  app.delete('/api/admin/users/:id', requireAdminAuth, requirePermission('users', 'delete'), async (req, res) => {
+    try {
+      const targetUserId = req.params.id;
+      if (!targetUserId) {
+        return res.status(400).json({ success: false, error: 'User ID target wajib disertakan.' });
+      }
+
+      // Prevent self-deletion
+      if (req.authProfile?.id === targetUserId) {
+        return res.status(400).json({ success: false, error: 'Anda tidak dapat menghapus akun Anda sendiri yang sedang aktif.' });
+      }
+
+      const serviceKey = getServiceRoleKeyOrThrow();
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const adminClient = createClient(supabaseUrl, serviceKey, {
+        auth: { autoRefreshToken: false, persistSession: false }
+      });
+
+      const { data: targetUser } = await adminClient
+        .from('users')
+        .select('*')
+        .eq('id', targetUserId)
+        .maybeSingle();
+
+      if (!targetUser) {
+        return res.status(404).json({ success: false, error: 'Pengguna target tidak ditemukan.' });
+      }
+
+      const callerRole = req.authProfile?.role;
+      const chkDel = canManageRole(callerRole, targetUser.role, 'delete');
+      if (!chkDel.allowed) {
+        return res.status(403).json({
+          success: false,
+          error: chkDel.reason || `Akses ditolak. Peran "${callerRole}" tidak memiliki hak untuk menghapus akun pengguna dengan peran "${targetUser.role}".`
+        });
+      }
+
+      // Protect the last super admin from deletion
+      if (['super', 'super_admin'].includes((targetUser.role || '').toLowerCase())) {
+        const { count } = await adminClient
+          .from('users')
+          .select('id', { count: 'exact', head: true })
+          .in('role', ['super', 'super_admin'])
+          .eq('active', true);
+        if ((count || 0) <= 1) {
+          return res.status(400).json({
+            success: false,
+            error: 'Tidak dapat menghapus akun Super Admin terakhir di sistem.'
+          });
+        }
+      }
+
+      // Protect the last owner from deletion
+      if ((targetUser.role || '').toLowerCase() === 'owner') {
+        const { count } = await adminClient
+          .from('users')
+          .select('id', { count: 'exact', head: true })
+          .eq('role', 'owner')
+          .eq('active', true);
+        if ((count || 0) <= 1) {
+          return res.status(400).json({
+            success: false,
+            error: 'Tidak dapat menghapus akun Owner terakhir di sistem.'
+          });
+        }
+      }
+
+      const { error: delErr } = await adminClient.from('users').delete().eq('id', targetUserId);
+      if (delErr) {
+        console.warn('[Admin Delete User] users table delete error:', delErr.message);
+      }
+
+      // Also clean up auth if exists
+      try {
+        await adminClient.auth.admin.deleteUser(targetUserId);
+      } catch (authDelErr) {
+        console.warn('[Admin Delete User] auth delete notice:', authDelErr);
+      }
+
+      // Audit log
+      try {
+        await adminClient.from('activity_logs').insert({
+          admin_name: req.authProfile?.full_name || req.authProfile?.email || 'Admin',
+          action: 'DELETE_USER',
+          detail: `Mencabut otorisasi fungsionaris ID: ${targetUserId} (${targetUser?.full_name || targetUser?.email || 'User'} - Role: ${targetUser?.role})`,
+          created_at: new Date().toISOString()
+        });
+      } catch (logErr) {}
+
+      return res.status(200).json({ success: true, message: 'Hak akses fungsionaris berhasil dicabut.' });
+    } catch (err: any) {
+      console.error('[Admin Delete User] Error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Gagal menghapus user.' });
+    }
+  });
+
   // Admin API: Atomic Idempotent Booking Approval with Server-Side Accounting & Email Dispatch
-  app.post('/api/admin/booking/approve', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/booking/approve', requireAdminAuth, requirePermission('bookings', 'approve'), express.json(), async (req, res) => {
     try {
       const { booking_id, payment_method } = req.body;
 
@@ -1768,7 +2419,7 @@ async function startServer() {
   // =========================================================================
 
   // POST /api/admin/rooms/save
-  app.post('/api/admin/rooms/save', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/rooms/save', requireAdminAuth, requirePermission('properties', 'update'), express.json(), async (req, res) => {
     try {
       const payload = req.body || {};
       const { property_id, room_number } = payload;
@@ -1984,7 +2635,7 @@ async function startServer() {
   });
 
   // DELETE /api/admin/rooms/:id
-  app.delete('/api/admin/rooms/:id', requireAdminAuth, async (req, res) => {
+  app.delete('/api/admin/rooms/:id', requireAdminAuth, requirePermission('properties', 'delete'), async (req, res) => {
     try {
       const roomId = Number(req.params.id);
       if (!roomId || isNaN(roomId)) {
@@ -2058,7 +2709,7 @@ async function startServer() {
   });
 
   // POST /api/admin/maps/resolve-link - Resolves Google Maps links including shortlinks (maps.app.goo.gl)
-  app.post('/api/admin/maps/resolve-link', express.json(), async (req, res) => {
+  app.post('/api/admin/maps/resolve-link', requireAdminAuth, requirePermission('properties', 'read'), express.json(), async (req, res) => {
     try {
       const rawUrl = (req.body?.url || req.query?.url || '').toString().trim();
       if (!rawUrl) {
@@ -2149,11 +2800,47 @@ async function startServer() {
         return res.json({ success: true, lat: directMatch.lat, lng: directMatch.lng, resolvedUrl: rawUrl });
       }
 
-      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+      // Validate URL and enforce anti-SSRF protections
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(rawUrl);
+      } catch {
+        return res.status(400).json({ success: false, error: 'URL link Google Maps tidak valid.' });
+      }
+
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        return res.status(400).json({ success: false, error: 'Hanya protokol HTTP/HTTPS yang didukung.' });
+      }
+
+      const hostname = parsedUrl.hostname.toLowerCase();
+      const ALLOWED_MAPS_HOSTS = [
+        'maps.google.com',
+        'maps.app.goo.gl',
+        'goo.gl',
+        'google.com',
+        'www.google.com',
+        'google.co.id',
+        'www.google.co.id'
+      ];
+
+      const isAllowedHost = ALLOWED_MAPS_HOSTS.some(h => hostname === h || hostname.endsWith(`.${h}`));
+      if (!isAllowedHost) {
         return res.status(400).json({
           success: false,
-          error: 'URL tidak valid. Pastikan link diawali dengan https:// atau http://'
+          error: 'Hanya tautan resmi Google Maps (maps.google.com, maps.app.goo.gl, goo.gl) yang diizinkan.'
         });
+      }
+
+      // Anti-SSRF: check for private / internal / metadata IPs
+      if (
+        hostname === 'localhost' ||
+        hostname.startsWith('127.') ||
+        hostname.startsWith('10.') ||
+        hostname.startsWith('192.168.') ||
+        hostname.startsWith('169.254.') ||
+        hostname === '::1'
+      ) {
+        return res.status(400).json({ success: false, error: 'Akses ke alamat internal atau metadata server diblokir.' });
       }
 
       // Follow redirects to resolve shortened URLs (e.g. maps.app.goo.gl)
@@ -2221,7 +2908,7 @@ async function startServer() {
   });
 
   // POST /api/admin/properties/save
-  app.post('/api/admin/properties/save', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/properties/save', requireAdminAuth, requirePermission('properties', 'update'), express.json(), async (req, res) => {
     try {
       const payload = req.body || {};
       const { name, address } = payload;
@@ -2454,7 +3141,7 @@ async function startServer() {
   // =========================================================================
 
   // POST /api/admin/amenities/save
-  app.post('/api/admin/amenities/save', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/amenities/save', requireAdminAuth, requirePermission('properties', 'update'), express.json(), async (req, res) => {
     try {
       const payload = req.body || {};
       const role = (req.authProfile?.role || '').toLowerCase();
@@ -2532,7 +3219,7 @@ async function startServer() {
   });
 
   // POST /api/admin/amenities/delete
-  app.post('/api/admin/amenities/delete', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/amenities/delete', requireAdminAuth, requirePermission('properties', 'delete'), express.json(), async (req, res) => {
     try {
       const { id } = req.body || {};
       if (!id) {
@@ -2563,7 +3250,7 @@ async function startServer() {
   });
 
   // POST /api/admin/amenities/batch
-  app.post('/api/admin/amenities/batch', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/amenities/batch', requireAdminAuth, requirePermission('properties', 'update'), express.json(), async (req, res) => {
     try {
       const { amenities, property_id } = req.body || {};
       if (!Array.isArray(amenities) || amenities.length === 0) {
@@ -2625,7 +3312,7 @@ async function startServer() {
   });
 
   // POST /api/admin/settings/save
-  app.post('/api/admin/settings/save', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/settings/save', requireAdminAuth, requirePermission('system_settings', 'update'), express.json(), async (req, res) => {
     try {
       const payload = req.body || {};
       const role = (req.authProfile?.role || '').toLowerCase();
@@ -2682,7 +3369,7 @@ async function startServer() {
   });
 
   // POST /api/admin/settings/facilities - Dedicated endpoint to update homepage standard facilities
-  app.post('/api/admin/settings/facilities', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/settings/facilities', requireAdminAuth, requirePermission('system_settings', 'update'), express.json(), async (req, res) => {
     try {
       const payload = req.body || {};
       const role = (req.authProfile?.role || '').toLowerCase();
@@ -2737,7 +3424,7 @@ async function startServer() {
   });
 
   // DELETE /api/admin/properties/:id
-  app.delete('/api/admin/properties/:id', requireAdminAuth, async (req, res) => {
+  app.delete('/api/admin/properties/:id', requireAdminAuth, requirePermission('properties_close', 'delete'), async (req, res) => {
     try {
       const propId = Number(req.params.id);
       if (!propId || isNaN(propId)) {
@@ -2767,6 +3454,18 @@ async function startServer() {
 
       const { error: delErr } = await supabaseAdmin.from('properties').delete().eq('id', propId);
       if (delErr) {
+        if (
+          delErr.code === '23503' || 
+          delErr.message.toLowerCase().includes('foreign key') || 
+          delErr.message.toLowerCase().includes('violates foreign key constraint') ||
+          delErr.message.toLowerCase().includes('journal_entries') ||
+          delErr.message.toLowerCase().includes('restrict')
+        ) {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Properti tidak dapat dihapus karena masih memiliki riwayat transaksi keuangan atau jurnal pembukuan terkait (FK RESTRICT).' 
+          });
+        }
         return res.status(400).json({ success: false, error: `Gagal menghapus properti: ${delErr.message}` });
       }
 
@@ -2789,6 +3488,41 @@ async function startServer() {
   app.post('/api/midtrans/charge', apiRateLimiter(60000, 30), async (req, res) => {
     try {
       const { order_id, gross_amount, customer_details, item_details } = req.body;
+
+      if (!order_id || typeof order_id !== 'string' || !order_id.trim()) {
+        return res.status(400).json({ success: false, error: 'order_id wajib disertakan.' });
+      }
+
+      const numGrossAmount = Number(gross_amount);
+      if (!numGrossAmount || isNaN(numGrossAmount) || numGrossAmount <= 0) {
+        return res.status(400).json({ success: false, error: 'gross_amount harus berupa angka positif.' });
+      }
+
+      // Check against DB if booking or extension with this order_id exists to prevent price tampering
+      try {
+        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+        const serviceKey = getServiceRoleKeyOrThrow();
+        if (supabaseUrl && serviceKey) {
+          const checkClient = createClient(supabaseUrl, serviceKey);
+          const { data: b } = await checkClient
+            .from('bookings')
+            .select('total_price, dp_amount, is_dp')
+            .eq('midtrans_order_id', order_id.trim())
+            .maybeSingle();
+
+          if (b) {
+            const expected = Number(b.is_dp ? (b.dp_amount || 500000) : b.total_price);
+            if (expected > 0 && Math.abs(expected - numGrossAmount) >= 1) {
+              return res.status(400).json({
+                success: false,
+                error: `Nominal pembayaran (Rp ${numGrossAmount.toLocaleString('id-ID')}) tidak sesuai dengan tagihan booking (Rp ${expected.toLocaleString('id-ID')}).`
+              });
+            }
+          }
+        }
+      } catch (checkErr) {
+        console.warn('[MIDTRANS CHARGE] Booking price pre-validation notice:', checkErr);
+      }
 
       let rawServerKey = process.env.MIDTRANS_SERVER_KEY || '';
       let serverKey = rawServerKey.trim();
@@ -3159,7 +3893,7 @@ async function startServer() {
   // =========================================================================
   // DIGITAL SIGNATURE STORAGE & HOSTING ENGINE (FOR INLINE ATTACHMENTS & EMAILS)
   // =========================================================================
-  const signatureStore = new Map<string, { data: string; createdAt: number }>();
+  const signatureStore = new Map<string, { data: string; mime?: string; createdAt: number }>();
 
   // Cleanup old signature store items every 30 minutes
   setInterval(() => {
@@ -4235,22 +4969,183 @@ async function startServer() {
   // =========================================================================
   app.post('/api/midtrans/settle-booking', apiRateLimiter(60000, 60), express.json(), async (req, res) => {
     try {
-      const { order_id, transaction_id, payment_type, gross_amount, booking_data } = req.body;
-      if (!order_id) {
+      const { order_id, transaction_id, payment_type, gross_amount, booking_data, signature_key } = req.body;
+      if (!order_id || typeof order_id !== 'string' || !order_id.trim()) {
         return res.status(400).json({ success: false, error: 'order_id wajib disertakan.' });
       }
+      const cleanOrderId = order_id.trim();
+
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
       const supabase = createClient(supabaseUrl, serviceKey);
 
+      let rawServerKey = process.env.MIDTRANS_SERVER_KEY || '';
+      let serverKey = rawServerKey.trim();
+      if (serverKey.startsWith('"') && serverKey.endsWith('"')) serverKey = serverKey.slice(1, -1);
+      else if (serverKey.startsWith("'") && serverKey.endsWith("'")) serverKey = serverKey.slice(1, -1);
+      serverKey = serverKey.trim();
+
+      // Find existing booking if already registered in database
+      const { data: existingBooking } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('midtrans_order_id', cleanOrderId)
+        .maybeSingle();
+
+      // 1. Authorization check: Staff/Admin manual approval requires RBAC 'bookings' 'approve' AND property scope
+      let isStaffManualApprove = false;
+      try {
+        const authContext = await resolveAuthContext(req, res);
+        if (authContext?.profile && can(authContext.profile.role, 'bookings', 'approve')) {
+          const targetPropertyId = existingBooking?.property_id ?? booking_data?.property_id;
+          const access = checkPropertyAccess(authContext.profile, targetPropertyId);
+          if (access.allowed) {
+            isStaffManualApprove = true;
+          }
+        }
+      } catch (authErr) {
+        console.warn('[Settle Booking] Staff auth verification notice:', authErr);
+      }
+
+      // 2. Gateway Verification: If not approved by authorized staff, Midtrans verification is MANDATORY
+      let finalGrossAmount = Number(gross_amount) || 0;
+      let finalTransactionId = transaction_id;
+      let finalPaymentType = payment_type || 'Midtrans SNAP';
+
+      if (!isStaffManualApprove) {
+        if (!serverKey || serverKey === 'YOUR_MIDTRANS_SERVER_KEY_HERE') {
+          if (process.env.ALLOW_PAYMENT_SIMULATION === 'true' && process.env.NODE_ENV === 'development') {
+            console.warn('[Settle Booking] Payment simulation permitted in local development mode.');
+          } else {
+            return res.status(503).json({
+              success: false,
+              error: 'Layanan verifikasi pembayaran Midtrans belum dikonfigurasi pada server.'
+            });
+          }
+        } else {
+          // Verify directly against Midtrans payment status API
+          const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
+          const baseUrl = isProduction ? 'https://api.midtrans.com' : 'https://api.sandbox.midtrans.com';
+          const authHeader = Buffer.from(`${serverKey}:`).toString('base64');
+
+          let isMidtransVerified = false;
+          try {
+            const midtransCheck = await fetch(`${baseUrl}/v2/${encodeURIComponent(cleanOrderId)}/status`, {
+              method: 'GET',
+              headers: {
+                'Accept': 'application/json',
+                'Authorization': `Basic ${authHeader}`
+              }
+            });
+
+            if (midtransCheck.ok) {
+              const checkData: any = await midtransCheck.json();
+              if (
+                ['settlement', 'capture'].includes(checkData.transaction_status) &&
+                (checkData.fraud_status === 'accept' || !checkData.fraud_status)
+              ) {
+                isMidtransVerified = true;
+                finalGrossAmount = Number(checkData.gross_amount) || finalGrossAmount;
+                finalTransactionId = checkData.transaction_id || finalTransactionId;
+                finalPaymentType = checkData.payment_type || finalPaymentType;
+              } else {
+                console.warn('[Settle Booking] Midtrans status rejected:', checkData.transaction_status);
+              }
+            } else {
+              console.warn('[Settle Booking] Midtrans check responded with HTTP', midtransCheck.status);
+            }
+          } catch (fetchErr: any) {
+            console.error('[Settle Booking] Midtrans verification error:', fetchErr?.message);
+          }
+
+          if (!isMidtransVerified) {
+            return res.status(403).json({
+              success: false,
+              error: 'Akses ditolak: Transaksi pembayaran belum diverifikasi lunas oleh Midtrans.'
+            });
+          }
+        }
+      }
+
+      // 3. Amount consistency validation against existing booking
+      if (existingBooking) {
+        const expected = Number(existingBooking.is_dp ? (existingBooking.dp_amount || 500000) : existingBooking.total_price);
+        if (expected > 0 && finalGrossAmount > 0 && Math.abs(expected - finalGrossAmount) >= 1) {
+          await supabase.from('activity_logs').insert({
+            admin_name: 'Payment Gateway Security',
+            action: 'SETTLE_BOOKING_AMOUNT_MISMATCH',
+            detail: `Order ${cleanOrderId}: Nominal terverifikasi (${finalGrossAmount}) tidak cocok dengan tagihan (${expected}).`,
+            created_at: new Date().toISOString()
+          });
+          return res.status(400).json({
+            success: false,
+            error: `Nominal pembayaran (Rp ${finalGrossAmount.toLocaleString('id-ID')}) tidak cocok dengan tagihan pemesanan (Rp ${expected.toLocaleString('id-ID')}).`
+          });
+        }
+      }
+
+      // 4. Sanitize and validate fallback booking_data if no existing booking
+      let sanitizedBookingData: any = undefined;
+      if (!existingBooking && booking_data && typeof booking_data === 'object') {
+        const allowedFields = [
+          'property_id', 'room_id', 'room_number', 'tenant_name', 'phone', 'email', 'nik',
+          'booking_date', 'check_in_date', 'duration_months', 'booking_type', 'duration_days',
+          'coupon_code', 'discount_amount', 'is_for_other', 'occupant_name', 'occupant_phone',
+          'occupant_email', 'occupant_nik', 'occupant_arrival_status', 'signature_url',
+          'is_married', 'marriage_certificate_url', 'spouse_name', 'spouse_nik', 'spouse_phone', 'spouse_relation'
+        ];
+        sanitizedBookingData = {};
+        for (const field of allowedFields) {
+          if (booking_data[field] !== undefined) {
+            sanitizedBookingData[field] = booking_data[field];
+          }
+        }
+        sanitizedBookingData.midtrans_order_id = cleanOrderId;
+        sanitizedBookingData.payment_method = finalPaymentType;
+
+        // Recalculate price from room & duration to prevent client-side fee manipulation
+        let calculatedPrice = 0;
+        if (sanitizedBookingData.room_id) {
+          const { data: room } = await supabase.from('rooms').select('*').eq('id', sanitizedBookingData.room_id).maybeSingle();
+          if (room) {
+            const isDaily = sanitizedBookingData.booking_type === 'daily';
+            const duration = isDaily ? (sanitizedBookingData.duration_days || 1) : (sanitizedBookingData.duration_months || 1);
+            const baseRate = isDaily ? (room.daily_price || Math.round(room.price / 30)) : room.price;
+            const subtotal = baseRate * duration;
+            const discount = Number(sanitizedBookingData.discount_amount || 0);
+            calculatedPrice = Math.max(0, subtotal - discount);
+          }
+        }
+
+        const isPriceMatch = calculatedPrice > 0 && finalGrossAmount > 0 && Math.abs(calculatedPrice - finalGrossAmount) < 1;
+        if (!isPriceMatch && calculatedPrice > 0) {
+          sanitizedBookingData.status = 'pending_review';
+          sanitizedBookingData.total_price = finalGrossAmount;
+          await supabase.from('bookings').insert(sanitizedBookingData);
+          await supabase.from('activity_logs').insert({
+            admin_name: 'Payment Gateway Security',
+            action: 'BOOKING_PRICE_MISMATCH_PENDING_REVIEW',
+            detail: `Order ${cleanOrderId}: Total dihitung (${calculatedPrice}) tidak cocok dengan Midtrans (${finalGrossAmount}). Disimpan sebagai pending_review.`,
+            created_at: new Date().toISOString()
+          });
+          return res.status(400).json({
+            success: false,
+            error: 'Nominal pembayaran tidak cocok dengan tarif kamar. Pemesanan disimpan sebagai status pending_review untuk tinjauan staf.'
+          });
+        }
+
+        sanitizedBookingData.status = 'approved';
+        sanitizedBookingData.total_price = finalGrossAmount;
+      }
+
       const result = await settleBookingTransaction(
         supabase,
-        order_id,
-        payment_type || 'Midtrans SNAP',
-        transaction_id,
-        gross_amount,
+        cleanOrderId,
+        finalPaymentType,
+        finalTransactionId,
+        finalGrossAmount,
         undefined,
-        booking_data
+        sanitizedBookingData
       );
 
       return res.status(200).json({ success: true, ...result });
@@ -4261,11 +5156,11 @@ async function startServer() {
   });
 
   // =========================================================================
-  // ENDPOINT: ROOM LOCKING & RESERVATION (SERVICE ROLE BYPASS)
+  // ENDPOINT: ROOM LOCKING & RESERVATION (SECURED)
   // =========================================================================
-  app.post('/api/rooms/lock', apiRateLimiter(60000, 60), express.json(), async (req, res) => {
+  app.post('/api/rooms/lock', apiRateLimiter(60000, 60), express.json(), optionalAdminAuth, async (req, res) => {
     try {
-      const { room_id, status = 'reserved', tenant_name } = req.body;
+      const { room_id, status = 'reserved', tenant_name, booking_id, midtrans_order_id } = req.body;
       if (!room_id) {
         return res.status(400).json({ success: false, error: 'room_id wajib disertakan.' });
       }
@@ -4281,6 +5176,49 @@ async function startServer() {
 
       if (fetchErr || !room) {
         return res.status(404).json({ success: false, error: 'Kamar tidak ditemukan.' });
+      }
+
+      // Authorization & contextual validation:
+      // Case 1: Authenticated admin/staff
+      if (req.authProfile) {
+        if (!can(req.authProfile.role, 'properties', 'update') && !can(req.authProfile.role, 'bookings', 'approve')) {
+          return res.status(403).json({ success: false, error: 'Akses ditolak: Anda tidak memiliki izin untuk mengunci/mengubah kamar.' });
+        }
+        const propCheck = checkPropertyAccess(req.authProfile, room.property_id);
+        if (!propCheck.allowed) {
+          return res.status(403).json({ success: false, error: propCheck.reason });
+        }
+      } else {
+        // Case 2: Public guest locking room during active booking checkout
+        if (status !== 'reserved') {
+          return res.status(403).json({
+            success: false,
+            error: 'Akses ditolak. Pengguna publik hanya dapat melakukan reservasi sementara (status: reserved).'
+          });
+        }
+
+        if (!booking_id && !midtrans_order_id) {
+          return res.status(400).json({
+            success: false,
+            error: 'booking_id atau midtrans_order_id wajib disertakan untuk reservasi kamar publik.'
+          });
+        }
+
+        // Verify that the booking exists and matches this room
+        let bookingQuery = supabase.from('bookings').select('id, room_id, room_number, status');
+        if (booking_id) {
+          bookingQuery = bookingQuery.eq('id', booking_id);
+        } else if (midtrans_order_id) {
+          bookingQuery = bookingQuery.eq('midtrans_order_id', midtrans_order_id);
+        }
+
+        const { data: matchedBooking } = await bookingQuery.maybeSingle();
+        if (!matchedBooking || (matchedBooking.room_id && Number(matchedBooking.room_id) !== Number(room_id))) {
+          return res.status(403).json({
+            success: false,
+            error: 'Data pemesanan tidak cocok dengan kamar yang diminta.'
+          });
+        }
       }
 
       if (status === 'reserved' && room.status === 'occupied') {
@@ -4478,8 +5416,8 @@ async function startServer() {
     }
   });
 
-  // ENDPOINTS FOR CONTRACT EXTENSIONS (Bypasses PostgreSQL anon 42501 permission restrictions)
-  app.get('/api/contract-extensions', apiRateLimiter(60000, 180), async (req, res) => {
+  // ENDPOINTS FOR CONTRACT EXTENSIONS (Bypasses PostgreSQL anon 42501 permission restrictions safely)
+  app.get('/api/contract-extensions', apiRateLimiter(60000, 180), optionalAdminAuth, async (req, res) => {
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
@@ -4488,11 +5426,34 @@ async function startServer() {
       }
       const supabaseAdmin = createClient(supabaseUrl, serviceKey);
 
-      const limit = Number(req.query.limit) || 1000;
+      const limit = Math.min(Number(req.query.limit) || 1000, 2000);
       const offset = Number(req.query.offset) || 0;
       const status = req.query.status as string;
       const tenantId = req.query.tenant_id as string;
       const orderId = req.query.order_id as string;
+
+      // Access control:
+      // - Unauthenticated public users can ONLY query by order_id (for payment verification screen)
+      // - Authenticated staff/admins must have permissions and respect property scope
+      if (!req.authProfile) {
+        if (!orderId) {
+          return res.status(401).json({
+            success: false,
+            error: 'Akses ditolak. Akses publik hanya diizinkan dengan parameter order_id valid.',
+            data: []
+          });
+        }
+      } else {
+        const role = req.authProfile.role;
+        // Staff without assigned property cannot read
+        if (role === 'staff' && (req.authProfile.property_id === null || req.authProfile.property_id === undefined)) {
+          return res.status(403).json({
+            success: false,
+            error: 'Akun Staff belum ditugaskan ke properti mana pun. Hubungi Super Admin.',
+            data: []
+          });
+        }
+      }
 
       let query = supabaseAdmin
         .from('contract_extensions')
@@ -4510,6 +5471,11 @@ async function startServer() {
         query = query.eq('midtrans_order_id', orderId);
       }
 
+      // Enforce property scope if staff/scoped role
+      if (req.authProfile?.property_id !== null && req.authProfile?.property_id !== undefined) {
+        query = query.eq('property_id', req.authProfile.property_id);
+      }
+
       const { data, error } = await query;
       if (error) {
         console.warn('[CONTRACT-EXTENSIONS API] Query error:', error.message);
@@ -4522,7 +5488,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/contract-extensions', apiRateLimiter(60000, 60), express.json(), async (req, res) => {
+  app.post('/api/contract-extensions', apiRateLimiter(60000, 60), express.json(), optionalAdminAuth, async (req, res) => {
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
@@ -4531,29 +5497,81 @@ async function startServer() {
       }
       const supabaseAdmin = createClient(supabaseUrl, serviceKey);
 
-      const payload = { ...req.body };
-      const id = payload.id;
-      delete payload.id;
+      const body = req.body || {};
+      const id = body.id;
 
       let resultData = null;
       let eventType: 'INSERT' | 'UPDATE' = 'INSERT';
+
       if (id) {
+        // Modifying existing extension requires admin auth with approve permission & property check
+        if (!req.authProfile || !can(req.authProfile.role, 'bookings', 'approve')) {
+          return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya staf berwenang yang dapat mengubah perpanjangan kontrak.' });
+        }
+
+        const { data: existingExt } = await supabaseAdmin
+          .from('contract_extensions')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!existingExt) {
+          return res.status(404).json({ success: false, error: 'Data perpanjangan kontrak tidak ditemukan.' });
+        }
+
+        const propCheck = checkPropertyAccess(req.authProfile, existingExt.property_id);
+        if (!propCheck.allowed) {
+          return res.status(403).json({ success: false, error: propCheck.reason });
+        }
+
+        // Whitelist allowable update fields for staff
+        const allowedUpdateFields = ['status', 'notes', 'payment_method', 'paid_at', 'invoice_id'];
+        const safePayload: any = {};
+        for (const f of allowedUpdateFields) {
+          if (body[f] !== undefined) safePayload[f] = body[f];
+        }
+
         eventType = 'UPDATE';
         const { data, error } = await supabaseAdmin
           .from('contract_extensions')
-          .update(payload)
+          .update(safePayload)
           .eq('id', id)
           .select();
         if (error) throw error;
-        resultData = data && data[0] ? data[0] : req.body;
+        resultData = data && data[0] ? data[0] : { ...existingExt, ...safePayload };
       } else {
+        // Creation of contract extension
+        const allowedInsertFields = [
+          'tenant_id', 'tenant_name', 'property_id', 'property_name', 'room_number',
+          'old_start_date', 'old_duration_months', 'extension_months', 'monthly_rate',
+          'total_amount', 'payment_method', 'notes', 'midtrans_order_id'
+        ];
+
+        const safePayload: any = {};
+        for (const f of allowedInsertFields) {
+          if (body[f] !== undefined) safePayload[f] = body[f];
+        }
+
+        // Recalculate total_amount to prevent client fee tampering
+        const extMonths = Number(safePayload.extension_months) || 1;
+        const monthRate = Number(safePayload.monthly_rate) || 0;
+        safePayload.total_amount = extMonths * monthRate;
+
+        // Force status to 'pending' or 'unpaid' for public/unauthorized users (never allow client injection of 'paid')
+        const isPrivileged = req.authProfile && can(req.authProfile.role, 'bookings', 'approve');
+        if (isPrivileged && body.status) {
+          safePayload.status = body.status;
+        } else {
+          safePayload.status = 'pending';
+        }
+
         eventType = 'INSERT';
         const { data, error } = await supabaseAdmin
           .from('contract_extensions')
-          .insert(payload)
+          .insert(safePayload)
           .select();
         if (error) throw error;
-        resultData = data && data[0] ? data[0] : req.body;
+        resultData = data && data[0] ? data[0] : safePayload;
       }
 
       // Broadcast realtime event
@@ -4581,7 +5599,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/contract-extensions/:id', apiRateLimiter(60000, 60), async (req, res) => {
+  app.delete('/api/contract-extensions/:id', apiRateLimiter(60000, 60), requireAdminAuth, requirePermission('bookings', 'approve'), async (req, res) => {
     try {
       const { id } = req.params;
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
@@ -4590,6 +5608,22 @@ async function startServer() {
         return res.status(500).json({ success: false, error: 'Supabase credentials not configured' });
       }
       const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Verify extension existence and property scope
+      const { data: existingExt } = await supabaseAdmin
+        .from('contract_extensions')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (!existingExt) {
+        return res.status(404).json({ success: false, error: 'Data perpanjangan kontrak tidak ditemukan.' });
+      }
+
+      const propCheck = checkPropertyAccess(req.authProfile, existingExt.property_id);
+      if (!propCheck.allowed) {
+        return res.status(403).json({ success: false, error: propCheck.reason });
+      }
 
       const { error } = await supabaseAdmin
         .from('contract_extensions')
@@ -4626,7 +5660,58 @@ async function startServer() {
   // =========================================================================
   // ENDPOINT: FETCH BOOKINGS (Provides resilient, service_role backed fetch)
   // =========================================================================
-  app.get('/api/bookings', apiRateLimiter(60000, 180), async (req, res) => {
+  // =========================================================================
+  // PUBLIC ENDPOINT: ROOMS AVAILABILITY (NO PII, SAFE FOR PUBLIC BOOKING CALENDARS)
+  // =========================================================================
+  app.get('/api/public/rooms-availability', apiRateLimiter(60000, 180), async (req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase credentials not configured', data: [] });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      const propertyId = req.query.property_id as string;
+      const roomId = req.query.room_id as string;
+
+      let query = supabaseAdmin
+        .from('bookings')
+        .select('id, room_id, property_id, check_in, check_out, status')
+        .in('status', ['confirmed', 'active', 'paid', 'approved', 'reserved']);
+
+      if (propertyId) {
+        query = query.eq('property_id', propertyId);
+      }
+      if (roomId) {
+        query = query.eq('room_id', roomId);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message, data: [] });
+      }
+
+      // Explicitly return only calendar availability metrics, strictly omitting all guest PII
+      const safeAvailability = (data || []).map((b: any) => ({
+        room_id: b.room_id,
+        property_id: b.property_id,
+        check_in: b.check_in,
+        check_out: b.check_out,
+        status: b.status
+      }));
+
+      return res.status(200).json({ success: true, data: safeAvailability });
+    } catch (err: any) {
+      console.error('[Public Availability Error]:', err);
+      return res.status(500).json({ success: false, error: err.message, data: [] });
+    }
+  });
+
+  // =========================================================================
+  // ENDPOINT: FETCH BOOKINGS (Secured: Require Admin Auth + Scoped Permission)
+  // =========================================================================
+  app.get('/api/bookings', requireAdminAuth, requirePermission('bookings', 'read'), apiRateLimiter(60000, 180), async (req, res) => {
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
@@ -4638,8 +5723,24 @@ async function startServer() {
       const limit = Math.min(Number(req.query.limit) || 1000, 2000);
       const offset = Number(req.query.offset) || 0;
       const status = req.query.status as string;
-      const propertyId = req.query.property_id as string;
+      const requestedPropId = req.query.property_id as string;
       const orderId = req.query.order_id as string;
+
+      // Restrict staff/branch users to their assigned property
+      const userAssignedProp = req.authProfile?.property_id;
+      let effectivePropertyId: string | number | null = requestedPropId || null;
+
+      if (userAssignedProp !== null && userAssignedProp !== undefined) {
+        if (requestedPropId && String(requestedPropId) !== String(userAssignedProp)) {
+          return res.status(403).json({ success: false, error: `Akses ditolak. Anda hanya berwenang untuk Properti ID ${userAssignedProp}.`, data: [] });
+        }
+        effectivePropertyId = userAssignedProp;
+      } else if (requestedPropId) {
+        const propAccess = checkPropertyAccess(req.authProfile, requestedPropId);
+        if (!propAccess.allowed) {
+          return res.status(403).json({ success: false, error: propAccess.reason || 'Akses ditolak ke properti ini.', data: [] });
+        }
+      }
 
       let query = supabaseAdmin
         .from('bookings')
@@ -4650,8 +5751,8 @@ async function startServer() {
       if (status) {
         query = query.eq('status', status);
       }
-      if (propertyId) {
-        query = query.eq('property_id', propertyId);
+      if (effectivePropertyId) {
+        query = query.eq('property_id', effectivePropertyId);
       }
       if (orderId) {
         query = query.eq('midtrans_order_id', orderId);
@@ -4662,26 +5763,126 @@ async function startServer() {
         console.warn('[BOOKINGS API] Query error:', error.message);
         return res.status(500).json({ success: false, error: error.message, data: [] });
       }
-      return res.status(200).json({ success: true, data: data || [] });
+
+      // Mask sensitive PII for roles without unmasked PII view permission
+      const sanitizedData = sanitizePiiResponse(req.authProfile?.role, data || [], [
+        'nik', 'spouse_nik', 'spouse_phone', 'marriage_certificate_url'
+      ]);
+
+      return res.status(200).json({ success: true, data: sanitizedData });
     } catch (err: any) {
       console.error('[BOOKINGS API Error]:', err);
       return res.status(500).json({ success: false, error: err.message, data: [] });
     }
   });
 
-  // Resilient data fallback endpoint for core read-only tables
-  const ALLOWED_FALLBACK_TABLES = new Set([
-    'bookings', 'surveys', 'tenants', 'properties', 'rooms', 
-    'coupons', 'settings', 'facilities', 'contract_extensions'
+  // Resilient data fallback endpoint for core tables with strict security controls
+  const PUBLIC_READ_TABLES = new Set([
+    'properties', 'rooms', 'facilities', 'coupons', 'settings'
   ]);
 
-  app.get('/api/data/:table', apiRateLimiter(60000, 180), async (req, res) => {
-    try {
-      const { table } = req.params;
-      if (!ALLOWED_FALLBACK_TABLES.has(table)) {
-        return res.status(403).json({ success: false, error: 'Access to table restricted' });
-      }
+  const FORBIDDEN_WITHOUT_AUTH = new Set([
+    'users', 'tenants', 'payments', 'contracts', 'financial_transactions', 
+    'journal_entries', 'midtrans_logs', 'cash_flows', 'pnl_reports', 
+    'balance_sheets', 'audits', 'bookings', 'surveys', 'contract_extensions'
+  ]);
 
+  const TABLE_TO_RESOURCE_MAP: Record<string, string> = {
+    users: 'users',
+    tenants: 'tenants',
+    payments: 'payments',
+    contracts: 'contracts',
+    contract_extensions: 'contracts',
+    financial_transactions: 'finances',
+    journal_entries: 'finances',
+    midtrans_logs: 'payments',
+    cash_flows: 'finances',
+    pnl_reports: 'finances',
+    balance_sheets: 'finances',
+    audits: 'audit_logs',
+    activity_logs: 'audit_logs',
+    bookings: 'bookings',
+    surveys: 'surveys',
+    properties: 'properties',
+    rooms: 'properties',
+    fixed_assets: 'properties'
+  };
+
+  app.get('/api/data/:table', apiRateLimiter(60000, 180), async (req, res, next) => {
+    const { table } = req.params;
+
+    // If table is sensitive, require authentication and RBAC permissions
+    if (FORBIDDEN_WITHOUT_AUTH.has(table)) {
+      return requireAdminAuth(req, res, async () => {
+        try {
+          const userRole = req.authProfile?.role;
+          const resource = TABLE_TO_RESOURCE_MAP[table] || table;
+
+          // Check granular RBAC view permission
+          if (!can(userRole, resource as AppResource, 'read')) {
+            return res.status(403).json({
+              success: false,
+              error: `Akses ditolak: Peran '${userRole}' tidak memiliki izin untuk melihat data '${table}'.`,
+              data: []
+            });
+          }
+
+          // Staff must have an assigned property
+          const userAssignedProp = req.authProfile?.property_id;
+          if (userRole === 'staff' && (userAssignedProp === null || userAssignedProp === undefined)) {
+            return res.status(403).json({
+              success: false,
+              error: 'Akun Staff belum ditugaskan ke properti mana pun. Hubungi Super Admin.',
+              data: []
+            });
+          }
+
+          const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+          const serviceKey = getServiceRoleKeyOrThrow();
+          if (!supabaseUrl || !serviceKey) {
+            return res.status(500).json({ success: false, error: 'Supabase credentials not configured', data: [] });
+          }
+          const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+          const limit = Math.min(Number(req.query.limit) || 1000, 2000);
+          const offset = Number(req.query.offset) || 0;
+          const orderCol = (req.query.order_col as string) || (table === 'bookings' || table === 'surveys' ? 'created_at' : 'id');
+          const orderAsc = req.query.order_asc === 'true';
+
+          let query = supabaseAdmin
+            .from(table)
+            .select('*')
+            .order(orderCol, { ascending: orderAsc })
+            .range(offset, offset + limit - 1);
+
+          // Property scoping if role is scoped to a specific branch
+          const TABLES_WITH_PROPERTY_ID = ['bookings', 'surveys', 'contracts', 'contract_extensions', 'rooms', 'fixed_assets', 'payments', 'tenants'];
+          if (userAssignedProp !== null && userAssignedProp !== undefined && TABLES_WITH_PROPERTY_ID.includes(table)) {
+            query = query.eq('property_id', userAssignedProp);
+          }
+
+          const { data, error } = await query;
+          if (error) {
+            return res.status(500).json({ success: false, error: error.message, data: [] });
+          }
+
+          // Mask sensitive PII for tenants / bookings / users
+          const sanitizedData = sanitizePiiResponse(req.authProfile?.role, data || [], [
+            'nik', 'spouse_nik', 'spouse_phone', 'marriage_certificate_url'
+          ]);
+
+          return res.status(200).json({ success: true, data: sanitizedData });
+        } catch (err: any) {
+          return res.status(500).json({ success: false, error: err.message, data: [] });
+        }
+      });
+    }
+
+    if (!PUBLIC_READ_TABLES.has(table)) {
+      return res.status(403).json({ success: false, error: `Access to table '${table}' is restricted.` });
+    }
+
+    try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
       if (!supabaseUrl || !serviceKey) {
@@ -4691,7 +5892,7 @@ async function startServer() {
 
       const limit = Math.min(Number(req.query.limit) || 1000, 2000);
       const offset = Number(req.query.offset) || 0;
-      const orderCol = (req.query.order_col as string) || (table === 'bookings' || table === 'surveys' ? 'created_at' : 'id');
+      const orderCol = (req.query.order_col as string) || 'id';
       const orderAsc = req.query.order_asc === 'true';
 
       let query = supabaseAdmin
@@ -4710,6 +5911,14 @@ async function startServer() {
       console.error('[DATA API Error]:', err);
       return res.status(500).json({ success: false, error: err.message, data: [] });
     }
+  });
+
+  // Reject generic mutation attempts through /api/data/:table (mutations must use designated endpoints)
+  app.all('/api/data/:table', (req, res) => {
+    return res.status(405).json({
+      success: false,
+      error: `Metode ${req.method} tidak diizinkan pada /api/data/:table. Gunakan endpoint khusus terkait.`
+    });
   });
 
   // =========================================================================
@@ -4780,8 +5989,8 @@ async function startServer() {
   // DIGITAL SIGNATURE STORAGE & HOSTING API (FOR EMAILS & RECEIVING)
   // =========================================================================
 
-  // MailerSend Send Email API endpoint (rate-limited for security, strict recipient validation)
-  app.post('/api/email/send', apiRateLimiter(60000, 20), async (req, res) => {
+  // MailerSend Send Email API endpoint (rate-limited for security, strict recipient validation & anti-relay)
+  app.post('/api/email/send', apiRateLimiter(60000, 20), optionalAdminAuth, async (req, res) => {
     try {
       const { to, subject, text, html, fromEmail, fromName } = req.body;
 
@@ -4790,6 +5999,32 @@ async function startServer() {
           success: false,
           message: 'Alamat email tujuan (to) tidak valid.'
         });
+      }
+
+      // Check anti-open-relay authorization:
+      // If caller is NOT authenticated admin/staff, verify recipient is a legitimate guest/tenant
+      if (!req.authProfile) {
+        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+        const serviceKey = getServiceRoleKeyOrThrow();
+        if (supabaseUrl && serviceKey) {
+          const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+          const [
+            { data: bookingMatch },
+            { data: surveyMatch },
+            { data: tenantMatch }
+          ] = await Promise.all([
+            supabaseAdmin.from('bookings').select('id').or(`email.eq.${to},occupant_email.eq.${to}`).limit(1).maybeSingle(),
+            supabaseAdmin.from('surveys').select('id').eq('email', to).limit(1).maybeSingle(),
+            supabaseAdmin.from('tenants').select('id').eq('email', to).limit(1).maybeSingle()
+          ]);
+
+          if (!bookingMatch && !surveyMatch && !tenantMatch) {
+            return res.status(403).json({
+              success: false,
+              message: 'Akses ditolak: Pengiriman email unauthenticated hanya diizinkan kepada pemesan atau penghuni terdaftar.'
+            });
+          }
+        }
       }
 
       let apiKey = process.env.MAILERSEND_API_KEY || '';
@@ -4805,18 +6040,20 @@ async function startServer() {
         });
       }
 
-      const baseFromEmail = fromEmail || process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
+      // Prevent unauthenticated callers from spoofing sender headers
+      const baseFromEmail = (req.authProfile ? fromEmail : undefined) || process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
-      const resolvedFromName = fromName || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+      const resolvedFromName = (req.authProfile ? fromName : undefined) || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
 
-      const rawHtml = html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`;
+      const cleanSubject = String(subject || 'Notifikasi Samara Stay').slice(0, 150);
+      const rawHtml = String(html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`).slice(0, 100000);
       const { html: processedHtml, attachments } = await processEmailHtmlAndSignatures(rawHtml);
 
       const payload: MailerSendPayload = {
         from: { email: resolvedFromEmail, name: resolvedFromName },
-        to: [{ email: to, name: to.split('@')[0] }],
-        subject: subject || 'Notifikasi Samara Stay',
-        text: text || 'Ini adalah notifikasi penting dari Samara Stay.',
+        to: [{ email: to, name: to.split('@')[0].slice(0, 50) }],
+        subject: cleanSubject,
+        text: String(text || 'Ini adalah notifikasi penting dari Samara Stay.').slice(0, 20000),
         html: processedHtml,
         attachments: attachments.length > 0 ? attachments : undefined
       };
@@ -4853,15 +6090,43 @@ async function startServer() {
   // DIGITAL SIGNATURE STORAGE & HOSTING API (FOR EMAILS & RECEIVING)
   // =========================================================================
 
-  app.post('/api/signatures/upload', apiRateLimiter(60000, 30), express.json({ limit: '10mb' }), (req, res) => {
+  app.post('/api/signatures/upload', apiRateLimiter(60000, 30), express.json({ limit: '1mb' }), (req, res) => {
     try {
-      const { image, identifier } = req.body;
+      const { image, identifier } = req.body || {};
       if (!image || typeof image !== 'string' || image.length < 50) {
-        return res.status(400).json({ success: false, error: 'Data gambar tanda tangan tidak valid' });
+        return res.status(400).json({ success: false, error: 'Data gambar tanda tangan tidak valid.' });
+      }
+
+      // Base64 string length limit (max ~1.4MB base64 corresponds to ~1MB binary)
+      if (image.length > 1.5 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: 'Ukuran tanda tangan melebihi batas maksimum 1MB.' });
       }
 
       const cleanBase64 = image.includes(',') ? image.split(',')[1] : image;
-      const cleanId = (identifier || 'sig').replace(/[^a-zA-Z0-9_-]/g, '');
+      const imgBuffer = Buffer.from(cleanBase64, 'base64');
+
+      if (imgBuffer.length > 1024 * 1024) {
+        return res.status(400).json({ success: false, error: 'Ukuran file tanda tangan melebihi 1MB.' });
+      }
+
+      // Magic byte verification for PNG, JPEG, and WebP
+      const isPng = imgBuffer.length >= 8 &&
+        imgBuffer[0] === 0x89 && imgBuffer[1] === 0x50 && imgBuffer[2] === 0x4e && imgBuffer[3] === 0x47 &&
+        imgBuffer[4] === 0x0d && imgBuffer[5] === 0x0a && imgBuffer[6] === 0x1a && imgBuffer[7] === 0x0a;
+      const isJpeg = imgBuffer.length >= 3 &&
+        imgBuffer[0] === 0xff && imgBuffer[1] === 0xd8 && imgBuffer[2] === 0xff;
+      const isWebp = imgBuffer.length >= 12 &&
+        imgBuffer[0] === 0x52 && imgBuffer[1] === 0x49 && imgBuffer[2] === 0x46 && imgBuffer[3] === 0x46 &&
+        imgBuffer[8] === 0x57 && imgBuffer[9] === 0x45 && imgBuffer[10] === 0x42 && imgBuffer[11] === 0x50;
+
+      if (!isPng && !isJpeg && !isWebp) {
+        return res.status(400).json({ success: false, error: 'Format tanda tangan tidak valid. Hanya PNG, JPEG, atau WebP yang diperbolehkan.' });
+      }
+
+      const mimeType = isPng ? 'image/png' : isJpeg ? 'image/jpeg' : 'image/webp';
+      const fileExt = isPng ? 'png' : isJpeg ? 'jpg' : 'webp';
+
+      const cleanId = (identifier || 'sig').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 30);
       const sigId = `sig_${cleanId}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       
       // If store exceeds 500 entries, evict oldest
@@ -4870,11 +6135,11 @@ async function startServer() {
         if (oldestKey) signatureStore.delete(oldestKey);
       }
 
-      signatureStore.set(sigId, { data: cleanBase64, createdAt: Date.now() });
+      signatureStore.set(sigId, { data: cleanBase64, mime: mimeType, createdAt: Date.now() });
 
       const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
       const host = req.get('host');
-      const publicUrl = `${protocol}://${host}/api/signatures/${sigId}.png`;
+      const publicUrl = `${protocol}://${host}/api/signatures/${sigId}.${fileExt}`;
 
       console.log(`[API SIGNATURE] Successfully stored signature ${sigId}, publicUrl: ${publicUrl}`);
       return res.json({
@@ -4888,8 +6153,12 @@ async function startServer() {
     }
   });
 
-  app.get('/api/signatures/:id.png', (req, res) => {
+  app.get(['/api/signatures/:id.png', '/api/signatures/:id.webp', '/api/signatures/:id.jpg', '/api/signatures/:id.jpeg'], (req, res) => {
     const sigId = req.params.id;
+    if (!sigId || !/^[a-zA-Z0-9_-]{5,80}$/.test(sigId)) {
+      return res.status(400).send('Format ID tanda tangan tidak valid');
+    }
+
     const item = signatureStore.get(sigId);
     if (!item) {
       return res.status(404).send('Signature image not found');
@@ -4897,8 +6166,10 @@ async function startServer() {
 
     try {
       const imgBuffer = Buffer.from(item.data, 'base64');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
       res.writeHead(200, {
-        'Content-Type': 'image/png',
+        'Content-Type': item.mime || 'image/png',
         'Content-Length': imgBuffer.length,
         'Cache-Control': 'public, max-age=31536000, immutable'
       });
@@ -4970,7 +6241,12 @@ async function startServer() {
     const email = (user.email || '').trim().toLowerCase();
     const isSuper = isSuperAdminEmail(email);
     const isOwner = isOwnerEmail(email);
-    const targetRole = isSuper ? 'super' : (isOwner ? 'owner' : null);
+    const isAnakOwner = isAnakOwnerEmail(email);
+    const isWhitelisted = isSuper || isOwner || isAnakOwner;
+    const targetRole = isSuper ? 'super' : (isOwner ? 'owner' : (isAnakOwner ? 'anak_owner' : null));
+
+    // Whitelist role elevation ONLY if email is confirmed
+    const isEmailConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at || !isEmailConfirmationEnforced());
 
     let { data: userData, error: userError } = await client
       .from('users')
@@ -4982,9 +6258,10 @@ async function startServer() {
       console.error('[AUTH API] Error fetching user profile:', userError);
     }
 
-    // If existing user profile exists, verify and elevate role ONLY if whitelisted as owner/super
+    // If existing user profile exists, verify and elevate role ONLY if whitelisted AND email confirmed
     if (userData) {
-      if (targetRole && userData.role !== targetRole) {
+      if (isWhitelisted && targetRole && isEmailConfirmed && userData.role !== targetRole) {
+        const oldRole = userData.role;
         userData.role = targetRole;
         userData.role_id = isSuper ? 1 : 2;
         userData.active = true;
@@ -4995,9 +6272,17 @@ async function startServer() {
             const adminClient = createClient(supabaseUrl, serviceKey);
             await adminClient.from('users').update({ 
               role: targetRole, 
-              role_id: isSuper ? 1 : 2,
+              role_id: isSuper ? 1 : 2, 
               active: true 
             }).eq('id', user.id);
+
+            // Audit log for whitelist elevation
+            await adminClient.from('activity_logs').insert({
+              admin_name: 'System Security',
+              action: 'WHITELIST_ROLE_ELEVATION',
+              detail: `Pengangkatan peran user ${email} dari "${oldRole}" menjadi "${targetRole}" via whitelist terverifikasi.`,
+              created_at: new Date().toISOString()
+            });
           }
         } catch (e) {
           console.warn('[AUTH API] Role elevation notice:', e);
@@ -5006,16 +6291,21 @@ async function startServer() {
       return userData;
     }
 
-    // Self-healing fallback: Synthesize and persist user profile if missing
-    const userRole = isSuper ? 'super' : (isOwner ? 'owner' : 'staff');
+    // Self-healing fallback: Synthesize and persist user profile if missing.
+    // Whitelist role only if confirmed; otherwise default to 'user' (or 'staff' if legacy) with property_id = null
+    const shouldElevate = isWhitelisted && isEmailConfirmed && targetRole;
+    const userRole = shouldElevate ? targetRole : (process.env.RBAC_V2_ENABLED === 'true' ? 'user' : 'staff');
     userData = {
       id: user.id,
-      full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || (isOwner ? 'Owner Investor' : (isSuper ? 'Super Administrator' : 'User')),
+      full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || (userRole === 'owner' ? 'Owner Investor' : (userRole === 'anak_owner' ? 'Anak Owner' : (userRole === 'super' ? 'Super Administrator' : 'User'))),
       email: email,
       role: userRole,
-      role_id: isSuper ? 1 : (isOwner ? 2 : 4),
-      access: isSuper ? 'Semua Properti (Super Admin)' : (isOwner ? 'Owner Investor Portfolio' : 'Staff akses terbatas'),
+      role_id: shouldElevate ? (isSuper ? 1 : 2) : 4,
+      access: shouldElevate 
+        ? (isSuper ? 'Semua Properti (Super Admin)' : (isOwner ? 'Owner Investor Portfolio' : 'Akses Operasional, Hunian & Keuangan (Anak Owner)'))
+        : (userRole === 'user' ? 'Pengguna Publik Terdaftar' : 'Staff Operasional Terbatas'),
       active: true,
+      property_id: null,
       created_at: new Date().toISOString()
     };
 
@@ -5025,6 +6315,15 @@ async function startServer() {
       if (supabaseUrl && serviceKey) {
         const adminClient = createClient(supabaseUrl, serviceKey);
         await adminClient.from('users').upsert(userData, { onConflict: 'id' });
+
+        if (shouldElevate) {
+          await adminClient.from('activity_logs').insert({
+            admin_name: 'System Security',
+            action: 'WHITELIST_ROLE_ELEVATION',
+            detail: `Pembuatan profil baru user ${email} diangkat menjadi "${targetRole}" via whitelist terverifikasi.`,
+            created_at: new Date().toISOString()
+          });
+        }
       }
     } catch (e) {
       console.warn('[AUTH API] Profile persistence notice:', e);
@@ -5044,87 +6343,50 @@ async function startServer() {
 
       const cleanEmail = email.trim().toLowerCase();
       const cleanPassword = password.trim();
+      const ipKey = `ip:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+      const emailKey = `email:${cleanEmail}`;
+
+      if (isLoginRateLimited(ipKey) || isLoginRateLimited(emailKey)) {
+        return res.status(429).json({
+          success: false,
+          error: 'Terlalu banyak percobaan login gagal. Demi keamanan, akun terkunci sementara selama 15 menit.'
+        });
+      }
+
       const isSuper = isSuperAdminEmail(cleanEmail);
       const isOwner = isOwnerEmail(cleanEmail);
+      const isAnakOwner = isAnakOwnerEmail(cleanEmail);
 
       const client = getSupabaseServerClient();
-      let signInResult = await client.auth.signInWithPassword({
+      const signInResult = await client.auth.signInWithPassword({
         email: cleanEmail,
         password: cleanPassword
       });
 
-      // Self-Healing Auth Recovery:
-      // If sign-in failed (invalid credentials, unconfirmed email, or account not yet in Supabase Auth),
-      // auto-provision or auto-confirm the user using Supabase Admin API
       if (signInResult.error || !signInResult.data?.session || !signInResult.data?.user) {
-        try {
-          const serviceKey = getServiceRoleKeyOrThrow();
-          const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-          if (supabaseUrl && serviceKey) {
-            const adminClient = createClient(supabaseUrl, serviceKey, {
-              auth: { autoRefreshToken: false, persistSession: false }
-            });
-
-            // 1. Check if user already exists in Supabase Auth
-            const { data: usersList } = await adminClient.auth.admin.listUsers();
-            const existingAuthUser = usersList?.users?.find(
-              (u: any) => (u.email || '').trim().toLowerCase() === cleanEmail
-            );
-
-            if (existingAuthUser) {
-              // User exists in auth -> confirm email and sync password
-              console.log(`[AUTH API] Auto-recovering auth user ${cleanEmail}...`);
-              await adminClient.auth.admin.updateUserById(existingAuthUser.id, {
-                email_confirm: true,
-                password: cleanPassword,
-                user_metadata: {
-                  full_name: isOwner ? 'Owner Investor' : (isSuper ? 'Super Administrator' : (existingAuthUser.user_metadata?.full_name || 'User'))
-                }
-              });
-            } else {
-              // User does not exist in auth -> create with confirmed email
-              console.log(`[AUTH API] Auto-provisioning new auth user ${cleanEmail}...`);
-              const fullName = isSuper ? 'Super Administrator' : (isOwner ? 'Owner Investor' : cleanEmail.split('@')[0]);
-              const { data: createdAuth } = await adminClient.auth.admin.createUser({
-                email: cleanEmail,
-                password: cleanPassword,
-                email_confirm: true,
-                user_metadata: { full_name: fullName }
-              });
-
-              if (createdAuth?.user) {
-                const targetRole = isSuper ? 'super' : (isOwner ? 'owner' : 'staff');
-                await adminClient.from('users').upsert({
-                  id: createdAuth.user.id,
-                  email: cleanEmail,
-                  full_name: fullName,
-                  role: targetRole,
-                  role_id: isSuper ? 1 : (isOwner ? 2 : 4),
-                  active: true,
-                  created_at: new Date().toISOString()
-                }, { onConflict: 'id' });
-              }
-            }
-
-            // Retry signInWithPassword
-            signInResult = await client.auth.signInWithPassword({
-              email: cleanEmail,
-              password: cleanPassword
-            });
-          }
-        } catch (recoverErr) {
-          console.warn('[AUTH API] Auto-recovery attempt notice:', recoverErr);
-        }
-      }
-
-      if (signInResult.error || !signInResult.data?.session || !signInResult.data?.user) {
+        recordLoginFailure(ipKey);
+        recordLoginFailure(emailKey);
         return res.status(401).json({
           success: false,
-          error: signInResult.error?.message || 'Email atau kata sandi yang Anda masukkan salah. Silakan periksa kembali atau gunakan tombol Kredensial Cepat.'
+          error: 'Email atau kata sandi yang Anda masukkan salah. Silakan periksa kembali.'
         });
       }
 
+      // Successful credentials - clear failure record
+      clearLoginFailures(ipKey);
+      clearLoginFailures(emailKey);
+
       const { session, user } = signInResult.data;
+
+      // Email confirmation enforcement check: All accounts (especially privileged ones) must be confirmed if enforced!
+      const isConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at);
+      if (!isConfirmed && isEmailConfirmationEnforced()) {
+        return res.status(403).json({
+          success: false,
+          error: 'Email Anda belum dikonfirmasi. Silakan periksa kotak masuk/spam email Anda dan klik tautan konfirmasi sebelum masuk.'
+        });
+      }
+
       const authClient = getSupabaseServerClient(session.access_token);
       const userData = await getOrMigrateUserProfile(authClient, user);
 
@@ -5133,23 +6395,24 @@ async function startServer() {
         if (!userData.active) {
           return res.status(403).json({ success: false, error: 'Akun Anda dinonaktifkan oleh administrator.' });
         }
+        const effectiveRole = resolveEffectiveRole(userData, user.email || '', isConfirmed || !isEmailConfirmationEnforced());
         profile = {
           id: user.id,
           email: user.email || '',
-          name: userData.full_name || user.email?.split('@')[0] || 'User',
-          role: userData.role || 'user',
-          raw_role: userData.role || 'user',
+          name: userData.full_name || user.email?.split('@')[0] || (effectiveRole === 'anak_owner' ? 'Anak Owner' : 'User'),
+          role: effectiveRole,
+          raw_role: effectiveRole,
           property_id: userData.property_id !== undefined ? userData.property_id : null
         };
       } else {
         const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
-        const defaultRole = isSuper ? 'super' : (isOwner ? 'owner' : 'staff');
+        const effectiveRole = resolveEffectiveRole(null, user.email || '', isConfirmed || !isEmailConfirmationEnforced());
         profile = {
           id: user.id,
           email: user.email || '',
           name: fullName,
-          role: defaultRole,
-          raw_role: defaultRole,
+          role: effectiveRole,
+          raw_role: effectiveRole,
           property_id: null
         };
       }
@@ -5179,95 +6442,12 @@ async function startServer() {
       const cleanEmail = email.trim().toLowerCase();
       const cleanPassword = password.trim();
       const cleanFullName = fullName.trim();
-      const isSuper = isSuperAdminEmail(cleanEmail);
-      const isOwner = isOwnerEmail(cleanEmail);
-      const targetRole = isSuper ? 'super' : (isOwner ? 'owner' : 'staff');
-      const targetRoleId = isSuper ? 1 : (isOwner ? 2 : 4);
+      if (cleanPassword.length < 6) {
+        return res.status(400).json({ success: false, error: 'Password minimal harus 6 karakter.' });
+      }
 
       const client = getSupabaseServerClient();
       
-      // Attempt registration using adminClient with pre-confirmed email first to avoid confirmation friction
-      try {
-        const serviceKey = getServiceRoleKeyOrThrow();
-        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-        if (supabaseUrl && serviceKey) {
-          const adminClient = createClient(supabaseUrl, serviceKey, {
-            auth: { autoRefreshToken: false, persistSession: false }
-          });
-
-          // Check if already registered
-          const { data: usersList } = await adminClient.auth.admin.listUsers();
-          const existing = usersList?.users?.find((u: any) => (u.email || '').trim().toLowerCase() === cleanEmail);
-
-          if (existing) {
-            // Update password and confirm email
-            await adminClient.auth.admin.updateUserById(existing.id, {
-              password: cleanPassword,
-              email_confirm: true,
-              user_metadata: { full_name: cleanFullName }
-            });
-            await adminClient.from('users').upsert({
-              id: existing.id,
-              email: cleanEmail,
-              full_name: cleanFullName,
-              role: targetRole,
-              role_id: targetRoleId,
-              active: true
-            }, { onConflict: 'id' });
-          } else {
-            const { data: createdAuth, error: createErr } = await adminClient.auth.admin.createUser({
-              email: cleanEmail,
-              password: cleanPassword,
-              email_confirm: true,
-              user_metadata: { full_name: cleanFullName }
-            });
-
-            if (createErr) {
-              throw createErr;
-            }
-
-            if (createdAuth?.user) {
-              await adminClient.from('users').upsert({
-                id: createdAuth.user.id,
-                email: cleanEmail,
-                full_name: cleanFullName,
-                role: targetRole,
-                role_id: targetRoleId,
-                active: true,
-                created_at: new Date().toISOString()
-              }, { onConflict: 'id' });
-            }
-          }
-
-          // Directly sign in to get active session
-          const signInRes = await client.auth.signInWithPassword({
-            email: cleanEmail,
-            password: cleanPassword
-          });
-
-          if (signInRes.data?.session && signInRes.data?.user) {
-            const { session, user } = signInRes.data;
-            setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
-            return res.json({
-              success: true,
-              user: {
-                id: user.id,
-                email: cleanEmail,
-                name: cleanFullName,
-                role: targetRole,
-                raw_role: targetRole
-              },
-              access_token: session.access_token,
-              refresh_token: session.refresh_token,
-              expires_in: session.expires_in
-            });
-          }
-        }
-      } catch (adminErr) {
-        console.warn('[AUTH API] Admin registration fallback notice:', adminErr);
-      }
-
-      // Standard Supabase client signUp fallback
       const { data, error } = await client.auth.signUp({
         email: cleanEmail,
         password: cleanPassword,
@@ -5279,25 +6459,46 @@ async function startServer() {
       });
 
       if (error) {
+        // Prevent user enumeration: if already registered, return generic message
+        if (error.message?.toLowerCase().includes('already registered') || error.status === 422) {
+          return res.json({
+            success: true,
+            message: 'Pendaftaran diproses. Jika email belum terdaftar, tautan konfirmasi telah dikirim.'
+          });
+        }
         return res.status(400).json({ success: false, error: error.message });
       }
 
       if (data.user) {
+        // Public registration: do NOT elevate whitelist here! Whitelist elevation happens only on verified email.
+        const targetRole = process.env.RBAC_V2_ENABLED === 'true' ? 'user' : 'staff';
+        const targetRoleId = 4;
+
         const newUserRecord = {
           id: data.user.id,
           email: cleanEmail,
           full_name: cleanFullName,
           role: targetRole,
           role_id: targetRoleId,
+          access: targetRole === 'user' ? 'Pengguna Publik Terdaftar' : 'Staff Operasional Terbatas',
           active: true,
+          property_id: null,
           created_at: new Date().toISOString()
         };
 
+        // Create user record using service role client, not client JWT
+        try {
+          const serviceKey = getServiceRoleKeyOrThrow();
+          const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+          if (supabaseUrl && serviceKey) {
+            const adminClient = createClient(supabaseUrl, serviceKey);
+            await adminClient.from('users').upsert(newUserRecord, { onConflict: 'id' });
+          }
+        } catch (dbErr) {
+          console.warn('[Register] users table provisioning notice:', dbErr);
+        }
+
         if (data.session) {
-          const authClient = getSupabaseServerClient(data.session.access_token);
-          try {
-            await authClient.from('users').upsert(newUserRecord, { onConflict: 'id' });
-          } catch (e) {}
           setAuthCookies(res, data.session.access_token, data.session.refresh_token, data.session.expires_in);
           return res.json({
             success: true,
@@ -5314,33 +6515,9 @@ async function startServer() {
           });
         }
 
-        // Try instant sign in
-        const signInRes = await client.auth.signInWithPassword({
-          email: cleanEmail,
-          password: cleanPassword
-        });
-
-        if (signInRes.data?.session && signInRes.data?.user) {
-          const { session, user } = signInRes.data;
-          setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
-          return res.json({
-            success: true,
-            user: {
-              id: user.id,
-              email: cleanEmail,
-              name: cleanFullName,
-              role: targetRole,
-              raw_role: targetRole
-            },
-            access_token: session.access_token,
-            refresh_token: session.refresh_token,
-            expires_in: session.expires_in
-          });
-        }
-
         return res.json({
           success: true,
-          message: 'Pendaftaran berhasil! Akun Anda telah siap, silakan masuk.'
+          message: 'Pendaftaran berhasil! Silakan periksa email Anda untuk konfirmasi akun.'
         });
       }
 
@@ -5394,17 +6571,16 @@ async function startServer() {
             const { session, user } = data;
             setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
             
+            const isConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at || !isEmailConfirmationEnforced());
             const userData = await getOrMigrateUserProfile(client, user);
-            const isSuper = isSuperAdminEmail(user.email || '');
-            const isOwner = isOwnerEmail(user.email || '');
-            const userRole = userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
+            const userRole = resolveEffectiveRole(userData, user.email || '', isConfirmed);
             
             return res.json({
               success: true,
               user: {
                 id: user.id,
                 email: user.email || '',
-                name: userData?.full_name || user.email?.split('@')[0] || 'User',
+                name: userData?.full_name || user.email?.split('@')[0] || (userRole === 'anak_owner' ? 'Anak Owner' : 'User'),
                 role: userRole,
                 raw_role: userRole,
                 property_id: userData?.property_id !== undefined ? userData.property_id : null
@@ -5430,17 +6606,16 @@ async function startServer() {
             const { session, user: refreshedUser } = data;
             setAuthCookies(res, session.access_token, session.refresh_token, session.expires_in);
             
+            const isRefreshedConfirmed = Boolean(refreshedUser.email_confirmed_at || (refreshedUser as any).confirmed_at || !isEmailConfirmationEnforced());
             const userData = await getOrMigrateUserProfile(freshClient, refreshedUser);
-            const isSuper = isSuperAdminEmail(refreshedUser.email || '');
-            const isOwner = isOwnerEmail(refreshedUser.email || '');
-            const userRole = userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
+            const userRole = resolveEffectiveRole(userData, refreshedUser.email || '', isRefreshedConfirmed);
             
             return res.json({
               success: true,
               user: {
                 id: refreshedUser.id,
                 email: refreshedUser.email || '',
-                name: userData?.full_name || refreshedUser.email?.split('@')[0] || 'User',
+                name: userData?.full_name || refreshedUser.email?.split('@')[0] || (userRole === 'anak_owner' ? 'Anak Owner' : 'User'),
                 role: userRole,
                 raw_role: userRole,
                 property_id: userData?.property_id !== undefined ? userData.property_id : null
@@ -5456,6 +6631,7 @@ async function startServer() {
       }
 
       // Fetch user profile from public.users table
+      const isUserConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at || !isEmailConfirmationEnforced());
       const userData = await getOrMigrateUserProfile(client, user);
 
       if (userData && !userData.active) {
@@ -5463,15 +6639,13 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Akun Anda dinonaktifkan' });
       }
 
-      const isSuper = isSuperAdminEmail(user.email || '');
-      const isOwner = isOwnerEmail(user.email || '');
-      const userRole = userData?.role || (isSuper ? 'super' : (isOwner ? 'owner' : 'user'));
+      const userRole = resolveEffectiveRole(userData, user.email || '', isUserConfirmed);
       return res.json({
         success: true,
         user: {
           id: user.id,
           email: user.email || '',
-          name: userData?.full_name || user.email?.split('@')[0] || 'User',
+          name: userData?.full_name || user.email?.split('@')[0] || (userRole === 'anak_owner' ? 'Anak Owner' : 'User'),
           role: userRole,
           raw_role: userRole,
           property_id: userData?.property_id !== undefined ? userData.property_id : null
@@ -5587,7 +6761,7 @@ async function startServer() {
   // =========================================================================
 
   // 1. Manual Match Endpoint
-  app.post('/api/admin/reconciliation/match', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/reconciliation/match', requireAdminAuth, requirePermission('journals', 'update'), express.json(), async (req, res) => {
     try {
       const { bankStatementId, clearingId, reconciledAmount, feeAmount, notes, createdBy } = req.body;
 
@@ -5638,7 +6812,7 @@ async function startServer() {
   });
 
   // 2. Automated Matching Engine Endpoint
-  app.post('/api/admin/reconciliation/auto-match', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/reconciliation/auto-match', requireAdminAuth, requirePermission('journals', 'update'), express.json(), async (req, res) => {
     try {
       let { propertyId } = req.body;
 
@@ -5748,8 +6922,112 @@ async function startServer() {
     }
   });
 
+  // 2b. Finance Reconcile All Endpoint (Secured: requireAdminAuth + requirePermission('finance', 'manage'))
+  app.post('/api/finance/reconcile-all', requireAdminAuth, requirePermission('finance', 'manage'), express.json(), async (req, res) => {
+    try {
+      let { propertyId } = req.body;
+
+      const userAssignedProp = req.authProfile?.property_id;
+      if (userAssignedProp !== null && userAssignedProp !== undefined) {
+        if (propertyId && String(propertyId) !== String(userAssignedProp)) {
+          return res.status(403).json({ success: false, error: `Akses ditolak. Anda hanya berwenang untuk Properti ID ${userAssignedProp}.` });
+        }
+        propertyId = userAssignedProp;
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase URL atau Key belum dikonfigurasi di server.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Execute auto-match pass across all pending clearing entries
+      let stmtQuery = supabaseAdmin
+        .from('bank_statement_items')
+        .select('*')
+        .eq('matched', false)
+        .eq('type', 'credit');
+
+      const { data: bankItems, error: stmtErr } = await stmtQuery;
+      if (stmtErr) return res.status(500).json({ success: false, error: stmtErr.message });
+
+      let clrQuery = supabaseAdmin
+        .from('midtrans_clearing_transactions')
+        .select('*')
+        .in('clearing_status', ['pending', 'cleared', 'partially_cleared']);
+
+      if (propertyId) {
+        clrQuery = clrQuery.eq('property_id', propertyId);
+      }
+
+      const { data: clearingItems, error: clrErr } = await clrQuery;
+      if (clrErr) return res.status(500).json({ success: false, error: clrErr.message });
+
+      let matchedCount = 0;
+      let totalAmountMatched = 0;
+      const matchResults: any[] = [];
+
+      for (const item of bankItems || []) {
+        let match = (clearingItems || []).find((c: any) =>
+          c.midtrans_order_id && item.desc && item.desc.toUpperCase().includes(c.midtrans_order_id.toUpperCase())
+        );
+
+        if (!match) {
+          const amountCandidates = (clearingItems || []).filter((c: any) =>
+            Math.abs(Number(c.gross_amount) - Number(item.amount)) < 1 ||
+            Math.abs(Number(c.net_amount) - Number(item.amount)) < 1
+          );
+
+          if (amountCandidates.length === 1) {
+            match = amountCandidates[0];
+          }
+        }
+
+        if (match) {
+          const recAmount = Number(item.amount);
+          const feeAmt = Number(match.fee_amount || 0);
+
+          const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('reconcile_bank_statement_entry', {
+            p_bank_statement_id: item.id,
+            p_clearing_id: match.id,
+            p_reconciled_amount: recAmount,
+            p_fee_amount: feeAmt,
+            p_created_by: req.authProfile?.full_name || req.authProfile?.email || 'Finance Administrator',
+            p_notes: `Rekonsiliasi sistem akuntansi finance (${match.midtrans_order_id})`
+          });
+
+          if (!rpcErr && rpcRes?.success) {
+            matchedCount++;
+            totalAmountMatched += recAmount;
+            matchResults.push({
+              bankStatementId: item.id,
+              orderId: match.midtrans_order_id,
+              amount: recAmount,
+              fee: feeAmt
+            });
+
+            const idx = clearingItems.findIndex((c: any) => c.id === match.id);
+            if (idx !== -1) clearingItems.splice(idx, 1);
+          }
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        matchedCount,
+        totalAmountMatched,
+        matchResults,
+        message: `Proses rekonsiliasi finance selesai. ${matchedCount} transaksi berhasil dicocokkan.`
+      });
+    } catch (err: any) {
+      console.error('[Finance API] reconcile-all failed:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Internal server error.' });
+    }
+  });
+
   // 3. Bank Statement Batch Import Endpoint
-  app.post('/api/admin/bank-statement/import', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/bank-statement/import', requireAdminAuth, requirePermission('journals', 'create'), express.json(), async (req, res) => {
     try {
       const { items } = req.body;
       if (!Array.isArray(items) || items.length === 0) {
@@ -5798,7 +7076,7 @@ async function startServer() {
   });
 
   // 4. Unmatch / Unreconcile Endpoint (Reversal)
-  app.post('/api/admin/reconciliation/unmatch', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/reconciliation/unmatch', requireAdminAuth, requirePermission('journals', 'update'), express.json(), async (req, res) => {
     try {
       const { matchId, reason, createdBy } = req.body;
       if (!matchId) {
@@ -5835,7 +7113,7 @@ async function startServer() {
   });
 
   // 5. Clearing Transaction Adjustment Endpoint
-  app.post('/api/admin/reconciliation/adjust', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/reconciliation/adjust', requireAdminAuth, requirePermission('journals', 'update'), express.json(), async (req, res) => {
     try {
       const { clearingId, adjustmentAmount, adjustmentAccountId, category, notes, createdBy } = req.body;
       if (!clearingId || adjustmentAmount === undefined) {
@@ -5885,7 +7163,7 @@ async function startServer() {
   });
 
   // 6. COA Diagnostic & Integrity Verification Endpoint
-  app.get('/api/admin/accounting/diagnostic-coa', requireAdminAuth, async (req, res) => {
+  app.get('/api/admin/accounting/diagnostic-coa', requireAdminAuth, requirePermission('system_settings', 'read'), async (req, res) => {
     try {
       const autoRepair = req.query.repair === 'true';
       const forceCheck = req.query.force === 'true';
@@ -5909,7 +7187,7 @@ async function startServer() {
   });
 
   // 7. COA Auto-Repair / Seeding Endpoint
-  app.post('/api/admin/accounting/diagnostic-coa/repair', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/accounting/diagnostic-coa/repair', requireAdminAuth, requirePermission('system_settings', 'repair'), express.json(), async (req, res) => {
     try {
       if (req.authProfile?.role === 'staff') {
         return res.status(403).json({ error: 'Akses ditolak. Fitur perbaikan Chart of Accounts memerlukan wewenang Super Admin.' });
@@ -5934,7 +7212,7 @@ async function startServer() {
   });
 
   // 8. Accounting Integrity Audit Endpoint
-  app.get('/api/admin/accounting/integrity-audit', requireAdminAuth, async (req, res) => {
+  app.get('/api/admin/accounting/integrity-audit', requireAdminAuth, requirePermission('system_settings', 'read'), async (req, res) => {
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
@@ -5958,7 +7236,7 @@ async function startServer() {
   });
 
   // 9. Accounting Integrity Auto-Repair Endpoint
-  app.post('/api/admin/accounting/integrity-audit/repair', requireAdminAuth, express.json(), async (req, res) => {
+  app.post('/api/admin/accounting/integrity-audit/repair', requireAdminAuth, requirePermission('system_settings', 'repair'), express.json(), async (req, res) => {
     try {
       if (req.authProfile?.role === 'staff') {
         return res.status(403).json({ error: 'Akses ditolak. Fitur perbaikan integritas akuntansi memerlukan wewenang Super Admin.' });

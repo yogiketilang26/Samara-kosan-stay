@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 export interface UserProfile {
   id: string;
   email: string;
-  role: 'super' | 'super_admin' | 'owner' | 'admin' | 'staff' | 'finance' | 'user' | 'tenant';
+  role: 'super' | 'super_admin' | 'owner' | 'admin' | 'staff' | 'finance' | 'user' | 'tenant' | 'anak_owner' | 'anak owner';
   raw_role?: string;
   name: string;
 }

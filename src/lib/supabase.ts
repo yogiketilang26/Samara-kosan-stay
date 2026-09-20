@@ -761,6 +761,9 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
   }
 
   if (table === 'users' && activePayload.role) {
+    if (activePayload.role === 'anak_owner' || activePayload.role === 'anak owner') {
+      activePayload.role = 'admin';
+    }
     const allowed = ['super', 'admin', 'staff', 'finance', 'owner', 'super_admin'];
     if (!allowed.includes(activePayload.role)) {
       activePayload.role = 'admin';
@@ -768,6 +771,9 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
   }
 
   if (table === 'profiles' && activePayload.role) {
+    if (activePayload.role === 'anak_owner' || activePayload.role === 'anak owner') {
+      activePayload.role = 'admin';
+    }
     const allowed = ['user', 'admin', 'super_admin', 'owner', 'finance', 'staff'];
     if (!allowed.includes(activePayload.role)) {
       activePayload.role = 'user';
@@ -911,6 +917,25 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
           } catch (serverErr) {
             console.warn('[safeSupabaseUpsert] Server fallback notice for settings update:', serverErr);
           }
+        } else if (table === 'users') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/users/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('users', 'UPDATE', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for users update:', serverErr);
+          }
         }
       }
       if (result && !result.error && result.data && result.data.length > 0) {
@@ -918,6 +943,14 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
       }
       return result;
     } else {
+      // Database Constraint Guard: users table id cannot be null
+      if (table === 'users' && !activePayload.id) {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+          activePayload.id = crypto.randomUUID();
+        } else {
+          activePayload.id = `usr-${Date.now()}`;
+        }
+      }
       result = await supabase.from(table).insert(activePayload).select();
       let insertRetries = 0;
       while (result.error && result.error.message?.includes('Could not find the') && insertRetries < 10) {
@@ -991,6 +1024,25 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
           } catch (serverErr) {
             console.warn('[safeSupabaseUpsert] Server fallback notice for settings:', serverErr);
           }
+        } else if (table === 'users') {
+          try {
+            const headers = await getAuthHeaders();
+            const apiRes = await fetch('/api/admin/users/save', {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id: activePayload.id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation('users', 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn('[safeSupabaseUpsert] Server fallback notice for users insert:', serverErr);
+          }
         }
       }
       if (result && !result.error && result.data && result.data.length > 0) {
@@ -1004,7 +1056,7 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
   }
 }
 
-function logSupabaseError(context: string, error: any, isException = false) {
+export function logSupabaseError(context: string, error: any, isException = false) {
   const errMsg = typeof error === 'string' ? error : (error?.message || error?.details || JSON.stringify(error || ''));
   if (
     error?.code === 'PGRST205' || 
@@ -3493,6 +3545,24 @@ export const database = {
   // --- USERS ---
   async fetchUsers(options?: { limit?: number; offset?: number }): Promise<UserSystem[]> {
     if (!isSupabaseConfigured) return [];
+    // 1. Try secure server-side endpoint first (bypasses anon RLS restrictions)
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/users', {
+        headers,
+        credentials: 'include',
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.users)) {
+          return json.users as UserSystem[];
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[Supabase API] fetchUsers fallback to client query:', apiErr);
+    }
+
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
     try {
@@ -3505,7 +3575,16 @@ export const database = {
         logSupabaseError('fetchUsers', error);
         return [];
       }
-      return data as UserSystem[];
+      return ((data || []) as UserSystem[]).map((u: any) => {
+        const isAnakOwner = (u.email || '').toLowerCase().includes('anakowner') ||
+          (u.email || '').toLowerCase() === 'sabita@samarastay.co' ||
+          (u.access && u.access.toLowerCase().includes('anak owner')) ||
+          u.role === 'anak_owner' || u.role === 'anak owner';
+        return {
+          ...u,
+          role: isAnakOwner ? 'anak_owner' : u.role
+        };
+      }) as UserSystem[];
     } catch (err) {
       logSupabaseError('fetchUsers', err, true);
       return [];
@@ -3513,18 +3592,49 @@ export const database = {
   },
 
   async saveUser(user: Partial<UserSystem>): Promise<UserSystem> {
+    // 1. Prioritize secure server-side endpoint with elevated service_role privileges
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/users/save', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(user),
+        signal: AbortSignal.timeout(8000)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          notifyRealtimeMutation('users', user.id ? 'UPDATE' : 'INSERT', json.data);
+          await this.logActivity("System", user.id ? "UPDATE_USER" : "CREATE_USER", `User ${json.data.full_name || user.full_name} (${json.data.role || user.role}) disimpan.`);
+          return json.data as UserSystem;
+        }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson.error) {
+          throw new Error(errJson.error);
+        }
+      }
+    } catch (serverErr: any) {
+      if (serverErr.message && !serverErr.message.includes('fetch') && !serverErr.message.includes('Failed to fetch') && !serverErr.message.includes('timeout')) {
+        throw serverErr;
+      }
+      console.warn('[saveUser] Server endpoint notice, falling back to direct client save:', serverErr);
+    }
+
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
-      const id = user.id;
-      const payload = { ...user };
-      delete (payload as any).id;
+      const id = user.id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `usr-${Date.now()}`);
+      const payload = { ...user, id };
+      delete (payload as any).password;
 
-      const { data, error } = await safeSupabaseUpsert('users', payload, id);
+      const { data, error } = await safeSupabaseUpsert('users', payload, user.id);
       if (error) {
         logSupabaseError('saveUser', error);
         throw new Error(`Gagal menyimpan user: ${error.message}`);
       }
-      const updated = (data && data.length > 0 ? data[0] : user) as UserSystem;
+      const updated = (data && data.length > 0 ? data[0] : payload) as UserSystem;
+      notifyRealtimeMutation('users', user.id ? 'UPDATE' : 'INSERT', updated);
       await this.logActivity("System", user.id ? "UPDATE_USER" : "CREATE_USER", `User ${updated.full_name} (${updated.role}) disimpan.`);
       
       return updated;
@@ -3549,19 +3659,43 @@ export const database = {
   },
 
   async deleteUser(id: string): Promise<boolean> {
-    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
-      const { error } = await supabase.from('users').delete().eq('id', id);
-      if (error) {
-        logSupabaseError('deleteUser', error);
-        throw new Error(`Gagal menghapus user: ${error.message}`);
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/admin/users/${id}`, {
+        method: 'DELETE',
+        headers,
+        credentials: 'include',
+        signal: AbortSignal.timeout(8000)
+      });
+      if (res.ok) {
+        notifyRealtimeMutation('users', 'DELETE', { id });
+        await this.logActivity("System", "DELETE_USER", `Menghapus user ID: ${id}`);
+        return true;
       }
-      await this.logActivity("System", "DELETE_USER", `Menghapus user ID: ${id}`);
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Gagal menghapus pengguna melalui server.');
+    } catch (serverErr: any) {
+      // If server responded with an error message (e.g. 403/400/RBAC rejection), never bypass to direct client delete
+      if (serverErr.message && !serverErr.message.includes('fetch') && !serverErr.message.includes('Failed to fetch') && !serverErr.message.includes('timeout')) {
+        throw serverErr;
+      }
+      console.warn('[deleteUser] Server endpoint notice, falling back to direct client deletion:', serverErr);
 
-      return true;
-    } catch (err: any) {
-      console.error('deleteUser failed:', err);
-      throw err;
+      if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+      try {
+        const { error } = await supabase.from('users').delete().eq('id', id);
+        if (error) {
+          logSupabaseError('deleteUser', error);
+          throw new Error(`Gagal menghapus user: ${error.message}`);
+        }
+        notifyRealtimeMutation('users', 'DELETE', { id });
+        await this.logActivity("System", "DELETE_USER", `Menghapus user ID: ${id}`);
+
+        return true;
+      } catch (err: any) {
+        console.error('deleteUser failed:', err);
+        throw err;
+      }
     }
   },
 
@@ -3780,160 +3914,26 @@ export const database = {
   async fetchFixedAssets(options?: { limit?: number; offset?: number }): Promise<FixedAsset[]> {
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
-    
-    // Seed sample assets distributed per property for instant out-of-the-box readiness
-    const getDefaultSeedAssets = (): FixedAsset[] => [
-      {
-        id: 101,
-        name: 'AC Daikin Inverter 1 PK',
-        property_id: 1,
-        location: 'Kamar 101 (Lantai 1)',
-        category: 'Elektronik & AC',
-        cost: 4800000,
-        lifeYears: 5,
-        residual: 500000,
-        deprRate: 71667,
-        accumDepr: 358335,
-        maintenance_interval_months: 3,
-        last_maintenance_date: '2026-06-15',
-        next_maintenance_date: '2026-09-15',
-        maintenance_notes: 'Cuci rutin freon & bersihkan filter blower',
-        condition: 'Baik'
-      },
-      {
-        id: 102,
-        name: 'Pompa Air Booster Grundfos Utama',
-        property_id: 1,
-        location: 'Ruang Mesin & Toren Lt. 1',
-        category: 'Mesin & Pompa Air',
-        cost: 3500000,
-        lifeYears: 4,
-        residual: 300000,
-        deprRate: 66667,
-        accumDepr: 200001,
-        maintenance_interval_months: 6,
-        last_maintenance_date: '2026-04-10',
-        next_maintenance_date: '2026-10-10',
-        maintenance_notes: 'Pengecekan pressure switch dan seal mekanis',
-        condition: 'Baik'
-      },
-      {
-        id: 103,
-        name: 'Sistem CCTV IP Hikvision 8 Titik',
-        property_id: 1,
-        location: 'Area Resepsionis, Parkiran, & Tangga',
-        category: 'Keamanan & CCTV',
-        cost: 6500000,
-        lifeYears: 4,
-        residual: 500000,
-        deprRate: 125000,
-        accumDepr: 500000,
-        maintenance_interval_months: 6,
-        last_maintenance_date: '2026-03-01',
-        next_maintenance_date: '2026-09-01',
-        maintenance_notes: 'Pembersihan lensa kamera & backup storage NVR',
-        condition: 'Perlu Servis'
-      },
-      {
-        id: 201,
-        name: 'AC Panasonic Eco 0.5 PK',
-        property_id: 2,
-        location: 'Kamar 201 (Lantai 2)',
-        category: 'Elektronik & AC',
-        cost: 3900000,
-        lifeYears: 5,
-        residual: 400000,
-        deprRate: 58333,
-        accumDepr: 175000,
-        maintenance_interval_months: 3,
-        last_maintenance_date: '2026-07-01',
-        next_maintenance_date: '2026-10-01',
-        maintenance_notes: 'Pembersihan evaporator indoor',
-        condition: 'Baik'
-      },
-      {
-        id: 202,
-        name: 'Toren Air Stainless Penguin 1500L',
-        property_id: 2,
-        location: 'Rooftop Gedung',
-        category: 'Struktur Bangunan',
-        cost: 3200000,
-        lifeYears: 8,
-        residual: 300000,
-        deprRate: 30208,
-        accumDepr: 181250,
-        maintenance_interval_months: 6,
-        last_maintenance_date: '2026-02-15',
-        next_maintenance_date: '2026-08-15',
-        maintenance_notes: 'Kuras endapan lumut dan sanitasi tangki air',
-        condition: 'Perlu Servis'
-      },
-      {
-        id: 203,
-        name: 'Router WiFi Mesh Gigabit Ubiquiti',
-        property_id: 2,
-        location: 'Lorong Lantai 1 & 2',
-        category: 'Elektronik & AC',
-        cost: 2800000,
-        lifeYears: 3,
-        residual: 200000,
-        deprRate: 72222,
-        accumDepr: 216666,
-        maintenance_interval_months: 6,
-        last_maintenance_date: '2026-05-20',
-        next_maintenance_date: '2026-11-20',
-        maintenance_notes: 'Update firmware router & pembersihan debu AP',
-        condition: 'Baik'
-      },
-      {
-        id: 301,
-        name: 'Genset Silent Honda 5 kVA',
-        property_id: 3,
-        location: 'Area Utility Belakang',
-        category: 'Mesin & Pompa Air',
-        cost: 9500000,
-        lifeYears: 6,
-        residual: 1000000,
-        deprRate: 118055,
-        accumDepr: 354165,
-        maintenance_interval_months: 3,
-        last_maintenance_date: '2026-05-10',
-        next_maintenance_date: '2026-08-10',
-        maintenance_notes: 'Ganti oli mesin genset, tes aki & pembersihan filter udara',
-        condition: 'Perlu Servis'
-      },
-      {
-        id: 302,
-        name: 'AC Sharp Plasmacluster 1 PK',
-        property_id: 3,
-        location: 'Kamar 105',
-        category: 'Elektronik & AC',
-        cost: 4400000,
-        lifeYears: 5,
-        residual: 400000,
-        deprRate: 66667,
-        accumDepr: 200001,
-        maintenance_interval_months: 3,
-        last_maintenance_date: '2026-06-25',
-        next_maintenance_date: '2026-09-25',
-        maintenance_notes: 'Pembersihan filter plasmacluster',
-        condition: 'Baik'
-      }
-    ];
 
-    if (!isSupabaseConfigured) {
+    // Helper to sanitize any legacy cached dummy assets from client localStorage
+    const getCleanLocalCache = (): FixedAsset[] => {
       try {
         const raw = localStorage.getItem('kamar_fixed_assets');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        const filtered = parsed.filter((a: any) => ![101, 102, 103, 201, 202, 203, 301, 302].includes(a.id));
+        if (filtered.length !== parsed.length) {
+          localStorage.setItem('kamar_fixed_assets', JSON.stringify(filtered));
         }
-        const seeds = getDefaultSeedAssets();
-        localStorage.setItem('kamar_fixed_assets', JSON.stringify(seeds));
-        return seeds;
+        return filtered;
       } catch {
-        return getDefaultSeedAssets();
+        return [];
       }
+    };
+
+    if (!isSupabaseConfigured) {
+      return getCleanLocalCache();
     }
 
     try {
@@ -3945,27 +3945,12 @@ export const database = {
       
       if (error) {
         logSupabaseError('fetchFixedAssets', error);
-        // Fallback to local storage
-        try {
-          const raw = localStorage.getItem('kamar_fixed_assets');
-          if (raw) return JSON.parse(raw);
-        } catch { /* ignore */ }
-        return getDefaultSeedAssets();
+        return getCleanLocalCache();
       }
 
       if (!data || data.length === 0) {
-        try {
-          const raw = localStorage.getItem('kamar_fixed_assets');
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-          }
-          const seeds = getDefaultSeedAssets();
-          localStorage.setItem('kamar_fixed_assets', JSON.stringify(seeds));
-          return seeds;
-        } catch {
-          return getDefaultSeedAssets();
-        }
+        // Return only real assets saved in local cache, no dummy seeds
+        return getCleanLocalCache();
       }
 
       const mapped = data.map((item: any) => ({
@@ -3996,11 +3981,7 @@ export const database = {
       return mapped;
     } catch (err) {
       logSupabaseError('fetchFixedAssets', err, true);
-      try {
-        const raw = localStorage.getItem('kamar_fixed_assets');
-        if (raw) return JSON.parse(raw);
-      } catch { /* ignore */ }
-      return getDefaultSeedAssets();
+      return getCleanLocalCache();
     }
   },
 

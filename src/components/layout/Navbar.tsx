@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Home, Shield, RefreshCw, Database, Building2, LogOut, Key, UserCheck, ChevronDown, DoorOpen } from 'lucide-react';
 import { isSupabaseConfigured, database } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
@@ -13,8 +13,28 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
   const { user, logout } = useAuth();
   const [showPortalDropdown, setShowPortalDropdown] = useState(false);
 
+  const [simulatedRole, setSimulatedRole] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search).get('role') || new URLSearchParams(window.location.search).get('portal');
+      if (p === 'anak_owner') return 'anak_owner';
+      return localStorage.getItem('samara_simulated_role');
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      setSimulatedRole(e.detail?.role || null);
+    };
+    window.addEventListener('samara-role-simulate', handler);
+    return () => window.removeEventListener('samara-role-simulate', handler);
+  }, []);
+
   const rawRole = (user?.raw_role || user?.role || '').trim().toLowerCase();
-  const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin'));
+  const userEmail = (user?.email || '').toLowerCase();
+  const userAccess = ((user as any)?.access || '').toLowerCase();
+  const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin' || userEmail === 'yogiketilang33@gmail.com' || userEmail.includes('superadmin')));
+  const isAnakOwner = Boolean(user && (rawRole === 'anak_owner' || rawRole === 'anak owner' || userEmail.includes('anakowner') || userEmail === 'sabita@samarastay.co' || userAccess.includes('anak owner')));
   const isOwner = Boolean(user && rawRole === 'owner');
   const isStaff = Boolean(user && rawRole === 'staff');
 
@@ -177,18 +197,45 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
               </button>
             )}
 
-            {/* 3. Super Admin Panel (Strictly shown ONLY for super/admin role or when active) */}
-            {(isSuper || rawRole === 'admin' || currentView === 'admin') && (
+            {/* 3. Super Admin Panel */}
+            {(isSuper || (!isAnakOwner && simulatedRole !== 'anak_owner' && (rawRole === 'admin' || currentView === 'admin'))) && (
               <button
-                onClick={() => setView('admin')}
+                onClick={() => {
+                  localStorage.removeItem('samara_simulated_role');
+                  setSimulatedRole(null);
+                  window.dispatchEvent(new CustomEvent('samara-role-simulate', { detail: { role: null } }));
+                  setView('admin');
+                }}
                 className={`px-3 sm:px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
-                  currentView === 'admin' 
+                  currentView === 'admin' && simulatedRole !== 'anak_owner' && !isAnakOwner
                     ? 'bg-[#2E6F40] text-white shadow-lg' 
                     : 'text-slate-200 hover:text-white hover:bg-white/5'
                 }`}
+                title="Masuk ke Super Admin Panel (Semua Modul Teknis & Manajemen)"
               >
                 <Shield size={14} />
-                Admin Panel
+                {isSuper ? 'Admin Panel (Super)' : 'Admin Panel'}
+              </button>
+            )}
+
+            {/* 3b. Panel Anak Owner (Pilihan khusus Anak Owner & Mode Pengawasan) */}
+            {(isSuper || isAnakOwner || simulatedRole === 'anak_owner' || rawRole === 'admin') && (
+              <button
+                onClick={() => {
+                  localStorage.setItem('samara_simulated_role', 'anak_owner');
+                  setSimulatedRole('anak_owner');
+                  window.dispatchEvent(new CustomEvent('samara-role-simulate', { detail: { role: 'anak_owner' } }));
+                  setView('admin');
+                }}
+                className={`px-3 sm:px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+                  currentView === 'admin' && (isAnakOwner || simulatedRole === 'anak_owner')
+                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/40' 
+                    : 'text-purple-300 hover:text-white hover:bg-purple-500/10'
+                }`}
+                title="Panel Anak Owner: Akses Operasional Kamar, Reservasi & Keuangan"
+              >
+                <UserCheck size={14} className={currentView === 'admin' && (isAnakOwner || simulatedRole === 'anak_owner') ? 'text-white' : 'text-purple-400'} />
+                <span>Panel Anak Owner</span>
               </button>
             )}
 
@@ -208,49 +255,80 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
             )}
 
             {/* 5. Portal Selector for Anonymous / Non-Logged In Users */}
-            {!user && currentView === 'user' && (
+            {!user && (
               <div className="relative">
                 <button
                   onClick={() => setShowPortalDropdown(!showPortalDropdown)}
                   className="px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:bg-white/5 rounded-lg font-medium flex items-center gap-1 cursor-pointer transition-colors"
                 >
                   <Key size={13} className="text-amber-400" />
-                  <span>Portal Operator</span>
+                  <span>Pilih Portal Role</span>
                   <ChevronDown size={12} />
                 </button>
 
                 {showPortalDropdown && (
-                  <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50 text-xs">
-                    <button
-                      onClick={() => {
-                        setShowPortalDropdown(false);
-                        setView('staff');
-                      }}
-                      className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800 hover:text-teal-400 flex items-center gap-2 cursor-pointer font-medium"
-                    >
-                      <DoorOpen size={14} className="text-teal-400" />
-                      <span>Masuk Staff Admin</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowPortalDropdown(false);
-                        setView('admin');
-                      }}
-                      className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800 hover:text-emerald-400 flex items-center gap-2 cursor-pointer font-medium"
-                    >
-                      <Shield size={14} className="text-emerald-400" />
-                      <span>Masuk Admin Panel</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowPortalDropdown(false);
-                        setView('owner');
-                      }}
-                      className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800 hover:text-amber-400 flex items-center gap-2 cursor-pointer font-medium"
-                    >
-                      <Building2 size={14} className="text-amber-400" />
-                      <span>Masuk Owner Portal</span>
-                    </button>
+                  <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50 text-xs divide-y divide-white/5">
+                    <div className="px-3 py-1.5 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
+                      Pilihan Portal Operator
+                    </div>
+                    <div className="py-1">
+                      <button
+                        onClick={() => {
+                          setShowPortalDropdown(false);
+                          setView('staff');
+                        }}
+                        className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800 hover:text-teal-400 flex items-center justify-between cursor-pointer font-medium"
+                      >
+                        <div className="flex items-center gap-2">
+                          <DoorOpen size={14} className="text-teal-400" />
+                          <span>Staff Operasional</span>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 font-mono">staff</span>
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          setShowPortalDropdown(false);
+                          setView('admin');
+                        }}
+                        className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800 hover:text-emerald-400 flex items-center justify-between cursor-pointer font-medium"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Shield size={14} className="text-emerald-400" />
+                          <span>Super Administrator</span>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono">super</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setShowPortalDropdown(false);
+                          window.history.pushState({}, '', '/admin?role=anak_owner');
+                          setView('admin');
+                        }}
+                        className="w-full px-3 py-2 text-left text-purple-200 hover:bg-purple-950/50 hover:text-purple-300 flex items-center justify-between cursor-pointer font-medium"
+                      >
+                        <div className="flex items-center gap-2">
+                          <UserCheck size={14} className="text-purple-400" />
+                          <span className="font-bold">Panel Anak Owner</span>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono font-bold">anak_owner</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setShowPortalDropdown(false);
+                          setView('owner');
+                        }}
+                        className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800 hover:text-amber-400 flex items-center justify-between cursor-pointer font-medium"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Building2 size={14} className="text-amber-400" />
+                          <span>Owner & Investor</span>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">owner</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -264,11 +342,13 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
                 <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
                   isSuper 
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+                    : isAnakOwner
+                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                     : isOwner 
                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' 
                     : 'bg-slate-700 text-slate-300'
                 }`}>
-                  {rawRole ? rawRole.toUpperCase() : 'USER'}
+                  {isAnakOwner ? 'ANAK OWNER' : rawRole ? rawRole.toUpperCase() : 'USER'}
                 </span>
                 <span className="text-[11px] text-slate-300 font-mono hidden xl:inline-block max-w-[140px] truncate">
                   {user.email}

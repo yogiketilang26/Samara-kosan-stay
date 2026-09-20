@@ -528,45 +528,28 @@ export default function Home({}: HomeProps) {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [activeTestimonialIdx, setActiveTestimonialIdx] = useState<number>(0);
 
-  const testimonials = [
-    {
-      initials: "AP",
-      bgClass: "bg-brand-primary",
-      name: "Aditya Pratama",
-      role: "Mahasiswa UI - Depok",
-      text: "Sangat puas tinggal di Samara Stay! WiFi ngebut sekali buat main game dan kerja remote, layanan laundry gratis mingguan sangat meringankan beban pas lagi sibuk kuliah."
-    },
-    {
-      initials: "SD",
-      bgClass: "bg-brand-steel",
-      name: "Sarah Devina",
-      role: "Content Creator - Jakarta",
-      text: "Kamar kostnya estetik dan super bersih, persis dengan yang ada di foto. Semua urusan air, kebersihan, listrik beres semua. CS ramah dan proses payment otomatis lewat Midtrans."
-    },
-    {
-      initials: "RH",
-      bgClass: "bg-brand-taupe",
-      name: "Rian Hidayat",
-      role: "System Analyst - Jaksel",
-      text: "Keamanan CCTV dan kunci elektronik terjamin banget. Layanan perbaikan AC gratis dikerjakan dengan sigap pas saya lapor kendala via sistem admin. Recommended kos eksklusif!"
-    },
-    {
-      initials: "JA",
-      bgClass: "bg-[#2E6F40]",
-      name: "Jessica Amanda",
-      role: "Product Manager - Jakbar",
-      text: "Lingkungan sangat kondusif untuk istirahat setelah seharian kerja di kantor SCBD. Parkiran luas dan aman, serta staf housekeeping-nya jujur dan ramah banget."
-    },
-    {
-      initials: "FA",
-      bgClass: "bg-amber-600",
-      name: "Farhan Alamsyah",
-      role: "Tech Professional - BSD",
-      text: "Proses booking kamar super gampang dan bisa langsung dapet kovenan sewa digital. Manajemen transparan dan gak ribet kalau mau perpanjang kontrak bulanan."
+  const testimonials: {
+    initials: string;
+    bgClass: string;
+    name: string;
+    role: string;
+    text: string;
+  }[] = (() => {
+    try {
+      if (settings?.testimonials) {
+        const parsed = JSON.parse(settings.testimonials);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error("Error parsing testimonials:", e);
     }
-  ];
+    return [];
+  })();
 
   useEffect(() => {
+    if (testimonials.length <= 1) return;
     const interval = setInterval(() => {
       setActiveTestimonialIdx(prev => (prev + 1) % testimonials.length);
     }, 6000);
@@ -2403,82 +2386,84 @@ export default function Home({}: HomeProps) {
             </div>
           </div>
 
-          {/* Testimoni Penghuni */}
-          <div className="bg-[#F8F9FA] py-16 border-y border-brand-beige">
-            <div className="max-w-6xl mx-auto px-4 space-y-10">
-              <div className="text-center space-y-3">
-                <span className="text-[10px] font-extrabold text-brand-primary tracking-widest uppercase font-mono bg-brand-beige/35 px-2.5 py-1 rounded-md border border-brand-beige/70">
-                  {lang === 'id' ? 'Testimoni Penghuni' : 'Tenant Testimonials'}
-                </span>
-                <h2 className="text-2xl font-black text-brand-primary">
-                  {lang === 'id' ? 'Dipercaya Oleh 1,000+ Penghuni Aktif' : 'Trusted by 1,000+ Active Tenants'}
-                </h2>
-                <p className="text-brand-steel text-xs max-w-lg mx-auto font-light">
-                  {lang === 'id' ? 'Simak ulasan tulus dari rekan mahasiswa dan pekerja muda yang telah menetap nyaman bersama kami.' : 'Read honest reviews from students and young working professionals who live comfortably with us.'}
-                </p>
-              </div>
+          {/* Testimoni Penghuni (Hanya tampil jika ada testimoni nyata) */}
+          {testimonials.length > 0 && testimonials[activeTestimonialIdx] && (
+            <div className="bg-[#F8F9FA] py-16 border-y border-brand-beige">
+              <div className="max-w-6xl mx-auto px-4 space-y-10">
+                <div className="text-center space-y-3">
+                  <span className="text-[10px] font-extrabold text-brand-primary tracking-widest uppercase font-mono bg-brand-beige/35 px-2.5 py-1 rounded-md border border-brand-beige/70">
+                    {lang === 'id' ? 'Testimoni Penghuni' : 'Tenant Testimonials'}
+                  </span>
+                  <h2 className="text-2xl font-black text-brand-primary">
+                    {lang === 'id' ? 'Dipercaya Oleh Penghuni Aktif' : 'Trusted by Active Tenants'}
+                  </h2>
+                  <p className="text-brand-steel text-xs max-w-lg mx-auto font-light">
+                    {lang === 'id' ? 'Simak ulasan tulus dari rekan mahasiswa dan pekerja muda yang telah menetap nyaman bersama kami.' : 'Read honest reviews from students and young working professionals who live comfortably with us.'}
+                  </p>
+                </div>
 
-              {/* Interactive Testimonial Slider */}
-              <div className="relative max-w-2xl mx-auto">
-                <div className="overflow-hidden bg-white border border-brand-beige p-8 md:p-10 rounded-2xl shadow-sm relative group">
-                  {/* Big quotation mark */}
-                  <div className="absolute top-4 right-6 text-brand-beige/30 font-serif text-8xl pointer-events-none select-none leading-none">“</div>
-                  
-                  {/* Sliding quote text */}
-                  <div className="space-y-6 min-h-[140px] flex flex-col justify-between relative z-10">
-                    <p className="text-xs md:text-sm text-brand-primary italic font-light leading-relaxed">
-                      "{testimonials[activeTestimonialIdx].text}"
-                    </p>
-                    <div className="flex items-center gap-3 pt-4 border-t border-brand-beige">
-                      <div className={`w-10 h-10 rounded-full ${testimonials[activeTestimonialIdx].bgClass} text-white flex items-center justify-center font-extrabold font-mono text-xs shadow-md`}>
-                        {testimonials[activeTestimonialIdx].initials}
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-bold text-brand-primary">{testimonials[activeTestimonialIdx].name}</h4>
-                        <p className="text-[10px] text-brand-steel font-mono">{testimonials[activeTestimonialIdx].role}</p>
+                {/* Interactive Testimonial Slider */}
+                <div className="relative max-w-2xl mx-auto">
+                  <div className="overflow-hidden bg-white border border-brand-beige p-8 md:p-10 rounded-2xl shadow-sm relative group">
+                    {/* Big quotation mark */}
+                    <div className="absolute top-4 right-6 text-brand-beige/30 font-serif text-8xl pointer-events-none select-none leading-none">“</div>
+                    
+                    {/* Sliding quote text */}
+                    <div className="space-y-6 min-h-[140px] flex flex-col justify-between relative z-10">
+                      <p className="text-xs md:text-sm text-brand-primary italic font-light leading-relaxed">
+                        "{testimonials[activeTestimonialIdx].text}"
+                      </p>
+                      <div className="flex items-center gap-3 pt-4 border-t border-brand-beige">
+                        <div className={`w-10 h-10 rounded-full ${testimonials[activeTestimonialIdx].bgClass || 'bg-brand-primary'} text-white flex items-center justify-center font-extrabold font-mono text-xs shadow-md`}>
+                          {testimonials[activeTestimonialIdx].initials || testimonials[activeTestimonialIdx].name?.slice(0, 2).toUpperCase()}
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-brand-primary">{testimonials[activeTestimonialIdx].name}</h4>
+                          <p className="text-[10px] text-brand-steel font-mono">{testimonials[activeTestimonialIdx].role}</p>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Left/Right Arrows */}
-                <div className="flex justify-center items-center gap-4 mt-6">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTestimonialIdx(prev => (prev - 1 + testimonials.length) % testimonials.length)}
-                    className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
-                    title={lang === 'id' ? 'Sebelumnya' : 'Previous'}
-                  >
-                    <ChevronLeft size={16} />
-                  </button>
-                  
-                  {/* Indicator Dots */}
-                  <div className="flex gap-1.5">
-                    {testimonials.map((_, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setActiveTestimonialIdx(idx)}
-                        className={`h-1.5 rounded-full transition-all cursor-pointer ${
-                          activeTestimonialIdx === idx ? 'w-5 bg-brand-primary' : 'w-1.5 bg-brand-beige hover:bg-brand-steel'
-                        }`}
-                        title={`Slide ${idx + 1}`}
-                      />
-                    ))}
+                  {/* Left/Right Arrows */}
+                  <div className="flex justify-center items-center gap-4 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTestimonialIdx(prev => (prev - 1 + testimonials.length) % testimonials.length)}
+                      className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
+                      title={lang === 'id' ? 'Sebelumnya' : 'Previous'}
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    
+                    {/* Indicator Dots */}
+                    <div className="flex gap-1.5">
+                      {testimonials.map((_, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setActiveTestimonialIdx(idx)}
+                          className={`h-1.5 rounded-full transition-all cursor-pointer ${
+                            activeTestimonialIdx === idx ? 'w-5 bg-brand-primary' : 'w-1.5 bg-brand-beige hover:bg-brand-steel'
+                          }`}
+                          title={`Slide ${idx + 1}`}
+                        />
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTestimonialIdx(prev => (prev + 1) % testimonials.length)}
+                      className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
+                      title={lang === 'id' ? 'Selanjutnya' : 'Next'}
+                    >
+                      <ChevronRight size={16} />
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveTestimonialIdx(prev => (prev + 1) % testimonials.length)}
-                    className="w-8 h-8 rounded-full border border-brand-beige bg-white text-brand-primary flex items-center justify-center hover:bg-brand-primary hover:text-white transition-all cursor-pointer shadow-sm"
-                    title={lang === 'id' ? 'Selanjutnya' : 'Next'}
-                  >
-                    <ChevronRight size={16} />
-                  </button>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Pertanyaan yang Sering Diajukan (FAQ) */}
           <div id="faq-section" className="max-w-4xl mx-auto px-4 py-16 space-y-8">
@@ -3078,38 +3063,43 @@ export default function Home({}: HomeProps) {
             {/* Grid of 4 Smaller Photos (Col span 1 each) */}
             <div className="hidden md:grid grid-cols-2 grid-rows-2 col-span-2 gap-3 h-full">
               {(() => {
-                const galleryImages = activeProperty.images || [];
-                const defaultUrls = [
-                  "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=600&q=80",
-                  "https://images.unsplash.com/photo-1552321554-5fefe8c9ef14?auto=format&fit=crop&w=600&q=80",
-                  "https://images.unsplash.com/photo-1556911220-e15b29be8c8f?auto=format&fit=crop&w=600&q=80",
-                  "https://images.unsplash.com/photo-1533090161767-e6ffed986c88?auto=format&fit=crop&w=600&q=80"
-                ];
+                const galleryImages = (activeProperty.images || []).filter(Boolean);
                 const labels = ["Ruang Kamar", "Kamar Mandi", "Area Bersama", "Rooftop Lounge"];
                 
                 return [0, 1, 2, 3].map((idx) => {
-                  const url = galleryImages[idx] || defaultUrls[idx];
+                  const url = galleryImages[idx] || (idx === 0 ? activeProperty.image_url : null);
                   const label = labels[idx];
                   return (
                     <div 
                       key={idx} 
-                      className="rounded-xl overflow-hidden h-full bg-slate-900 select-none relative group cursor-zoom-in"
-                      onClick={() => setSelectedRoomImage(url)}
+                      className={`rounded-xl overflow-hidden h-full select-none relative group ${
+                        url 
+                          ? 'bg-slate-900 cursor-zoom-in' 
+                          : 'bg-slate-900/60 border border-slate-800 flex flex-col items-center justify-center'
+                      }`}
+                      onClick={() => url && setSelectedRoomImage(url)}
                     >
-                      <img 
-                        src={url} 
-                        alt={label}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
-                        }}
-                      />
-                      <div className="absolute bottom-2 left-2 bg-black/65 px-2 py-1 rounded-md text-[9px] font-semibold text-white tracking-wide">{label}</div>
+                      {url ? (
+                        <>
+                          <img 
+                            src={url} 
+                            alt={label}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute bottom-2 left-2 bg-black/65 px-2 py-1 rounded-md text-[9px] font-semibold text-white tracking-wide">{label}</div>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center p-3 text-center">
+                          <UploadCloud size={20} className="mb-1 text-slate-500 group-hover:text-emerald-400 transition-colors" />
+                          <span className="text-[10px] font-bold text-slate-400">{label}</span>
+                          <span className="text-[9px] text-slate-500">Belum diunggah</span>
+                        </div>
+                      )}
                       
                       {/* Admin Image Uploader Trigger for Gallery */}
                       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10" onClick={(e) => e.stopPropagation()}>
-                        <label className="bg-slate-950/80 hover:bg-[#2E6F40] text-white p-2 rounded-lg shadow-md cursor-pointer flex items-center justify-center transition-colors">
+                        <label className="bg-slate-950/80 hover:bg-[#2E6F40] text-white p-2 rounded-lg shadow-md cursor-pointer flex items-center justify-center transition-colors" title="Unggah Foto Galeri">
                           <UploadCloud size={12} />
                           <input 
                             type="file" 

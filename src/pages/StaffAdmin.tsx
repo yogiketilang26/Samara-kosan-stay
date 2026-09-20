@@ -116,22 +116,16 @@ export default function StaffAdmin() {
   const [isSendingMemo, setIsSendingMemo] = useState(false);
 
   // Shift Log (Handover Notes) Stored in Local State with Timestamp
-  const [shiftLogs, setShiftLogs] = useState<{ id: string; author: string; time: string; text: string; urgent: boolean }[]>([
-    {
-      id: 'log-1',
-      author: 'Ahmad (Staff Pagi)',
-      time: 'Hari ini, 08:30 WIB',
-      text: 'Semua kunci master kamar lantai 1 & 2 lengkap di meja resepsionis. Tamu survey kamar 204 dijadwalkan jam 11:00.',
-      urgent: false
-    },
-    {
-      id: 'log-2',
-      author: 'Siti (Staff Sore)',
-      time: 'Hari ini, 12:45 WIB',
-      text: 'AC kamar 105 sudah dicek teknisi, freon sudah diisi ulang dan berfungsi normal.',
-      urgent: false
+  const [shiftLogs, setShiftLogs] = useState<{ id: string; author: string; time: string; text: string; urgent: boolean }[]>(() => {
+    try {
+      const saved = localStorage.getItem('samara_staff_shift_logs');
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed.filter(l => !['log-1', 'log-2'].includes(l.id)) : [];
+    } catch {
+      return [];
     }
-  ]);
+  });
   const [newLogText, setNewLogText] = useState('');
   const [newLogUrgent, setNewLogUrgent] = useState(false);
 
@@ -425,7 +419,7 @@ export default function StaffAdmin() {
         full_name: checkInForm.full_name.trim(),
         phone: checkInForm.phone.trim(),
         email: checkInForm.email.trim() || `${checkInForm.phone.trim()}@samarastay.co.id`,
-        nik: checkInForm.nik.trim() || '3174092803930005',
+        nik: checkInForm.nik.trim() || undefined,
         duration_months: Number(checkInForm.duration_months) || 1,
         start_date: new Date().toISOString().split('T')[0],
         status: 'active',
@@ -560,7 +554,11 @@ export default function StaffAdmin() {
         text: formattedLog,
         urgent: true
       };
-      setShiftLogs(prev => [newLog, ...prev]);
+      setShiftLogs(prev => {
+        const updated = [newLog, ...prev];
+        try { localStorage.setItem('samara_staff_shift_logs', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
 
       showToast('Memo darurat berhasil disiarkan ke Super Admin & Owner!', 'success');
       setShowUrgentMemoModal(false);
@@ -600,7 +598,11 @@ export default function StaffAdmin() {
       urgent: newLogUrgent
     };
 
-    setShiftLogs(prev => [newLog, ...prev]);
+    setShiftLogs(prev => {
+      const updated = [newLog, ...prev];
+      try { localStorage.setItem('samara_staff_shift_logs', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
     setNewLogText('');
     setNewLogUrgent(false);
     showToast(newLogUrgent 
@@ -1690,6 +1692,14 @@ export default function StaffAdmin() {
                     </p>
                   </div>
                 ))}
+
+                {activityLogs.filter(l => l.action.includes('STAFF_') || l.action.includes('SHIFT') || l.action.includes('MEMO')).length === 0 && shiftLogs.length === 0 && (
+                  <div className="text-center py-12 text-slate-500 bg-slate-950/40 rounded-2xl border border-dashed border-slate-800 p-6">
+                    <FileText size={32} className="mx-auto mb-2 opacity-30 text-slate-400" />
+                    <p className="text-xs font-bold text-slate-300">Belum ada catatan serah terima shift</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Gunakan formulir di sebelah kiri untuk meninggalkan catatan ke shift berikutnya atau kirim memo darurat.</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>

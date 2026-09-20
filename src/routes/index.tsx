@@ -12,7 +12,7 @@ interface MainRouterProps {
 export const MainRouter: React.FC<MainRouterProps> = ({ currentView }) => {
   if (currentView === 'admin') {
     return (
-      <ProtectedRoute allowedRoles={['super', 'super_admin', 'admin']} requiredPortal="admin">
+      <ProtectedRoute allowedRoles={['super', 'super_admin', 'admin', 'anak_owner', 'anak owner']} requiredPortal="admin">
         <Admin />
       </ProtectedRoute>
     );
@@ -20,7 +20,7 @@ export const MainRouter: React.FC<MainRouterProps> = ({ currentView }) => {
 
   if (currentView === 'staff') {
     return (
-      <ProtectedRoute allowedRoles={['super', 'super_admin', 'admin', 'staff']} requiredPortal="staff">
+      <ProtectedRoute allowedRoles={['super', 'super_admin', 'admin', 'staff', 'anak_owner', 'anak owner']} requiredPortal="staff">
         <StaffAdmin />
       </ProtectedRoute>
     );

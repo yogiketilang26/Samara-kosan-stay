@@ -4,14 +4,53 @@ import {
   Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail, Sparkles,
   Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass, DoorOpen, Wrench, Box
 } from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth';
 
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  isAnakOwner?: boolean;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
-  const menuItems = [
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isAnakOwner: propIsAnakOwner }) => {
+  const { user } = useAuth();
+  const rawRole = (user?.raw_role || user?.role || '').trim().toLowerCase();
+  const userAccess = ((user as any)?.access || '').toLowerCase();
+  const userEmail = (user?.email || '').toLowerCase();
+
+  const [simulatedRole, setSimulatedRole] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search).get('role') || new URLSearchParams(window.location.search).get('portal');
+      if (p === 'anak_owner') return 'anak_owner';
+      return localStorage.getItem('samara_simulated_role');
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      setSimulatedRole(e.detail?.role || null);
+    };
+    window.addEventListener('samara-role-simulate', handler);
+    return () => window.removeEventListener('samara-role-simulate', handler);
+  }, []);
+
+  const isAnakOwner = Boolean(
+    propIsAnakOwner ||
+    rawRole === 'anak_owner' || 
+    rawRole === 'anak owner' ||
+    userAccess.includes('anak owner') ||
+    userEmail.includes('anakowner') ||
+    userEmail === 'sabita@samarastay.co' ||
+    simulatedRole === 'anak_owner' ||
+    (typeof window !== 'undefined' && (
+      localStorage.getItem('samara_simulated_role') === 'anak_owner' ||
+      new URLSearchParams(window.location.search).get('role') === 'anak_owner' ||
+      new URLSearchParams(window.location.search).get('portal') === 'anak_owner'
+    ))
+  );
+
+  const allMenuItems = [
     { id: 'dashboard', name: 'Dashboard', icon: LayoutDashboard },
     { id: 'properties', name: 'Properti Kos', icon: Building2 },
     { id: 'map_coordinates', name: 'Peta & Titik GPS', icon: Compass },
@@ -31,6 +70,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'observability', name: 'Health & Observability', icon: Cpu },
     { id: 'activity_logs', name: 'Log Aktivitas', icon: Activity }
   ];
+
+  // Eksklusi menu untuk role 'anak_owner':
+  // 14. User & Akses (user_roles)
+  // 15. Integrasi Email (email_integration)
+  // 16. Midtrans Logs (midtrans_logs)
+  // 17. Health & Observability (observability)
+  // 18. Log Aktivitas (activity_logs)
+  // Menu lengkap hanya untuk Super Admin
+  const forbiddenForAnakOwner = new Set([
+    'email_integration',
+    'midtrans_logs',
+    'observability',
+    'activity_logs',
+    'user_roles'
+  ]);
+
+  const menuItems = allMenuItems.filter(item => {
+    if (isAnakOwner && forbiddenForAnakOwner.has(item.id)) {
+      return false;
+    }
+    return true;
+  });
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -81,7 +142,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       >
         <div className={`flex items-center justify-between border-b border-[#F1F5F9] pb-3 mb-4 ${isCollapsed ? 'justify-center' : 'px-2'}`}>
           {!isCollapsed && (
-            <h4 className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider font-sans">Navigasi Panel</h4>
+            <h4 className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider font-sans">
+              {isAnakOwner ? 'Panel Anak Owner' : 'Navigasi Panel'}
+            </h4>
           )}
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
@@ -164,7 +227,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-3.5 mb-4">
               <div>
                 <h4 className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">Samara Stay</h4>
-                <span className="text-xs font-extrabold text-[#3A444D] uppercase font-display">Navigasi Admin</span>
+                <span className="text-xs font-extrabold text-[#3A444D] uppercase font-display">
+                  {isAnakOwner ? 'Panel Anak Owner' : 'Navigasi Admin'}
+                </span>
               </div>
               <button
                 onClick={() => setIsMobileOpen(false)}
