@@ -1,15 +1,32 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { realtimeManager } from '../lib/supabase';
+import { realtimeManager, isQuotaRestrictionActive } from '../lib/supabase';
 import { normalizeCoordinatePair } from '../utils/mapCoordinates';
+
+export interface UseRealtimeTableOptions {
+  enabled?: boolean;
+  hasRelations?: boolean;
+  debounceMs?: number;
+}
+
+// Tables that fetch nested relations (e.g. room_facilities, property_facilities) where raw realtime row doesn't have expanded fields
+const DEFAULT_RELATIONAL_TABLES = new Set(['rooms', 'properties']);
 
 export function useRealtimeTable<T>(
   tableName: string, 
   fetchFn: () => Promise<T[]>, 
-  dependencyTrigger: number = 0
+  dependencyTriggerOrOptions: number | UseRealtimeTableOptions = 0
 ) {
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<any>(null);
+
+  const options: UseRealtimeTableOptions = typeof dependencyTriggerOrOptions === 'object' && dependencyTriggerOrOptions !== null
+    ? dependencyTriggerOrOptions
+    : {};
+  const dependencyTrigger = typeof dependencyTriggerOrOptions === 'number' ? dependencyTriggerOrOptions : 0;
+  const enabled = options.enabled !== false;
+  const hasRelations = options.hasRelations ?? DEFAULT_RELATIONAL_TABLES.has(tableName);
+  const debounceMs = Math.max(2000, options.debounceMs ?? 2000);
   
   // Keep the latest fetch function in a ref to avoid stale closure issues in callbacks
   const fetchFnRef = useRef(fetchFn);
@@ -19,16 +36,22 @@ export function useRealtimeTable<T>(
 
   const isFirstLoadRef = useRef(true);
   const debounceTimerRef = useRef<any>(null);
+  const lastFetchedAt = useRef<number>(0);
 
   const loadData = useCallback(async (isSilent = false) => {
+    if (!enabled) return;
     try {
       if (!isSilent && isFirstLoadRef.current) {
         setLoading(true);
       }
       const res = await fetchFnRef.current();
-      setData(res);
+      if (Array.isArray(res)) {
+        setData(res);
+      }
+      lastFetchedAt.current = Date.now();
       setError(null);
-    } catch (err) {
+    } catch (err: any) {
+      console.warn(`[useRealtimeTable:${tableName}] Fetch notice:`, err?.message || err);
       setError(err);
     } finally {
       if (!isSilent && isFirstLoadRef.current) {
@@ -36,28 +59,29 @@ export function useRealtimeTable<T>(
         isFirstLoadRef.current = false;
       }
     }
-  }, []);
+  }, [tableName, enabled]);
 
   const triggerDebouncedRefetch = useCallback(() => {
+    if (!enabled) return;
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
     debounceTimerRef.current = setTimeout(() => {
       loadData(true);
-    }, 80);
-  }, [loadData]);
+    }, debounceMs);
+  }, [loadData, debounceMs, enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
+
     // Initial fetch
     loadData();
 
     const handleRealtimeEvent = (payload: any) => {
-      console.log(`[useRealtimeTable Event] Received differential update for ${tableName}:`, payload);
-      
-      // Always trigger debounced fresh load to guarantee full consistency with relational queries and sorting
-      triggerDebouncedRefetch();
-      
-      // Also apply optimistic differential patch if raw row is provided
+      // Apply optimistic differential patch first
       if (payload && payload.new && payload.eventType === 'INSERT') {
         const newItem = { ...payload.new };
         setData((currentData) => {
@@ -95,38 +119,41 @@ export function useRealtimeTable<T>(
           );
         }
       }
+
+      // Only refetch if table has complex nested relations (e.g. rooms with facilities)
+      // otherwise in-memory patch is completely sufficient!
+      if (hasRelations) {
+        triggerDebouncedRefetch();
+      }
     };
 
     // Subscribe via central manager to prevent duplicate websocket channels and leak-free lifecycle
     const unsubscribe = realtimeManager.subscribe(tableName, {}, handleRealtimeEvent);
 
-    // Dynamic visibility & focus synchronization: whenever user returns to or focuses this tab
+    // Dynamic visibility & focus synchronization: throttled to at most once every 60 seconds
     const handleFocusOrVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        triggerDebouncedRefetch();
+        if (!isQuotaRestrictionActive()) {
+          const now = Date.now();
+          if (now - lastFetchedAt.current >= 60000) {
+            triggerDebouncedRefetch();
+          }
+        }
       }
     };
 
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
 
-    // Dynamic heartbeat sync (every 6 seconds if document is visible) to guarantee zero-latency drift
-    const heartbeatInterval = setInterval(() => {
-      if (typeof document !== 'undefined' && !document.hidden) {
-        loadData(true);
-      }
-    }, 6000);
-
     return () => {
       unsubscribe();
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
-      clearInterval(heartbeatInterval);
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [tableName, dependencyTrigger, loadData, triggerDebouncedRefetch]);
+  }, [tableName, dependencyTrigger, enabled, hasRelations, loadData, triggerDebouncedRefetch]);
 
   return { data, loading, error, refetch: loadData };
 }

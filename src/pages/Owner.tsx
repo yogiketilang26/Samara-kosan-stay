@@ -37,20 +37,6 @@ export const Owner: React.FC = () => {
   const [selectedPeriod, setSelectedPeriod] = useState<'this_month' | 'last_month' | 'this_quarter' | 'ytd'>('this_month');
   const [activeTab, setActiveTab] = useState<'overview' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops' | 'assets'>('overview');
 
-  // Background auto-release expired leases check (>24h grace period -> Available)
-  useEffect(() => {
-    const runCheck = async () => {
-      try {
-        await database.autoReleaseExpiredLeases();
-      } catch (err) {
-        console.warn('[Owner] Auto release check:', err);
-      }
-    };
-    runCheck();
-    const interval = setInterval(runCheck, 60000);
-    return () => clearInterval(interval);
-  }, []);
-
   // Realtime Data Subscriptions (eliminating static fetch lock-in)
   const { data: properties = [], loading: loadingProps } = useRealtimeTable<Property>('properties', () => database.fetchProperties());
   const { data: rooms = [], loading: loadingRooms } = useRealtimeTable<Room>('rooms', () => database.fetchRooms());

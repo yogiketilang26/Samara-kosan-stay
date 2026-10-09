@@ -343,7 +343,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
               />
             </label>
 
-            {signatureUrl && signatureMode === 'upload' && (
+            {signatureUrl && signatureUrl.trim() !== '' && signatureMode === 'upload' && (
               <div className="bg-white border border-slate-200 rounded-xl p-2 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <img src={signatureUrl} alt="TTD Preview" className="h-10 max-w-[120px] object-contain border border-slate-100 rounded p-1 bg-slate-50" />

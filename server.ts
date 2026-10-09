@@ -8,11 +8,13 @@ import fs from 'fs';
 import express from 'express';
 import path from 'path';
 import crypto from 'crypto';
-import { createServer as createViteServer } from 'vite';
+// Dynamic Vite import so production server bundle never tries to load vite or run Vite dev server
+let createViteServerFn: any = null;
 import { createClient } from '@supabase/supabase-js';
 import { renderAsync } from '@resvg/resvg-js';
 import { can, canManageRole, canAccessProperty, maskNik, canAssignProperty } from './src/lib/permissions';
 import type { AppResource, ActionType } from './src/lib/permissions';
+import { getTableDefaultSeeds, DEFAULT_PROPERTIES, DEFAULT_ROOMS } from './src/data/fallbackData';
 
 declare global {
   namespace Express {
@@ -4561,8 +4563,8 @@ async function startServer() {
   }
 
 
-  // 2. Midtrans Webhook Receiver (With Signature Key Verification)
-  app.post('/api/midtrans/webhook', async (req, res) => {
+  // 2. Midtrans Webhook / Notification Receiver (With Signature Key Verification)
+  app.post(['/api/midtrans/webhook', '/api/midtrans/notification'], async (req, res) => {
     try {
       const notification = req.body;
       console.log('[MIDTRANS WEBHOOK RECEIVED] Order ID:', notification.order_id, 'Status:', notification.transaction_status);
@@ -5257,129 +5259,161 @@ async function startServer() {
   // =========================================================================
   // CORE ENGINE: SYNC EXPIRED CONTRACTS & AUTO-RELEASE ROOMS (SUPABASE PARITY)
   // =========================================================================
+  let isSyncingLeasesInFlight = false;
+  let lastLeaseSyncResult = { releasedRooms: 0, checkedOutTenants: 0 };
+  let lastLeaseSyncTime = 0;
+
   async function syncExpiredLeasesCore(supabaseAdmin: any): Promise<{ releasedRooms: number; checkedOutTenants: number }> {
-    const now = new Date();
-    let releasedRoomsCount = 0;
-    let checkedOutTenantsCount = 0;
-    const affectedPropertyIds = new Set<number>();
-
-    // 1. Fetch active tenants, paid extensions, bookings, rooms
-    const [
-      { data: activeTenants },
-      { data: paidExtensions },
-      { data: approvedBookings },
-      { data: allRooms }
-    ] = await Promise.all([
-      supabaseAdmin.from('tenants').select('*').neq('status', 'checkout'),
-      supabaseAdmin.from('contract_extensions').select('*').eq('status', 'paid'),
-      supabaseAdmin.from('bookings').select('*').eq('status', 'approved'),
-      supabaseAdmin.from('rooms').select('*')
-    ]);
-
-    // 2. Evaluate active tenants
-    if (activeTenants && activeTenants.length > 0) {
-      for (const tenant of activeTenants) {
-        if (!tenant.start_date) continue;
-        const startDate = new Date(tenant.start_date);
-        if (isNaN(startDate.getTime())) continue;
-
-        // Sum paid extensions
-        const exts = (paidExtensions || []).filter((e: any) => e.tenant_id === tenant.id);
-        const totalExtMonths = exts.reduce((sum: number, e: any) => sum + (Number(e.extension_months) || 0), 0);
-        const totalMonths = (Number(tenant.duration_months) || 1) + totalExtMonths;
-
-        const computedEnd = new Date(startDate);
-        computedEnd.setMonth(computedEnd.getMonth() + totalMonths);
-
-        let finalEndDate = computedEnd;
-        if (tenant.lease_end_date) {
-          const lDate = new Date(tenant.lease_end_date);
-          if (!isNaN(lDate.getTime()) && lDate.getTime() > finalEndDate.getTime()) {
-            finalEndDate = lDate;
-          }
-        }
-
-        // Contract ended without further extension
-        if (now.getTime() >= finalEndDate.getTime()) {
-          console.log(`[AUTO-RELEASE] Kontrak penyewa ${tenant.full_name} (Kamar ${tenant.room_number}) telah habis tanpa perpanjangan. Mengosongkan kamar.`);
-
-          // Mark tenant checkout
-          await supabaseAdmin.from('tenants').update({ status: 'checkout' }).eq('id', tenant.id);
-          checkedOutTenantsCount++;
-
-          // Release room to available
-          let roomQuery = supabaseAdmin
-            .from('rooms')
-            .update({ status: 'available', current_tenant_name: null })
-            .eq('room_number', tenant.room_number);
-          if (tenant.property_id) {
-            roomQuery = roomQuery.eq('property_id', tenant.property_id);
-            affectedPropertyIds.add(tenant.property_id);
-          }
-          await roomQuery;
-          releasedRoomsCount++;
-
-          // Checkout associated approved bookings
-          await supabaseAdmin
-            .from('bookings')
-            .update({ status: 'checkout' })
-            .eq('room_number', tenant.room_number)
-            .eq('status', 'approved');
-        }
-      }
+    if (isSyncingLeasesInFlight) {
+      return lastLeaseSyncResult;
     }
+    isSyncingLeasesInFlight = true;
+    try {
+      const now = new Date();
+      let releasedRoomsCount = 0;
+      let checkedOutTenantsCount = 0;
+      const affectedPropertyIds = new Set<number>();
 
-    // 3. Evaluate approved bookings (e.g. daily rentals or direct bookings)
-    if (approvedBookings && approvedBookings.length > 0) {
-      for (const booking of approvedBookings) {
-        const startStr = booking.check_in_date || booking.booking_date;
-        if (!startStr) continue;
-        const startDate = new Date(startStr);
-        if (isNaN(startDate.getTime())) continue;
+      // 1. Fetch active tenants with ONLY required columns
+      const { data: activeTenants } = await supabaseAdmin
+        .from('tenants')
+        .select('id, start_date, duration_months, lease_end_date, status, full_name, room_number, property_id')
+        .neq('status', 'checkout');
 
-        const endDate = new Date(startDate);
-        if (booking.booking_type === 'daily' && booking.duration_days && booking.duration_days > 0) {
-          endDate.setDate(endDate.getDate() + booking.duration_days);
-        } else {
-          const months = Math.max(1, booking.duration_months || 1);
-          endDate.setMonth(endDate.getMonth() + months);
-        }
+      // Fetch paid extensions only if active tenants exist
+      let paidExtensions: any[] = [];
+      if (activeTenants && activeTenants.length > 0) {
+        const { data: exts } = await supabaseAdmin
+          .from('contract_extensions')
+          .select('tenant_id, extension_months, status')
+          .eq('status', 'paid');
+        paidExtensions = exts || [];
+      }
 
-        if (now.getTime() >= endDate.getTime()) {
-          console.log(`[AUTO-RELEASE] Booking ID ${booking.id} (Kamar ${booking.room_number}) telah berakhir. Mengosongkan kamar.`);
-          await supabaseAdmin.from('bookings').update({ status: 'checkout' }).eq('id', booking.id);
+      // Fetch approved bookings with specific columns
+      const { data: approvedBookings } = await supabaseAdmin
+        .from('bookings')
+        .select('id, check_in_date, booking_date, booking_type, duration_days, duration_months, room_id, room_number, property_id, status')
+        .eq('status', 'approved');
 
-          if (booking.room_id) {
-            await supabaseAdmin.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('id', booking.room_id);
-          } else if (booking.room_number) {
-            let rQuery = supabaseAdmin.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('room_number', booking.room_number);
-            if (booking.property_id) {
-              rQuery = rQuery.eq('property_id', booking.property_id);
+      // Fetch only occupied rooms (avoid selecting all available/reserved rooms!)
+      const { data: occupiedRooms } = await supabaseAdmin
+        .from('rooms')
+        .select('id, room_number, property_id, status')
+        .eq('status', 'occupied');
+
+      // Early-return if nothing to check
+      if ((!activeTenants || activeTenants.length === 0) &&
+          (!approvedBookings || approvedBookings.length === 0) &&
+          (!occupiedRooms || occupiedRooms.length === 0)) {
+        lastLeaseSyncResult = { releasedRooms: 0, checkedOutTenants: 0 };
+        lastLeaseSyncTime = Date.now();
+        return lastLeaseSyncResult;
+      }
+
+      // 2. Evaluate active tenants
+      if (activeTenants && activeTenants.length > 0) {
+        for (const tenant of activeTenants) {
+          if (!tenant.start_date) continue;
+          const startDate = new Date(tenant.start_date);
+          if (isNaN(startDate.getTime())) continue;
+
+          // Sum paid extensions
+          const exts = paidExtensions.filter((e: any) => e.tenant_id === tenant.id);
+          const totalExtMonths = exts.reduce((sum: number, e: any) => sum + (Number(e.extension_months) || 0), 0);
+          const totalMonths = (Number(tenant.duration_months) || 1) + totalExtMonths;
+
+          const computedEnd = new Date(startDate);
+          computedEnd.setMonth(computedEnd.getMonth() + totalMonths);
+
+          let finalEndDate = computedEnd;
+          if (tenant.lease_end_date) {
+            const lDate = new Date(tenant.lease_end_date);
+            if (!isNaN(lDate.getTime()) && lDate.getTime() > finalEndDate.getTime()) {
+              finalEndDate = lDate;
             }
-            await rQuery;
           }
 
-          if (booking.property_id) affectedPropertyIds.add(booking.property_id);
-          releasedRoomsCount++;
+          // Contract ended without further extension
+          if (now.getTime() >= finalEndDate.getTime()) {
+            console.log(`[AUTO-RELEASE] Kontrak penyewa ${tenant.full_name} (Kamar ${tenant.room_number}) telah habis tanpa perpanjangan. Mengosongkan kamar.`);
+
+            // Mark tenant checkout
+            await supabaseAdmin.from('tenants').update({ status: 'checkout' }).eq('id', tenant.id);
+            checkedOutTenantsCount++;
+
+            // Release room to available
+            let roomQuery = supabaseAdmin
+              .from('rooms')
+              .update({ status: 'available', current_tenant_name: null })
+              .eq('room_number', tenant.room_number);
+            if (tenant.property_id) {
+              roomQuery = roomQuery.eq('property_id', tenant.property_id);
+              affectedPropertyIds.add(tenant.property_id);
+            }
+            await roomQuery;
+            releasedRoomsCount++;
+
+            // Checkout associated approved bookings
+            await supabaseAdmin
+              .from('bookings')
+              .update({ status: 'checkout' })
+              .eq('room_number', tenant.room_number)
+              .eq('status', 'approved');
+          }
         }
       }
-    }
 
-    // 4. Clean up any orphaned occupied rooms that have no active tenant and no approved booking
-    if (allRooms && allRooms.length > 0) {
-      const activeTenantRoomKeys = new Set(
-        (activeTenants || [])
-          .filter((t: any) => t.status !== 'checkout')
-          .map((t: any) => `${t.property_id || ''}_${t.room_number}`)
-      );
-      const activeBookingRoomKeys = new Set(
-        (approvedBookings || [])
-          .filter((b: any) => b.status === 'approved')
-          .map((b: any) => `${b.property_id || ''}_${b.room_number}`)
-      );
+      // 3. Evaluate approved bookings (e.g. daily rentals or direct bookings)
+      if (approvedBookings && approvedBookings.length > 0) {
+        for (const booking of approvedBookings) {
+          const startStr = booking.check_in_date || booking.booking_date;
+          if (!startStr) continue;
+          const startDate = new Date(startStr);
+          if (isNaN(startDate.getTime())) continue;
 
-      for (const room of allRooms) {
-        if (room.status === 'occupied') {
+          const endDate = new Date(startDate);
+          if (booking.booking_type === 'daily' && booking.duration_days && booking.duration_days > 0) {
+            endDate.setDate(endDate.getDate() + booking.duration_days);
+          } else {
+            const months = Math.max(1, booking.duration_months || 1);
+            endDate.setMonth(endDate.getMonth() + months);
+          }
+
+          if (now.getTime() >= endDate.getTime()) {
+            console.log(`[AUTO-RELEASE] Booking ID ${booking.id} (Kamar ${booking.room_number}) telah berakhir. Mengosongkan kamar.`);
+            await supabaseAdmin.from('bookings').update({ status: 'checkout' }).eq('id', booking.id);
+
+            if (booking.room_id) {
+              await supabaseAdmin.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('id', booking.room_id);
+            } else if (booking.room_number) {
+              let rQuery = supabaseAdmin.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('room_number', booking.room_number);
+              if (booking.property_id) {
+                rQuery = rQuery.eq('property_id', booking.property_id);
+              }
+              await rQuery;
+            }
+
+            if (booking.property_id) affectedPropertyIds.add(booking.property_id);
+            releasedRoomsCount++;
+          }
+        }
+      }
+
+      // 4. Clean up any orphaned occupied rooms that have no active tenant and no approved booking
+      if (occupiedRooms && occupiedRooms.length > 0) {
+        const activeTenantRoomKeys = new Set(
+          (activeTenants || [])
+            .filter((t: any) => t.status !== 'checkout')
+            .map((t: any) => `${t.property_id || ''}_${t.room_number}`)
+        );
+        const activeBookingRoomKeys = new Set(
+          (approvedBookings || [])
+            .filter((b: any) => b.status === 'approved')
+            .map((b: any) => `${b.property_id || ''}_${b.room_number}`)
+        );
+
+        for (const room of occupiedRooms) {
           const key = `${room.property_id || ''}_${room.room_number}`;
           if (!activeTenantRoomKeys.has(key) && !activeBookingRoomKeys.has(key)) {
             console.log(`[AUTO-RELEASE] Kamar ${room.room_number} status 'occupied' tanpa data penyewa aktif. Mengubah ke 'available'.`);
@@ -5389,19 +5423,28 @@ async function startServer() {
           }
         }
       }
-    }
 
-    // 5. Resync property room counts
-    for (const propId of affectedPropertyIds) {
-      await syncPropertyRoomCountInSupabase(supabaseAdmin, propId);
-    }
+      // 5. Resync property room counts
+      for (const propId of affectedPropertyIds) {
+        await syncPropertyRoomCountInSupabase(supabaseAdmin, propId);
+      }
 
-    return { releasedRooms: releasedRoomsCount, checkedOutTenants: checkedOutTenantsCount };
+      lastLeaseSyncResult = { releasedRooms: releasedRoomsCount, checkedOutTenants: checkedOutTenantsCount };
+      lastLeaseSyncTime = Date.now();
+      return lastLeaseSyncResult;
+    } finally {
+      isSyncingLeasesInFlight = false;
+    }
   }
 
   // ENDPOINTS FOR EXPIRED LEASE SYNC
   app.all('/api/system/sync-expired-leases', apiRateLimiter(60000, 60), async (req, res) => {
     try {
+      // Throttle: return cached result if called within 60s
+      if (Date.now() - lastLeaseSyncTime < 60000) {
+        return res.status(200).json({ success: true, ...lastLeaseSyncResult, cached: true });
+      }
+
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
       if (!supabaseUrl || !serviceKey) {
@@ -5416,8 +5459,32 @@ async function startServer() {
     }
   });
 
+  // Circuit breaker state for Supabase quota/spend cap/violations on server
+  let isServerQuotaRestricted = false;
+  let serverQuotaRestrictedDetectedAt = 0;
+  const SERVER_QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
+
+  function isServerQuotaActive(): boolean {
+    if (!isServerQuotaRestricted) return false;
+    if (Date.now() - serverQuotaRestrictedDetectedAt > SERVER_QUOTA_COOLDOWN_MS) {
+      isServerQuotaRestricted = false;
+      return false;
+    }
+    return true;
+  }
+
+  function markServerQuotaRestricted(reason?: string) {
+    isServerQuotaRestricted = true;
+    serverQuotaRestrictedDetectedAt = Date.now();
+    console.log(`[SERVER NOTICE] Supabase egress quota or service restricted (${reason || 'quota'}). Using resilient seed fallbacks.`);
+  }
+
   // ENDPOINTS FOR CONTRACT EXTENSIONS (Bypasses PostgreSQL anon 42501 permission restrictions safely)
   app.get('/api/contract-extensions', apiRateLimiter(60000, 180), optionalAdminAuth, async (req, res) => {
+    if (isServerQuotaActive()) {
+      return res.status(200).json({ success: true, data: [], fallback: true });
+    }
+
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
@@ -5478,13 +5545,19 @@ async function startServer() {
 
       const { data, error } = await query;
       if (error) {
-        console.warn('[CONTRACT-EXTENSIONS API] Query error:', error.message);
+        if (error.message?.includes('exceed_egress_quota') || error.message?.includes('quota') || error.message?.includes('restricted') || error.message?.includes('spend caps')) {
+          markServerQuotaRestricted(error.message);
+          return res.status(200).json({ success: true, data: [], fallback: true });
+        }
+        console.warn('[CONTRACT-EXTENSIONS API] Query notice:', error.message);
         return res.status(500).json({ success: false, error: error.message, data: [] });
       }
       return res.status(200).json({ success: true, data: data || [] });
     } catch (err: any) {
-      console.error('[CONTRACT-EXTENSIONS API Error]:', err);
-      return res.status(500).json({ success: false, error: err.message, data: [] });
+      if (err?.message?.includes('exceed_egress_quota') || err?.message?.includes('quota') || err?.message?.includes('restricted')) {
+        markServerQuotaRestricted(err?.message);
+      }
+      return res.status(200).json({ success: true, data: [], fallback: true });
     }
   });
 
@@ -5712,6 +5785,10 @@ async function startServer() {
   // ENDPOINT: FETCH BOOKINGS (Secured: Require Admin Auth + Scoped Permission)
   // =========================================================================
   app.get('/api/bookings', requireAdminAuth, requirePermission('bookings', 'read'), apiRateLimiter(60000, 180), async (req, res) => {
+    if (isServerQuotaActive()) {
+      return res.status(200).json({ success: true, data: [], fallback: true });
+    }
+
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const serviceKey = getServiceRoleKeyOrThrow();
@@ -5760,7 +5837,12 @@ async function startServer() {
 
       const { data, error } = await query;
       if (error) {
-        console.warn('[BOOKINGS API] Query error:', error.message);
+        if (error.message?.includes('exceed_egress_quota') || error.message?.includes('quota') || error.message?.includes('restricted') || error.message?.includes('spend caps')) {
+          markServerQuotaRestricted(error.message);
+          const seeds = getTableDefaultSeeds('bookings');
+          return res.status(200).json({ success: true, data: seeds, fallback: true });
+        }
+        console.warn('[BOOKINGS API] Query notice:', error.message);
         return res.status(500).json({ success: false, error: error.message, data: [] });
       }
 
@@ -5771,8 +5853,11 @@ async function startServer() {
 
       return res.status(200).json({ success: true, data: sanitizedData });
     } catch (err: any) {
-      console.error('[BOOKINGS API Error]:', err);
-      return res.status(500).json({ success: false, error: err.message, data: [] });
+      if (err?.message?.includes('exceed_egress_quota') || err?.message?.includes('quota') || err?.message?.includes('restricted')) {
+        markServerQuotaRestricted(err?.message);
+      }
+      const seeds = getTableDefaultSeeds('bookings');
+      return res.status(200).json({ success: true, data: seeds, fallback: true });
     }
   });
 
@@ -5863,6 +5948,12 @@ async function startServer() {
 
           const { data, error } = await query;
           if (error) {
+            if (error.message?.includes('exceed_egress_quota') || error.message?.includes('quota') || error.message?.includes('restricted') || error.message?.includes('spend caps')) {
+              markServerQuotaRestricted(error.message);
+              const seeds = table === 'properties' ? DEFAULT_PROPERTIES : (table === 'rooms' ? DEFAULT_ROOMS : []);
+              return res.status(200).json({ success: true, data: seeds, fallback: true });
+            }
+            console.warn(`[DATA API:${table}] Authenticated notice:`, error.message);
             return res.status(500).json({ success: false, error: error.message, data: [] });
           }
 
@@ -5873,13 +5964,22 @@ async function startServer() {
 
           return res.status(200).json({ success: true, data: sanitizedData });
         } catch (err: any) {
-          return res.status(500).json({ success: false, error: err.message, data: [] });
+          if (err?.message?.includes('exceed_egress_quota') || err?.message?.includes('quota') || err?.message?.includes('restricted')) {
+            markServerQuotaRestricted(err?.message);
+          }
+          const seeds = table === 'properties' ? DEFAULT_PROPERTIES : (table === 'rooms' ? DEFAULT_ROOMS : []);
+          return res.status(200).json({ success: true, data: seeds, fallback: true });
         }
       });
     }
 
     if (!PUBLIC_READ_TABLES.has(table)) {
       return res.status(403).json({ success: false, error: `Access to table '${table}' is restricted.` });
+    }
+
+    if (isServerQuotaActive()) {
+      const seeds = table === 'properties' ? DEFAULT_PROPERTIES : (table === 'rooms' ? DEFAULT_ROOMS : []);
+      return res.status(200).json({ success: true, data: seeds, fallback: true });
     }
 
     try {
@@ -5903,13 +6003,21 @@ async function startServer() {
 
       const { data, error } = await query;
       if (error) {
-        console.warn(`[DATA API:${table}] Query error:`, error.message);
+        if (error.message?.includes('exceed_egress_quota') || error.message?.includes('quota') || error.message?.includes('restricted') || error.message?.includes('spend caps')) {
+          markServerQuotaRestricted(error.message);
+          const seeds = getTableDefaultSeeds(table);
+          return res.status(200).json({ success: true, data: seeds, fallback: true });
+        }
+        console.warn(`[DATA API:${table}] Query notice:`, error.message);
         return res.status(500).json({ success: false, error: error.message, data: [] });
       }
       return res.status(200).json({ success: true, data: data || [] });
     } catch (err: any) {
-      console.error('[DATA API Error]:', err);
-      return res.status(500).json({ success: false, error: err.message, data: [] });
+      if (err?.message?.includes('exceed_egress_quota') || err?.message?.includes('quota') || err?.message?.includes('restricted')) {
+        markServerQuotaRestricted(err?.message);
+      }
+      const seeds = getTableDefaultSeeds(table);
+      return res.status(200).json({ success: true, data: seeds, fallback: true });
     }
   });
 
@@ -7367,24 +7475,50 @@ async function startServer() {
   // 2. VITE DEV SERVER OR STATIC ASSETS ROUTER
   // =========================================================================
 
+  // Root and Health check endpoints for container orchestrators (Cloud Run / Kubernetes)
+  app.get('/healthz', (req, res) => {
+    res.status(200).send('OK');
+  });
+
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+    try {
+      const viteModule = await import('vite');
+      createViteServerFn = viteModule.createServer;
+      const vite = await createViteServerFn({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr: any) {
+      console.warn('[SERVER DEV NOTICE] Could not initialize Vite middleware mode:', viteErr?.message || viteErr);
+    }
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    const rootPath = process.cwd();
+    
+    // Serve static files from dist if present
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+    }
+
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const distIndex = path.join(distPath, 'index.html');
+      const rootIndex = path.join(rootPath, 'index.html');
+      if (fs.existsSync(distIndex)) {
+        res.sendFile(distIndex);
+      } else if (fs.existsSync(rootIndex)) {
+        res.sendFile(rootIndex);
+      } else {
+        res.status(200).send('<!DOCTYPE html><html><head><title>Samara Stay</title></head><body><div id="root">App Loading...</div></body></html>');
+      }
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER RUNNING] Express backend listening on http://0.0.0.0:${PORT}`);
 
-    // Auto-release expired leases on server startup and every 60 seconds
+    // Auto-release expired leases on server startup and every 15 minutes (configurable)
+    const EXPIRED_LEASE_SYNC_INTERVAL_MS = Number(process.env.EXPIRED_LEASE_SYNC_INTERVAL_MS) || (15 * 60 * 1000);
     const runBackgroundExpiredLeaseSync = async () => {
       try {
         const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
@@ -7399,7 +7533,7 @@ async function startServer() {
     };
 
     runBackgroundExpiredLeaseSync();
-    setInterval(runBackgroundExpiredLeaseSync, 60000);
+    setInterval(runBackgroundExpiredLeaseSync, EXPIRED_LEASE_SYNC_INTERVAL_MS);
   });
 }
 

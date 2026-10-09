@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, Building2, BedDouble, GraduationCap, 
   Receipt, Ticket, History, Users, UserCog, Activity, Terminal, Mail, Sparkles,
-  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass, DoorOpen, Wrench, Box
+  Menu, X, PanelLeftClose, PanelLeft, Cpu, FileSignature, Compass, DoorOpen, Wrench, Box,
+  ShieldAlert
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -67,6 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isAna
     { id: 'user_roles', name: 'User & Akses', icon: UserCog },
     { id: 'email_integration', name: 'Integrasi Email', icon: Mail },
     { id: 'midtrans_logs', name: 'Midtrans Logs', icon: Terminal },
+    { id: 'egress_management', name: 'Egress Management', icon: ShieldAlert },
     { id: 'observability', name: 'Health & Observability', icon: Cpu },
     { id: 'activity_logs', name: 'Log Aktivitas', icon: Activity }
   ];
@@ -75,12 +77,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isAna
   // 14. User & Akses (user_roles)
   // 15. Integrasi Email (email_integration)
   // 16. Midtrans Logs (midtrans_logs)
-  // 17. Health & Observability (observability)
-  // 18. Log Aktivitas (activity_logs)
+  // 17. Egress Management (egress_management)
+  // 18. Health & Observability (observability)
+  // 19. Log Aktivitas (activity_logs)
   // Menu lengkap hanya untuk Super Admin
   const forbiddenForAnakOwner = new Set([
     'email_integration',
     'midtrans_logs',
+    'egress_management',
     'observability',
     'activity_logs',
     'user_roles'

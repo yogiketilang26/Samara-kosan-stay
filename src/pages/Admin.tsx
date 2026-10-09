@@ -22,6 +22,8 @@ import { CoaDiagnosticModal } from '../components/accounting/CoaDiagnosticModal'
 import { AccountingIntegrityAuditModal } from '../components/accounting/AccountingIntegrityAuditModal';
 import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
 import { AssetManagementSection } from '../components/AssetManagementSection';
+import { EgressManagementPanel } from '../components/common/EgressManagementPanel';
+import { egressGuard } from '../lib/egressGuard';
 import { can, canManageRole, canAssignProperty, canAccessProperty, maskNik, UserRole } from '../lib/permissions';
 import { formatRupiah } from '../utils/formatCurrency';
 import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
@@ -233,7 +235,7 @@ const OwnerSettingsManager: React.FC<{
               TAMPILAN TANDA TANGAN AKTIF DI INVOICE &amp; KONTRAK SEWA
             </span>
             <div className="h-16 flex items-center justify-center p-2 bg-slate-50 rounded-xl border border-slate-100">
-              {ownerSigUrl ? (
+              {ownerSigUrl && ownerSigUrl.trim() !== '' ? (
                 <img
                   src={ownerSigUrl}
                   alt="Tanda Tangan Owner Aktif"
@@ -436,6 +438,12 @@ export default function Admin({}: AdminProps) {
   const userAccess = ((user as any)?.access || '').toLowerCase();
   const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin' || userEmail === 'yogiketilang33@gmail.com' || userEmail.includes('superadmin')));
 
+  useEffect(() => {
+    if (userEmail) {
+      observability.setUserContext(userEmail);
+    }
+  }, [userEmail]);
+
   const [simulatedRole, setSimulatedRole] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search).get('role') || new URLSearchParams(window.location.search).get('portal');
@@ -474,16 +482,16 @@ export default function Admin({}: AdminProps) {
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
-  // Proteksi role Anak Owner: larang akses ke 5 modul teknis/privilege
+  // Proteksi role Anak Owner: larang akses ke 6 modul teknis/privilege
   useEffect(() => {
-    if (isAnakOwner && ['email_integration', 'midtrans_logs', 'observability', 'activity_logs', 'user_roles'].includes(activeTab)) {
+    if (isAnakOwner && ['email_integration', 'midtrans_logs', 'egress_management', 'observability', 'activity_logs', 'user_roles'].includes(activeTab)) {
       setActiveTab('dashboard');
     }
   }, [activeTab, isAnakOwner]);
   
   // Observability real-time state trigger
   const [, setObservabilityTrigger] = useState(0);
-  const [obsSubTab, setObsSubTab] = useState<'realtime' | 'api' | 'performance' | 'errors' | 'system_logs'>('realtime');
+  const [obsSubTab, setObsSubTab] = useState<'realtime' | 'api' | 'egress' | 'performance' | 'errors' | 'system_logs'>('realtime');
   
   useEffect(() => {
     const unsub = observability.subscribeToChanges(() => {
@@ -1154,26 +1162,6 @@ export default function Admin({}: AdminProps) {
       setIsSyncingExpiredLeases(false);
     }
   };
-
-  // Background timer to auto-release leases that have hit 0 duration and passed 24h
-  useEffect(() => {
-    const runBackgroundLeaseCheck = async () => {
-      try {
-        const res = await database.autoReleaseExpiredLeases();
-        if (res.releasedRooms > 0) {
-          refetchRooms();
-          refetchTenants();
-          refetchBookings();
-        }
-      } catch (e) {
-        console.warn('[Admin] Periodic lease release check:', e);
-      }
-    };
-
-    runBackgroundLeaseCheck();
-    const timer = setInterval(runBackgroundLeaseCheck, 60000);
-    return () => clearInterval(timer);
-  }, []);
 
   const handleRunCoaDiagnostics = async (force: boolean = true) => {
     setIsCheckingCoa(true);
@@ -7829,6 +7817,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <div className="flex border-b border-[#E2E8F0] overflow-x-auto gap-1 pr-2 no-scrollbar">
                 {[
                   { id: 'realtime', label: 'Websocket & Realtime', icon: LucideIcons.Radio, badge: rtHealth.connectionStatus === 'CONNECTED' ? 'Online' : rtHealth.connectionStatus === 'CONNECTING' ? 'Connecting' : 'Offline', badgeColor: rtHealth.connectionStatus === 'CONNECTED' ? 'bg-emerald-100 text-emerald-800' : rtHealth.connectionStatus === 'CONNECTING' ? 'bg-amber-100 text-amber-800 animate-pulse' : 'bg-rose-100 text-rose-800' },
+                  { id: 'egress', label: 'Egress Guard & Telemetry', icon: LucideIcons.ShieldAlert, badge: egressGuard.getSnapshot().formattedTotal, badgeColor: 'bg-indigo-100 text-indigo-800 border border-indigo-200 font-mono' },
                   { id: 'api', label: 'Kinerja API & Query', icon: LucideIcons.Zap, badge: `${apiStats.totalRequests} Req`, badgeColor: 'bg-[#F1F5F9] text-[#475569]' },
                   { id: 'performance', label: 'React & Browser Performance', icon: LucideIcons.Cpu, badge: `${renderCounts.length} Comp`, badgeColor: 'bg-[#F1F5F9] text-[#475569]' },
                   { id: 'errors', label: 'Error & Exception Logs', icon: LucideIcons.AlertTriangle, badge: `${errorLogs.length} Error`, badgeColor: errorLogs.length > 0 ? 'bg-rose-100 text-rose-800 animate-pulse font-bold' : 'bg-emerald-100 text-emerald-800' },
@@ -8317,7 +8306,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
                           <div className="space-y-1 text-slate-400 leading-normal">
                             <p><span className="text-slate-550 font-bold uppercase">URL Asal:</span> <span className="text-indigo-300">{log.url}</span></p>
-                            <p><span className="text-slate-550 font-bold uppercase">User Email:</span> <span className="text-[#0D9488] font-bold">@{log.userEmail || 'anonymous'}</span></p>
+                            <p><span className="text-slate-550 font-bold uppercase">User Email:</span> <span className="text-[#0D9488] font-bold">{log.userEmail && log.userEmail !== 'unknown' ? log.userEmail : 'anonymous (system)'}</span></p>
                           </div>
 
                           {log.stack && (
@@ -8417,9 +8406,21 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   </div>
                 </div>
               )}
+
+              {/* TAB 6: Egress Guard Telemetry & Management */}
+              {obsSubTab === 'egress' && (
+                <EgressManagementPanel />
+              )}
             </div>
           );
         })()}
+
+        {/* TAB: Dedicated Egress Management Tab for Super Admin */}
+        {!isAnakOwner && activeTab === 'egress_management' && (
+          <div className="space-y-6">
+            <EgressManagementPanel />
+          </div>
+        )}
 
         {/* TAB: Fixed Assets & Maintenance Ledger */}
         {activeTab === 'assets' && (
@@ -9518,7 +9519,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   )}
                 </div>
 
-                {tenantForm.ktp_image && (
+                {tenantForm.ktp_image && tenantForm.ktp_image.trim() !== '' && (
                   <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between gap-3 text-left">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-300 overflow-hidden flex items-center justify-center shrink-0">
@@ -9532,7 +9533,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
-                        onClick={() => setKtpPreviewModal(tenantForm.ktp_image)}
+                        onClick={() => setKtpPreviewModal(tenantForm.ktp_image || null)}
                         className="text-[10px] font-bold text-[#0D9488] bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
                       >
                         <Eye size={11} /> Lihat
@@ -10051,7 +10052,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     )}
                   </div>
 
-                  {t.ktp_image ? (
+                  {t.ktp_image && t.ktp_image.trim() !== '' ? (
                     <div 
                       onClick={() => setKtpPreviewModal(t.ktp_image || null)}
                       className="relative rounded-xl border border-slate-200 overflow-hidden bg-slate-900 group cursor-pointer max-h-48 flex items-center justify-center"
@@ -10250,7 +10251,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                         )}
                       </div>
 
-                      {t.marriage_certificate_url ? (
+                      {t.marriage_certificate_url && t.marriage_certificate_url.trim() !== '' ? (
                         <div 
                           onClick={() => setCertificatePreviewModal(t.marriage_certificate_url || null)}
                           className="relative rounded-xl border border-slate-200 overflow-hidden bg-slate-900 group cursor-pointer max-h-56 flex items-center justify-center"
@@ -10368,11 +10369,15 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </div>
 
             <div className="bg-slate-950 rounded-2xl overflow-hidden max-h-[70vh] flex items-center justify-center p-2">
-              <img 
-                src={certificatePreviewModal} 
-                alt="Buku Nikah / Dokumen Legalitas" 
-                className="max-h-[65vh] w-auto object-contain rounded-lg"
-              />
+              {certificatePreviewModal && certificatePreviewModal.trim() !== '' ? (
+                <img 
+                  src={certificatePreviewModal} 
+                  alt="Buku Nikah / Dokumen Legalitas" 
+                  className="max-h-[65vh] w-auto object-contain rounded-lg"
+                />
+              ) : (
+                <div className="text-slate-400 text-xs p-6">Dokumen tidak dapat dimuat</div>
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-1">
@@ -10427,11 +10432,15 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
             </div>
 
             <div className="bg-slate-950 rounded-2xl overflow-hidden max-h-[70vh] flex items-center justify-center p-2">
-              <img 
-                src={ktpPreviewModal} 
-                alt="Kartu Tanda Penduduk (KTP)" 
-                className="max-h-[65vh] w-auto object-contain rounded-lg"
-              />
+              {ktpPreviewModal && ktpPreviewModal.trim() !== '' ? (
+                <img 
+                  src={ktpPreviewModal} 
+                  alt="Kartu Tanda Penduduk (KTP)" 
+                  className="max-h-[65vh] w-auto object-contain rounded-lg"
+                />
+              ) : (
+                <div className="text-slate-400 text-xs p-6">Dokumen tidak dapat dimuat</div>
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-1">

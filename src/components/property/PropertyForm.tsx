@@ -552,7 +552,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       <div className="space-y-1 font-sans">
         <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono block mb-1">Foto Sampul Utama / Gallery Properti</label>
         
-        {formData.image_url ? (
+        {formData.image_url && formData.image_url.trim() !== '' ? (
           <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
             <img 
               src={formData.image_url} 
@@ -603,7 +603,7 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         
         {/* Existing gallery images grid */}
         <div className="grid grid-cols-4 gap-2">
-          {formData.images.map((img, idx) => (
+          {formData.images.filter(img => typeof img === 'string' && img.trim() !== '').map((img, idx) => (
             <div key={idx} className="relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950 aspect-video group">
               <img 
                 src={img} 

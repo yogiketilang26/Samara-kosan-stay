@@ -724,7 +724,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                     )}
                   </div>
 
-                  {bookingForm.marriageCertificateUrl ? (
+                  {bookingForm.marriageCertificateUrl && bookingForm.marriageCertificateUrl.trim() !== '' ? (
                     <div className="bg-white border-2 border-emerald-500/40 rounded-2xl p-3 flex items-center justify-between gap-3 shadow-xs">
                       <div className="flex items-center gap-3 overflow-hidden">
                         {bookingForm.marriageCertificateUrl.startsWith('data:image') || bookingForm.marriageCertificateUrl.includes('http') ? (
@@ -984,11 +984,15 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               </button>
             </div>
             <div className="p-4 flex items-center justify-center bg-slate-900/5 max-h-[70vh] overflow-auto">
-              <img 
-                src={bookingForm.marriageCertificateUrl} 
-                alt="Dokumen Buku Nikah"
-                className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-xs"
-              />
+              {bookingForm.marriageCertificateUrl && bookingForm.marriageCertificateUrl.trim() !== '' ? (
+                <img 
+                  src={bookingForm.marriageCertificateUrl} 
+                  alt="Dokumen Buku Nikah"
+                  className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-xs"
+                />
+              ) : (
+                <div className="text-slate-400 text-xs p-4">Dokumen tidak dapat dimuat</div>
+              )}
             </div>
             <div className="p-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-[10px]">
               <span className="text-slate-500 font-mono truncate max-w-[200px]">

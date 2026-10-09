@@ -29,7 +29,6 @@ import {
   getGoogleMapsSearchUrl, 
   getGoogleMapsDirectionsUrl 
 } from '../utils/mapTiles';
-import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
 
 interface HomeProps {}
 
@@ -215,7 +214,7 @@ const PropertyDetailMap: React.FC<{ property: Property; onOpenFullMap?: () => vo
 };
 
 export default function Home({}: HomeProps) {
-  // Use granular real-time table hooks to fetch data and receive live changes
+  // Use granular real-time table hooks for public catalog data
   const { data: propertiesData, loading: propertiesLoading } = useRealtimeTable<Property>(
     'properties',
     () => database.fetchProperties());
@@ -228,17 +227,8 @@ export default function Home({}: HomeProps) {
   const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
     'settings',
     () => database.fetchSettings().then(res => [res]));
-  const { data: tenantsData, loading: tenantsLoading } = useRealtimeTable<Tenant>(
-    'tenants',
-    () => database.fetchTenants());
-  const { data: surveysData, loading: surveysLoading } = useRealtimeTable<Survey>(
-    'surveys',
-    () => database.fetchSurveys());
-  const { data: contractExtensionsData, loading: contractExtensionsLoading } = useRealtimeTable<ContractExtension>(
-    'contract_extensions',
-    () => database.fetchContractExtensions());
 
-  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading || tenantsLoading || surveysLoading || contractExtensionsLoading;
+  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading;
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -357,12 +347,10 @@ export default function Home({}: HomeProps) {
   const [detailRoomTab, setDetailRoomTab] = useState<'all' | 'available' | 'occupied'>('all');
   const [detailRoomFloor, setDetailRoomFloor] = useState<number | 'all'>('all');
 
-  // Synchronized room availability validator directly connected to Supabase data & contract states.
-  // When a contract ends with no extension, this room immediately becomes available to end users.
+  // Synchronized room availability validator directly connected to Supabase room state
   const isRoomAvailable = (r: Room): boolean => {
     if (!r) return false;
-    const leaseStatus = getRoomLeaseStatus(r, tenants, undefined, contractExtensions);
-    return leaseStatus.isAvailableForBooking;
+    return r.status === 'available' || (r.status as string) === 'ready' || !r.status;
   };
 
   // Whenever catalog modal opens, instantly refetch latest room statuses from Supabase so locks are 100% current
@@ -449,9 +437,6 @@ export default function Home({}: HomeProps) {
     setRooms(filteredRooms);
     setCoupons(couponsData || []);
     setSettings(sett);
-    setTenants(tenantsData || []);
-    setSurveys(surveysData || []);
-    setContractExtensions(contractExtensionsData || []);
 
     // Keep active selection states synchronized with live database changes
     setActiveProperty(prev => {
@@ -472,7 +457,7 @@ export default function Home({}: HomeProps) {
     if (filteredProps && filteredProps.length > 0) {
       setPriceRange(5000000);
     }
-  }, [propertiesData, roomsData, couponsData, settingsData, tenantsData, surveysData, contractExtensionsData]);
+  }, [propertiesData, roomsData, couponsData, settingsData]);
 
   useEffect(() => {
     if (!hooksLoading) {
@@ -480,32 +465,6 @@ export default function Home({}: HomeProps) {
       setIsInitialLoad(false);
     }
   }, [hooksLoading]);
-
-  // Periodic background check to release rooms with 0 lease duration past 24h grace period
-  useEffect(() => {
-    const runAutoRelease = async () => {
-      try {
-        const result = await database.autoReleaseExpiredLeases();
-        if (result.releasedRooms > 0) {
-          console.log(`[Home Auto-Release] Released ${result.releasedRooms} expired rooms.`);
-          const [freshRooms, freshTenants, freshExtensions] = await Promise.all([
-            database.fetchRooms(),
-            database.fetchTenants(),
-            database.fetchContractExtensions()
-          ]);
-          if (freshRooms && freshRooms.length > 0) setRooms(freshRooms);
-          if (freshTenants) setTenants(freshTenants);
-          if (freshExtensions) setContractExtensions(freshExtensions);
-        }
-      } catch (e) {
-        console.warn('[Home] Auto release check:', e);
-      }
-    };
-
-    runAutoRelease();
-    const interval = setInterval(runAutoRelease, 60000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Listener for custom navigation events (e.g. from Navbar)
   useEffect(() => {
@@ -603,11 +562,20 @@ export default function Home({}: HomeProps) {
       if (settings?.why_choose_us) {
         const parsed = JSON.parse(settings.why_choose_us);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map((item: any) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+              if (item.title && item.description) return `${item.title} - ${item.description}`;
+              if (item.title) return item.title;
+              if (item.description) return item.description;
+              if (item.name) return item.name;
+            }
+            return String(item || '');
+          });
         }
       }
     } catch (e) {
-      console.error("Error parsing why_choose_us:", e);
+      console.warn("Notice parsing why_choose_us:", e);
     }
     return fallback;
   })();
@@ -636,11 +604,14 @@ export default function Home({}: HomeProps) {
       if (settings?.faqs) {
         const parsed = JSON.parse(settings.faqs);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map((item: any) => ({
+            question: item.question || item.q || item.title || '',
+            answer: item.answer || item.a || item.description || ''
+          })).filter(f => f.question && f.answer);
         }
       }
     } catch (e) {
-      console.error("Error parsing faqs:", e);
+      console.warn("Notice parsing faqs:", e);
     }
     return fallback;
   })();
@@ -665,20 +636,9 @@ export default function Home({}: HomeProps) {
   };
 
   const handleSelectRoom = (room: Room, flowType: 'monthly' | 'daily' | 'survey') => {
-    // Check real-time lease status for 24h grace period auto-release
-    const leaseStatus = getRoomLeaseStatus(room, tenants, []);
-
     if (room.status === 'occupied' || room.status === 'reserved' || room.status === 'maintenance') {
-      if (leaseStatus.isAvailableForBooking) {
-        // Automatically allow booking since 24h grace period has passed!
-        console.log(`[Home] Room ${room.room_number} lease expired >24h. Allowing booking.`);
-      } else {
-        const remainingText = leaseStatus.leaseInfo 
-          ? ` (${leaseStatus.leaseInfo.remainingDaysText})` 
-          : '';
-        alert(`Kamar ${room.room_number} saat ini ${room.status === 'occupied' ? `masih terisi oleh penyewa${remainingText}` : room.status === 'maintenance' ? 'sedang dalam pemeliharaan' : 'sedang dipesan (reserved)'} dan belum dapat dibooking.`);
-        return;
-      }
+      alert(`Kamar ${room.room_number} saat ini ${room.status === 'occupied' ? 'masih terisi oleh penyewa' : room.status === 'maintenance' ? 'sedang dalam pemeliharaan' : 'sedang dipesan (reserved)'} dan belum dapat dibooking.`);
+      return;
     }
     setActiveRoom(room);
     setCheckoutFlow(flowType);
@@ -2369,19 +2329,27 @@ export default function Home({}: HomeProps) {
               </div>
               
               <div className="md:col-span-7 space-y-3">
-                {whyChooseUs.map((item, idx) => (
-                  <div 
-                    key={idx} 
-                    className="flex items-center gap-4 bg-white border border-brand-beige/60 p-4 rounded-2xl shadow-sm hover:shadow transition-all duration-250"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-[#2E6F40] text-white flex items-center justify-center shrink-0 shadow-sm shadow-[#2E6F40]/15">
-                      <Check size={14} className="stroke-[3]" />
+                {whyChooseUs.map((item, idx) => {
+                  const displayText = typeof item === 'string'
+                    ? item
+                    : ((item as any)?.title 
+                        ? `${(item as any).title}${(item as any)?.description ? ` - ${(item as any).description}` : ''}`
+                        : ((item as any)?.description || (item as any)?.name || String(item || '')));
+
+                  return (
+                    <div 
+                      key={idx} 
+                      className="flex items-center gap-4 bg-white border border-brand-beige/60 p-4 rounded-2xl shadow-sm hover:shadow transition-all duration-250"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-[#2E6F40] text-white flex items-center justify-center shrink-0 shadow-sm shadow-[#2E6F40]/15">
+                        <Check size={14} className="stroke-[3]" />
+                      </div>
+                      <span className="font-extrabold text-brand-primary text-xs md:text-sm tracking-tight text-left">
+                        {displayText}
+                      </span>
                     </div>
-                    <span className="font-extrabold text-brand-primary text-xs md:text-sm tracking-tight text-left">
-                      {item}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -3063,11 +3031,11 @@ export default function Home({}: HomeProps) {
             {/* Grid of 4 Smaller Photos (Col span 1 each) */}
             <div className="hidden md:grid grid-cols-2 grid-rows-2 col-span-2 gap-3 h-full">
               {(() => {
-                const galleryImages = (activeProperty.images || []).filter(Boolean);
+                const galleryImages = (activeProperty.images || []).filter(img => typeof img === 'string' && img.trim() !== '');
                 const labels = ["Ruang Kamar", "Kamar Mandi", "Area Bersama", "Rooftop Lounge"];
                 
                 return [0, 1, 2, 3].map((idx) => {
-                  const url = galleryImages[idx] || (idx === 0 ? activeProperty.image_url : null);
+                  const url = galleryImages[idx] || (idx === 0 ? (activeProperty.image_url && activeProperty.image_url.trim() !== '' ? activeProperty.image_url : null) : null);
                   const label = labels[idx];
                   return (
                     <div 
@@ -4225,7 +4193,7 @@ export default function Home({}: HomeProps) {
               const detailRoomImages = [
                 selectedRoomForDetail.image_url,
                 ...(selectedRoomForDetail.images || [])
-              ].filter(Boolean) as string[];
+              ].filter(img => typeof img === 'string' && img.trim() !== '') as string[];
 
               return detailRoomImages.length > 0 ? (
                 <div className="space-y-2">

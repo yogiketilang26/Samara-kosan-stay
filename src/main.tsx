@@ -8,7 +8,7 @@ async function fetchConfigWithRetry(retries = 3, delayMs = 500): Promise<any> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
       const res = await fetch('/api/config', { signal: controller.signal });
       clearTimeout(timeoutId);
 
@@ -17,7 +17,7 @@ async function fetchConfigWithRetry(retries = 3, delayMs = 500): Promise<any> {
       }
       console.warn(`[CONFIG SYNC] /api/config responded with status ${res.status}, attempt ${attempt}/${retries}`);
     } catch (err: any) {
-      console.warn(`[CONFIG SYNC] Failed to fetch /api/config (attempt ${attempt}/${retries}):`, err.message || err);
+      console.warn(`[CONFIG SYNC] Notice synchronizing /api/config (attempt ${attempt}/${retries}):`, err?.message || err);
     }
 
     if (attempt < retries) {

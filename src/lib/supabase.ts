@@ -12,6 +12,18 @@ import {
   MidtransClearingTransaction, BankReconciliationMatch, NearbyAmenity, StandardFacility
 } from '../types';
 import { sanitizePropertyCoordinates } from '../utils/mapCoordinates';
+import { 
+  DEFAULT_PROPERTIES, 
+  DEFAULT_ROOMS, 
+  DEFAULT_COUPONS, 
+  DEFAULT_SETTINGS, 
+  DEFAULT_TENANTS, 
+  DEFAULT_SURVEYS, 
+  DEFAULT_CONTRACT_EXTENSIONS, 
+  DEFAULT_FACILITIES, 
+  getTableDefaultSeeds 
+} from '../data/fallbackData';
+import { egressGuard, inspectPayloadForBase64 } from './egressGuard';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
 let activeSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || (import.meta as any).env?.SUPABASE_URL || '';
@@ -80,12 +92,145 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
+// Circuit breaker state for Supabase quota/rate-limits/restrictions
+const SESSION_QUOTA_KEY = 'samara_quota_exceeded_timestamp';
+const QUOTA_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes cooldown before retrying live Supabase calls
+
+export let isSupabaseQuotaExceeded = (() => {
+  try {
+    if (typeof window !== 'undefined') {
+      const stored = sessionStorage.getItem(SESSION_QUOTA_KEY) || localStorage.getItem(SESSION_QUOTA_KEY);
+      if (stored) {
+        const timestamp = Number(stored);
+        if (Date.now() - timestamp < QUOTA_COOLDOWN_MS) {
+          return true;
+        }
+      }
+    }
+  } catch (e) {}
+  return false;
+})();
+
+let quotaExceededDetectedAt = isSupabaseQuotaExceeded ? Date.now() : 0;
+
+export function isQuotaRestrictionActive(): boolean {
+  if (!isSupabaseQuotaExceeded) {
+    try {
+      if (typeof window !== 'undefined') {
+        const stored = sessionStorage.getItem(SESSION_QUOTA_KEY) || localStorage.getItem(SESSION_QUOTA_KEY);
+        if (stored && (Date.now() - Number(stored) < QUOTA_COOLDOWN_MS)) {
+          isSupabaseQuotaExceeded = true;
+          quotaExceededDetectedAt = Number(stored);
+          return true;
+        }
+      }
+    } catch (e) {}
+    return false;
+  }
+  if (Date.now() - quotaExceededDetectedAt > QUOTA_COOLDOWN_MS) {
+    isSupabaseQuotaExceeded = false;
+    try {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem(SESSION_QUOTA_KEY);
+        localStorage.removeItem(SESSION_QUOTA_KEY);
+      }
+    } catch (e) {}
+    return false;
+  }
+  return true;
+}
+
+export function markQuotaExceeded(reason?: string) {
+  isSupabaseQuotaExceeded = true;
+  quotaExceededDetectedAt = Date.now();
+  try {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem(SESSION_QUOTA_KEY, String(Date.now()));
+      localStorage.setItem(SESSION_QUOTA_KEY, String(Date.now()));
+    }
+  } catch (e) {}
+  console.log(`[SUPABASE NOTICE] Egress quota exceeded or service restricted (${reason || 'quota'}). Resilient offline cache & seed fallback activated.`);
+}
+
+/**
+ * Resilient fetch proxy for Supabase client:
+ * 1. Intercepts placeholder domain calls before network transmission.
+ * 2. Catches network/CORS/quota 'Failed to fetch' errors gracefully without throwing uncaught exceptions.
+ * 3. Automatically activates the circuit breaker so fallback APIs take over smoothly.
+ */
+export const safeSupabaseFetch: typeof fetch = async (input, init) => {
+  const urlStr = typeof input === 'string' ? input : (input instanceof Request ? input.url : String(input));
+  
+  if (urlStr.includes('placeholder-project.supabase.co')) {
+    return new Response(JSON.stringify({ error: 'Supabase credentials not yet configured' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // Extract table name from PostgREST URL path (e.g., /rest/v1/properties)
+  let extractedTable = 'supabase_rest';
+  try {
+    const urlObj = new URL(urlStr, 'https://supabase.internal');
+    const pathParts = urlObj.pathname.split('/');
+    const restIdx = pathParts.indexOf('v1');
+    if (restIdx !== -1 && pathParts[restIdx + 1]) {
+      extractedTable = pathParts[restIdx + 1].split('?')[0];
+    }
+  } catch (e) {}
+
+  try {
+    const res = await fetch(input, init);
+    if (res.status === 402 || res.status === 429) {
+      markQuotaExceeded(`HTTP ${res.status}: Egress quota exceeded or spend cap active`);
+    }
+
+    // Telemetry: measure clone response body bytes for egressGuard
+    try {
+      const cloned = res.clone();
+      cloned.text().then((text) => {
+        if (text) {
+          const byteLen = new TextEncoder().encode(text).length;
+          // Row estimate based on JSON array length
+          let rowCount = 1;
+          try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) rowCount = parsed.length;
+          } catch (pe) {}
+          egressGuard.recordTableEgress(extractedTable, byteLen, rowCount, 'supabase');
+        }
+      }).catch(() => {});
+    } catch (telemetryErr) {}
+
+    return res;
+  } catch (err: any) {
+    const msg = (err?.message || String(err || '')).toLowerCase();
+    const isNetworkOrQuota = 
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('load failed') ||
+      msg.includes('fetch failed');
+
+    if (isNetworkOrQuota) {
+      markQuotaExceeded('Network error / Failed to fetch on Supabase domain');
+      return new Response(JSON.stringify({ error: 'Supabase endpoint unreachable or quota exceeded', code: 'PGRST_NET_ERR' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    throw err;
+  }
+};
+
 // Standardize Auth Client: Always initialize one client instance using safe placeholders to prevent GoTrue/client creation crashes
 const SUPABASE_CLIENT_OPTIONS = {
   auth: {
     persistSession: true,
-    autoRefreshToken: true,
+    autoRefreshToken: Boolean(isSupabaseConfigured),
     detectSessionInUrl: true
+  },
+  global: {
+    fetch: safeSupabaseFetch
   },
   realtime: {
     params: {
@@ -256,6 +401,14 @@ class SupabaseRealtimeManager {
   private establishGlobalChannel(force = false) {
     if (!this.client || !this.isConfigured) return;
 
+    // If Supabase project is restricted (e.g. exceed_egress_quota), WebSocket handshake will fail with transport failure
+    if (isQuotaRestrictionActive()) {
+      if (this.connectionStatus !== 'DISCONNECTED') {
+        this.connectionStatus = 'DISCONNECTED';
+      }
+      return;
+    }
+
     if (!force && (this.connectionStatus === 'CONNECTED' || this.connectionStatus === 'CONNECTING')) {
       return; // DO NOTHING IF ALREADY CONNECTED OR CONNECTING
     }
@@ -269,36 +422,38 @@ class SupabaseRealtimeManager {
     // Watchdog: If subscription gets stuck in CONNECTING state for > 15s, reset and retry
     this.watchdogTimeout = setTimeout(() => {
       if (this.connectionStatus === 'CONNECTING') {
-        console.warn('[REALTIME MANAGER WATCHDOG] Subscription hung in CONNECTING state for 15s. Resetting channel...');
-        this.triggerLog('WARNING', 'Realtime subscription connection timed out (watchdog fired). Re-establishing...');
         this.handleRealtimeDisconnected();
         this.scheduleReconnect();
       }
     }, 15000);
 
     try {
-      console.log('[REALTIME MANAGER] Setting up single global database-wide listener...');
-      
       if (this.globalChannel) {
-        try {
-          this.client.removeChannel(this.globalChannel).catch(() => {});
-        } catch (e) {}
+        const oldChannel = this.globalChannel;
         this.globalChannel = null;
+        try {
+          this.client.removeChannel(oldChannel).catch(() => {});
+        } catch (e) {}
       }
 
       const channel = this.client.channel('db-global-realtime');
+      this.globalChannel = channel;
       
-      this.globalChannel = channel
+      channel
         .on('postgres_changes', { event: '*', schema: 'public' }, (payload: any) => {
-          console.log('[REALTIME MANAGER] Realtime change event received:', payload);
           if (payload && payload.table) {
+            try {
+              egressGuard.recordRealtimeEvent(payload.table, payload);
+            } catch (egressErr) {}
             this.dispatchLocalEvent(payload.table, payload);
           }
         })
         .on('broadcast', { event: 'db_mutation' }, (payload: any) => {
-          console.log('[REALTIME MANAGER] Realtime remote broadcast received:', payload);
           const msg = payload?.payload || payload;
           if (msg && msg.table && msg.sourceTabId !== this.tabId) {
+            try {
+              egressGuard.recordRealtimeEvent(msg.table, msg);
+            } catch (egressErr) {}
             this.dispatchLocalEvent(msg.table, {
               eventType: msg.eventType || 'UPDATE',
               new: msg.data,
@@ -308,24 +463,31 @@ class SupabaseRealtimeManager {
           }
         })
         .subscribe((status: string, err?: any) => {
-          console.log(`[REALTIME MANAGER STATUS] Global channel status: ${status}`);
+          // Ignore status events for stale or replaced channels to prevent race conditions
+          if (this.globalChannel !== channel) {
+            return;
+          }
+
           this.clearWatchdogTimeout();
 
           if (status === 'SUBSCRIBED') {
             this.retryCount = 0;
             this.handleRealtimeConnected();
           } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.warn(`[REALTIME MANAGER WARNING] Global channel status offline: ${status}`, err);
+            const errStr = String(err?.message || err || '');
+            if (errStr.includes('transport failure') || errStr.includes('quota') || errStr.includes('restricted')) {
+              markQuotaExceeded(errStr || 'transport failure');
+            }
+
             if (this.connectionStatus === 'CONNECTED') {
               this.droppedSubscriptions++;
-              this.triggerLog('WARNING', `Websocket channel dropped: ${status}. Total dropped: ${this.droppedSubscriptions}`);
+              this.triggerLog('WARNING', `Websocket channel dropped: ${status}.`);
             }
             this.handleRealtimeDisconnected();
             this.scheduleReconnect();
           }
         });
-    } catch (err) {
-      console.error('[REALTIME MANAGER] Error establishing global channel:', err);
+    } catch (err: any) {
       this.clearWatchdogTimeout();
       this.handleRealtimeDisconnected();
       this.scheduleReconnect();
@@ -351,17 +513,29 @@ class SupabaseRealtimeManager {
     if (this.connectionStatus === 'CONNECTING' || this.connectionStatus === 'CONNECTED') {
       return; // DO NOTHING
     }
+    if (isQuotaRestrictionActive()) {
+      return; // Stop reconnect loop if Supabase egress quota is restricted
+    }
     
+    if (this.retryCount >= 3) {
+      // Pause aggressive retries to prevent console spam when remote WebSocket transport is down
+      this.triggerLog('WARNING', 'Realtime connection paused after 3 failed attempts. Inter-tab broadcast remains active.');
+      this.retryTimeout = setTimeout(() => {
+        this.retryTimeout = null;
+        this.retryCount = 0;
+        this.establishGlobalChannel(true);
+      }, 60000);
+      return;
+    }
+
     this.reconnectAttempts++;
     this.triggerLog('INFO', `Websocket scheduling reconnect attempt #${this.reconnectAttempts}`);
 
     this.retryCount++;
-    // Exponential backoff with jitter (1s, 1.5s, 2.25s, ... capped at 30s)
-    const baseDelay = Math.min(1000 * Math.pow(1.5, this.retryCount), 30000);
+    // Exponential backoff with jitter (1s, 1.5s, 2.25s, ... capped at 15s)
+    const baseDelay = Math.min(1000 * Math.pow(1.5, this.retryCount), 15000);
     const jitter = Math.floor(Math.random() * 500);
     const delay = baseDelay + jitter;
-    
-    console.log(`[REALTIME MANAGER] Reconnecting global channel in ${delay}ms (Attempt ${this.retryCount})`);
     
     this.retryTimeout = setTimeout(() => {
       this.retryTimeout = null;
@@ -373,6 +547,9 @@ class SupabaseRealtimeManager {
     if (this.connectionStatus === 'CONNECTED') return;
     console.log('[REALTIME MANAGER] Realtime connection fully established.');
     this.connectionStatus = 'CONNECTED';
+    try {
+      egressGuard.setRealtimeStatus('CONNECTED');
+    } catch (e) {}
     this.triggerLog('INFO', 'Websocket status changed to CONNECTED');
   }
 
@@ -380,6 +557,9 @@ class SupabaseRealtimeManager {
     if (this.connectionStatus === 'DISCONNECTED') return;
     console.warn('[REALTIME MANAGER] Realtime connection lost.');
     this.connectionStatus = 'DISCONNECTED';
+    try {
+      egressGuard.setRealtimeStatus('DISCONNECTED');
+    } catch (e) {}
     this.triggerLog('WARNING', 'Websocket status changed to DISCONNECTED');
   }
 
@@ -400,6 +580,9 @@ class SupabaseRealtimeManager {
     }
     
     this.listeners.clear();
+    try {
+      egressGuard.setRealtimeStatus('DISCONNECTED');
+    } catch (e) {}
   }
 
   public subscribe(tableName: string, criteria: any, callback: RealtimeCallback): () => void {
@@ -414,6 +597,9 @@ class SupabaseRealtimeManager {
         const currentListeners = this.listeners.get(tableName);
         if (currentListeners) {
           currentListeners.delete(callback);
+          try {
+            egressGuard.updateTableListenerCount(tableName, currentListeners.size);
+          } catch (e) {}
           if (currentListeners.size === 0) {
             this.listeners.delete(tableName);
           }
@@ -422,6 +608,9 @@ class SupabaseRealtimeManager {
     }
 
     tableListeners.add(callback);
+    try {
+      egressGuard.updateTableListenerCount(tableName, tableListeners.size);
+    } catch (e) {}
 
     console.log(`[REALTIME MANAGER] Centralized subscription registered for table: ${tableName}. Total listeners: ${tableListeners.size}`);
 
@@ -438,6 +627,9 @@ class SupabaseRealtimeManager {
       const currentListeners = this.listeners.get(tableName);
       if (currentListeners) {
         currentListeners.delete(callback);
+        try {
+          egressGuard.updateTableListenerCount(tableName, currentListeners.size);
+        } catch (e) {}
         console.log(`[REALTIME MANAGER] Centralized subscription unregistered for table: ${tableName}. Remaining listeners: ${currentListeners.size}`);
         
         this.subscriptionHistory.unshift({
@@ -517,7 +709,13 @@ export function configureSupabaseDynamically(url: string, key: string) {
     activeSupabaseUrl = url;
     activeSupabaseAnonKey = key;
     isSupabaseConfigured = true;
-    supabase = createClient(url, key, SUPABASE_CLIENT_OPTIONS);
+    supabase = createClient(url, key, {
+      ...SUPABASE_CLIENT_OPTIONS,
+      auth: {
+        ...SUPABASE_CLIENT_OPTIONS.auth,
+        autoRefreshToken: true
+      }
+    });
     console.log('[SUPABASE] Configured dynamically from server runtime environment!');
     
     // Re-initialize realtime subscriptions with the new client
@@ -814,6 +1012,12 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
     activePayload.category = allowed.includes(cat) ? cat : 'transit';
   }
 
+  // Inspect payload size to alert against base64 bloating
+  const inspection = inspectPayloadForBase64(activePayload);
+  if (inspection.isBloated) {
+    console.warn(`[EGRESS GUARD] Large payload warning on table '${table}':`, inspection.warnings.join(' | '));
+  }
+
   // Early Schema Validation
   const allowedCols = tableSchemas[table];
   if (allowedCols) {
@@ -1057,21 +1261,48 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
 }
 
 export function logSupabaseError(context: string, error: any, isException = false) {
-  const errMsg = typeof error === 'string' ? error : (error?.message || error?.details || JSON.stringify(error || ''));
+  const rawMsg = typeof error === 'string' ? error : (error?.message || error?.details || error?.error_description || JSON.stringify(error || ''));
+  const errMsg = rawMsg.toLowerCase();
+
+  const isQuotaOrRestricted = 
+    errMsg.includes('exceed_egress_quota') ||
+    errMsg.includes('egress_quota') ||
+    errMsg.includes('egress') ||
+    errMsg.includes('restricted due to') ||
+    errMsg.includes('restricted') ||
+    errMsg.includes('spend caps') ||
+    errMsg.includes('upgrade their plan') ||
+    errMsg.includes('violat') ||
+    errMsg.includes('quota') ||
+    errMsg.includes('429') ||
+    errMsg.includes('too many requests') ||
+    errMsg.includes('failed to fetch') ||
+    errMsg.includes('networkerror') ||
+    errMsg.includes('load failed') ||
+    errMsg.includes('fetch failed');
+
+  if (isQuotaOrRestricted) {
+    markQuotaExceeded(rawMsg);
+    console.log(`[SUPABASE NOTICE] [${context}] Egress quota exceeded / service restricted / network offline. Resilient recovery active.`);
+    return;
+  }
+
   if (
     error?.code === 'PGRST205' || 
     error?.code === '42501' || 
-    errMsg.includes('Could not find the table') || 
+    errMsg.includes('could not find the table') || 
     errMsg.includes('schema cache') ||
-    errMsg.includes('permission denied for table') ||
-    errMsg.includes('Failed to fetch') ||
-    errMsg.includes('NetworkError') ||
-    errMsg.includes('Load failed')
+    errMsg.includes('permission denied') ||
+    errMsg.includes('failed to fetch') ||
+    errMsg.includes('networkerror') ||
+    errMsg.includes('load failed') ||
+    errMsg.includes('aborterror') ||
+    errMsg.includes('fetch failed')
   ) {
-    console.warn(`[SUPABASE NOTICE] [${context}] Resilient recovery active (Network/CORS/Permission):`, errMsg);
+    console.log(`[SUPABASE NOTICE] [${context}] Resilient recovery active (Network/CORS/Permission): ${rawMsg}`);
     return;
   }
-  console.error(`[SUPABASE ERROR] [${context}]`, error);
+  console.warn(`[SUPABASE NOTICE] [${context}] Database query notice:`, rawMsg);
 }
 
 export async function fetchTableWithFallback<T>(
@@ -1102,8 +1333,8 @@ export async function fetchTableWithFallback<T>(
     } catch (e) {}
   };
 
-  // 1. Direct Supabase query if configured
-  if (isSupabaseConfigured) {
+  // 1. Direct Supabase query if configured and not under quota restriction
+  if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
     try {
       const { data, error } = await supabase
         .from(tableName)
@@ -1112,6 +1343,7 @@ export async function fetchTableWithFallback<T>(
         .range(offset, offset + limit - 1);
 
       if (!error && data) {
+        egressGuard.measureAndRecord(tableName, data, 'supabase');
         setCachedData(data as T[]);
         return data as T[];
       }
@@ -1132,6 +1364,7 @@ export async function fetchTableWithFallback<T>(
     if (resp.ok) {
       const json = await resp.json();
       if (json.success && Array.isArray(json.data)) {
+        egressGuard.measureAndRecord(tableName, json.data, 'rest-fallback');
         setCachedData(json.data);
         return json.data as T[];
       }
@@ -1156,81 +1389,129 @@ export async function fetchTableWithFallback<T>(
 export const database = {
   // --- PROPERTIES ---
   async fetchProperties(options?: { limit?: number; offset?: number }): Promise<Property[]> {
-    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
-    try {
-      let { data, error } = await supabase
-        .from('properties')
-        .select(`
-          *,
-          property_facilities (
-            facility_id,
-            facilities (
-              id,
-              name,
-              icon,
-              category,
-              description
-            )
-          )
-        `)
-        .order('id', { ascending: true })
-        .range(offset, offset + limit - 1);
+    const cacheKey = 'samara_cache_properties';
 
-      if (error) {
-        console.warn('[fetchProperties] Relational select failed, attempting fallback select:', error.message);
-        const fallback = await supabase
-          .from('properties')
-          .select('*')
-          .order('id', { ascending: true })
-          .range(offset, offset + limit - 1);
-        if (fallback.error) {
-          logSupabaseError('fetchProperties', fallback.error);
-          return [];
-        }
-        data = fallback.data;
-      }
-      
-      const mapped = (data || []).map((p: any) => {
-        const resolvedFacilities = (p.property_facilities || [])
-          .map((pf: any) => pf?.facilities)
-          .filter((f: any) => f !== null && f !== undefined)
-          .map((f: any) => ({
-            id: f.id,
-            name: f.name,
-            icon: f.icon,
-            category: f.category,
-            description: f.description
-          }));
-        
-        let depositVal = p.deposit_amount;
-        if (depositVal === undefined || depositVal === null) {
-          if (p.terms && typeof p.terms === 'string') {
-            const match = p.terms.match(/\[DEPOSIT:(\d+)\]/);
-            if (match) {
-              depositVal = Number(match[1]);
-            }
+    const getCached = (): Property[] => {
+      try {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem(cacheKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
           }
         }
-
-        const coords = sanitizePropertyCoordinates(p);
-
-        const cleanProperty = { 
-          ...p, 
-          lat: coords.lat,
-          lng: coords.lng,
-          facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(p.facilities) ? p.facilities : []),
-          deposit_amount: depositVal ?? 500000
-        };
-        delete cleanProperty.property_facilities;
-        return cleanProperty;
-      });
-      return mapped as Property[];
-    } catch (err) {
-      logSupabaseError('fetchProperties', err, true);
+      } catch (e) {}
       return [];
+    };
+
+    const setCached = (items: Property[]) => {
+      try {
+        if (typeof window !== 'undefined' && items && items.length > 0) {
+          localStorage.setItem(cacheKey, JSON.stringify(items));
+        }
+      } catch (e) {}
+    };
+
+    // 1. Direct Supabase query if configured and not under quota restriction
+    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+      try {
+        let { data, error } = await supabase
+          .from('properties')
+          .select(`
+            *,
+            property_facilities (
+              facility_id,
+              facilities (
+                id,
+                name,
+                icon,
+                category,
+                description
+              )
+            )
+          `)
+          .order('id', { ascending: true })
+          .range(offset, offset + limit - 1);
+
+        if (error) {
+          console.warn('[fetchProperties] Relational select failed, attempting fallback select:', error.message);
+          const fallback = await supabase
+            .from('properties')
+            .select('*')
+            .order('id', { ascending: true })
+            .range(offset, offset + limit - 1);
+          if (fallback.error) {
+            logSupabaseError('fetchProperties', fallback.error);
+          } else {
+            data = fallback.data;
+          }
+        }
+        
+        if (data && data.length > 0) {
+          const mapped = (data || []).map((p: any) => {
+            const resolvedFacilities = (p.property_facilities || [])
+              .map((pf: any) => pf?.facilities)
+              .filter((f: any) => f !== null && f !== undefined)
+              .map((f: any) => ({
+                id: f.id,
+                name: f.name,
+                icon: f.icon,
+                category: f.category,
+                description: f.description
+              }));
+            
+            let depositVal = p.deposit_amount;
+            if (depositVal === undefined || depositVal === null) {
+              if (p.terms && typeof p.terms === 'string') {
+                const match = p.terms.match(/\[DEPOSIT:(\d+)\]/);
+                if (match) {
+                  depositVal = Number(match[1]);
+                }
+              }
+            }
+
+            const coords = sanitizePropertyCoordinates(p);
+
+            const cleanProperty = { 
+              ...p, 
+              lat: coords.lat,
+              lng: coords.lng,
+              facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(p.facilities) ? p.facilities : []),
+              deposit_amount: depositVal ?? 500000
+            };
+            delete cleanProperty.property_facilities;
+            return cleanProperty;
+          });
+          setCached(mapped as Property[]);
+          return mapped as Property[];
+        }
+      } catch (err) {
+        logSupabaseError('fetchProperties', err, true);
+      }
     }
+
+    // 2. Server API fallback
+    try {
+      const resp = await fetch(`/api/data/properties?limit=${limit}&offset=${offset}`);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          setCached(json.data as Property[]);
+          return json.data as Property[];
+        }
+      }
+    } catch (e) {}
+
+    // 3. Local offline cache fallback
+    const cached = getCached();
+    if (cached.length > 0) {
+      return cached;
+    }
+
+    // 4. Default seed properties fallback
+    return DEFAULT_PROPERTIES;
   },
 
   async saveProperty(prop: Partial<Property> & { facilities?: Facility[] | number[] | any[] }): Promise<Property> {
@@ -1629,75 +1910,123 @@ export const database = {
 
   // --- ROOMS ---
   async fetchRooms(options?: { limit?: number; offset?: number }): Promise<Room[]> {
-    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
-    try {
-      let { data, error } = await supabase
-        .from('rooms')
-        .select(`
-          *,
-          room_facilities (
-            facility_id,
-            facilities (
-              id,
-              name,
-              icon,
-              category,
-              description
-            )
-          )
-        `)
-        .order('room_number', { ascending: true })
-        .range(offset, offset + limit - 1);
+    const cacheKey = 'samara_cache_rooms';
 
-      if (error) {
-        console.warn('[fetchRooms] Relational select failed, attempting fallback select:', error.message);
-        const fallback = await supabase
+    const getCached = (): Room[] => {
+      try {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem(cacheKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+        }
+      } catch (e) {}
+      return [];
+    };
+
+    const setCached = (items: Room[]) => {
+      try {
+        if (typeof window !== 'undefined' && items && items.length > 0) {
+          localStorage.setItem(cacheKey, JSON.stringify(items));
+        }
+      } catch (e) {}
+    };
+
+    // 1. Direct Supabase query if configured and not under quota restriction
+    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+      try {
+        let { data, error } = await supabase
           .from('rooms')
-          .select('*')
+          .select(`
+            *,
+            room_facilities (
+              facility_id,
+              facilities (
+                id,
+                name,
+                icon,
+                category,
+                description
+              )
+            )
+          `)
           .order('room_number', { ascending: true })
           .range(offset, offset + limit - 1);
-        if (fallback.error) {
-          logSupabaseError('fetchRooms', fallback.error);
-          return [];
-        }
-        data = fallback.data;
-      }
-      
-      const mapped = (data || []).map((r: any) => {
-        const resolvedFacilities = (r.room_facilities || [])
-          .map((rf: any) => rf?.facilities)
-          .filter((f: any) => f !== null && f !== undefined)
-          .map((f: any) => ({
-            id: f.id,
-            name: f.name,
-            icon: f.icon,
-            category: f.category,
-            description: f.description
-          }));
 
-        // Business rule: Rooms remain available for other tenants and surveys until officially paid/occupied.
-        const normalizedStatus = (r.status === 'reserved' || !r.status) ? 'available' : r.status;
+        if (error) {
+          console.warn('[fetchRooms] Relational select failed, attempting fallback select:', error.message);
+          const fallback = await supabase
+            .from('rooms')
+            .select('*')
+            .order('room_number', { ascending: true })
+            .range(offset, offset + limit - 1);
+          if (fallback.error) {
+            logSupabaseError('fetchRooms', fallback.error);
+          } else {
+            data = fallback.data;
+          }
+        }
         
-        // Auto-heal any lingering 'reserved' status in Supabase
-        if (r.status === 'reserved') {
-          safeSupabaseUpsert('rooms', { status: 'available' }, r.id).catch(e => console.warn('[Auto-heal Room Status]', e));
-        }
+        if (data && data.length > 0) {
+          const mapped = (data || []).map((r: any) => {
+            const resolvedFacilities = (r.room_facilities || [])
+              .map((rf: any) => rf?.facilities)
+              .filter((f: any) => f !== null && f !== undefined)
+              .map((f: any) => ({
+                id: f.id,
+                name: f.name,
+                icon: f.icon,
+                category: f.category,
+                description: f.description
+              }));
 
-        const cleanRoom = { 
-          ...r, 
-          status: normalizedStatus,
-          facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(r.facilities) ? r.facilities : [])
-        };
-        delete cleanRoom.room_facilities;
-        return cleanRoom;
-      });
-      return mapped as Room[];
-    } catch (err) {
-      logSupabaseError('fetchRooms', err, true);
-      return [];
+            // Business rule: Rooms remain available for other tenants and surveys until officially paid/occupied.
+            const normalizedStatus = (r.status === 'reserved' || !r.status) ? 'available' : r.status;
+            
+            // Auto-heal any lingering 'reserved' status in Supabase
+            if (r.status === 'reserved') {
+              safeSupabaseUpsert('rooms', { status: 'available' }, r.id).catch(e => console.warn('[Auto-heal Room Status]', e));
+            }
+
+            const cleanRoom = { 
+              ...r, 
+              status: normalizedStatus,
+              facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(r.facilities) ? r.facilities : [])
+            };
+            delete cleanRoom.room_facilities;
+            return cleanRoom;
+          });
+          setCached(mapped as Room[]);
+          return mapped as Room[];
+        }
+      } catch (err) {
+        logSupabaseError('fetchRooms', err, true);
+      }
     }
+
+    // 2. Server API fallback
+    try {
+      const resp = await fetch(`/api/data/rooms?limit=${limit}&offset=${offset}&order_col=room_number&order_asc=true`);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          setCached(json.data as Room[]);
+          return json.data as Room[];
+        }
+      }
+    } catch (e) {}
+
+    // 3. Local offline cache fallback
+    const cached = getCached();
+    if (cached.length > 0) {
+      return cached;
+    }
+
+    // 4. Default seed rooms fallback
+    return DEFAULT_ROOMS;
   },
 
   async saveRoom(room: Partial<Room> & { facilities?: Facility[] | number[] | any[] }): Promise<Room> {
@@ -2066,7 +2395,6 @@ export const database = {
   // Memastikan data kamar yang tersedia di tampilan end-user sinkron dengan Supabase.
   // Setiap kamar yang sudah habis kontrak tanpa ada perpanjangan kontrak otomatis berstatus available.
   async autoReleaseExpiredLeases(): Promise<{ releasedRooms: number; checkedOutTenants: number }> {
-    // 1. Coba panggil endpoint server-side backend yang memiliki service-role permissions
     try {
       const resp = await fetch('/api/system/sync-expired-leases', {
         method: 'POST',
@@ -2082,185 +2410,9 @@ export const database = {
         }
       }
     } catch (apiErr) {
-      // Fallback ke direct client Supabase jika API route offline
+      console.warn('[autoReleaseExpiredLeases] Server endpoint call error:', apiErr);
     }
-
-    if (!isSupabaseConfigured) return { releasedRooms: 0, checkedOutTenants: 0 };
-    try {
-      const now = new Date();
-      let releasedRoomsCount = 0;
-      let checkedOutTenantsCount = 0;
-      const affectedPropertyIds = new Set<number>();
-
-      // Ambil tenants aktif, contract extensions yang sudah paid, dan approved bookings
-      const [
-        { data: activeTenants },
-        paidExtensions,
-        { data: approvedBookings },
-        { data: allRooms }
-      ] = await Promise.all([
-        supabase.from('tenants').select('*').neq('status', 'checkout'),
-        database.fetchContractExtensions({ status: 'paid' }),
-        supabase.from('bookings').select('*').eq('status', 'approved'),
-        supabase.from('rooms').select('*')
-      ]);
-
-      // 1. Periksa seluruh penyewa aktif di tabel 'tenants'
-      if (activeTenants && activeTenants.length > 0) {
-        for (const tenant of activeTenants) {
-          if (!tenant.start_date) continue;
-          const startDate = new Date(tenant.start_date);
-          if (isNaN(startDate.getTime())) continue;
-
-          // Periksa apakah ada perpanjangan kontrak (contract_extensions)
-          const exts = (paidExtensions || []).filter((e: any) => e.tenant_id === tenant.id);
-          const totalExtMonths = exts.reduce((sum: number, e: any) => sum + (Number(e.extension_months) || 0), 0);
-          const totalMonths = (Number(tenant.duration_months) || 1) + totalExtMonths;
-
-          const computedEnd = new Date(startDate);
-          computedEnd.setMonth(computedEnd.getMonth() + totalMonths);
-
-          let finalEndDate = computedEnd;
-          if (tenant.lease_end_date) {
-            const lDate = new Date(tenant.lease_end_date);
-            if (!isNaN(lDate.getTime()) && lDate.getTime() > finalEndDate.getTime()) {
-              finalEndDate = lDate;
-            }
-          }
-
-          // Jika durasi sewa sudah berakhir (now >= finalEndDate) tanpa ada perpanjangan
-          if (now.getTime() >= finalEndDate.getTime()) {
-            console.log(`[AUTO-RELEASE] Penyewa ${tenant.full_name} (Kamar ${tenant.room_number}) telah habis kontrak tanpa perpanjangan. Mengosongkan kamar.`);
-            
-            // Tandai tenant status menjadi checkout
-            await supabase
-              .from('tenants')
-              .update({ status: 'checkout' })
-              .eq('id', tenant.id);
-            checkedOutTenantsCount++;
-
-            // Ubah status kamar di tabel 'rooms' menjadi 'available'
-            let roomQuery = supabase
-              .from('rooms')
-              .update({ status: 'available', current_tenant_name: null })
-              .eq('room_number', tenant.room_number);
-            
-            if (tenant.property_id) {
-              roomQuery = roomQuery.eq('property_id', tenant.property_id);
-              affectedPropertyIds.add(tenant.property_id);
-            }
-            await roomQuery;
-            releasedRoomsCount++;
-
-            // Perbarui booking terkait menjadi checkout jika ada
-            await supabase
-              .from('bookings')
-              .update({ status: 'checkout' })
-              .eq('room_number', tenant.room_number)
-              .eq('status', 'approved');
-
-            // Catat log aktivitas sistem
-            try {
-              await this.logActivity(
-                "System", 
-                "AUTO_RELEASE_EXPIRED_LEASE", 
-                `Otomatis mengosongkan Kamar ${tenant.room_number} (${tenant.full_name}) karena masa sewa telah habis dan tidak ada perpanjangan kontrak.`
-              );
-            } catch (e) {}
-          }
-        }
-      }
-
-      // 2. Periksa juga booking berstatus 'approved'
-      if (approvedBookings && approvedBookings.length > 0) {
-        for (const booking of approvedBookings) {
-          const startStr = booking.check_in_date || booking.booking_date;
-          if (!startStr) continue;
-          const startDate = new Date(startStr);
-          if (isNaN(startDate.getTime())) continue;
-
-          const endDate = new Date(startDate);
-          if (booking.booking_type === 'daily' && booking.duration_days && booking.duration_days > 0) {
-            endDate.setDate(endDate.getDate() + booking.duration_days);
-          } else {
-            const months = Math.max(1, booking.duration_months || 1);
-            endDate.setMonth(endDate.getMonth() + months);
-          }
-
-          if (now.getTime() >= endDate.getTime()) {
-            console.log(`[AUTO-RELEASE] Booking ID ${booking.id} (Kamar ${booking.room_number}) telah berakhir. Mengubah status checkout.`);
-            await supabase
-              .from('bookings')
-              .update({ status: 'checkout' })
-              .eq('id', booking.id);
-
-            if (booking.room_id) {
-              await supabase
-                .from('rooms')
-                .update({ status: 'available', current_tenant_name: null })
-                .eq('id', booking.room_id);
-            } else if (booking.room_number) {
-              let rQuery = supabase
-                .from('rooms')
-                .update({ status: 'available', current_tenant_name: null })
-                .eq('room_number', booking.room_number);
-              if (booking.property_id) {
-                rQuery = rQuery.eq('property_id', booking.property_id);
-              }
-              await rQuery;
-            }
-
-            if (booking.property_id) affectedPropertyIds.add(booking.property_id);
-            releasedRoomsCount++;
-          }
-        }
-      }
-
-      // 3. Periksa kamar dengan status 'occupied' di database yang tidak memiliki tenant aktif / booking aktif
-      if (allRooms && allRooms.length > 0) {
-        const activeTenantRoomKeys = new Set(
-          (activeTenants || [])
-            .filter((t: any) => t.status !== 'checkout')
-            .map((t: any) => `${t.property_id || ''}_${t.room_number}`)
-        );
-        const activeBookingRoomKeys = new Set(
-          (approvedBookings || [])
-            .filter((b: any) => b.status === 'approved')
-            .map((b: any) => `${b.property_id || ''}_${b.room_number}`)
-        );
-
-        for (const room of allRooms) {
-          if (room.status === 'occupied') {
-            const key = `${room.property_id || ''}_${room.room_number}`;
-            if (!activeTenantRoomKeys.has(key) && !activeBookingRoomKeys.has(key)) {
-              await supabase
-                .from('rooms')
-                .update({ status: 'available', current_tenant_name: null })
-                .eq('id', room.id);
-              releasedRoomsCount++;
-              if (room.property_id) affectedPropertyIds.add(room.property_id);
-            }
-          }
-        }
-      }
-
-      // 4. Sinkronisasi jumlah kamar pada properti yang terpengaruh
-      for (const propId of affectedPropertyIds) {
-        try {
-          const { data: pRooms } = await supabase.from('rooms').select('*').eq('property_id', propId);
-          if (pRooms) {
-            const total = pRooms.length;
-            const avail = pRooms.filter((r: any) => r.status === 'available' || r.status === 'reserved' || !r.status).length;
-            await supabase.from('properties').update({ total_rooms: total, available_rooms: avail }).eq('id', propId);
-          }
-        } catch (syncErr) {}
-      }
-
-      return { releasedRooms: releasedRoomsCount, checkedOutTenants: checkedOutTenantsCount };
-    } catch (err) {
-      console.warn('[AUTO-RELEASE] Auto-release expired leases error:', err);
-      return { releasedRooms: 0, checkedOutTenants: 0 };
-    }
+    return { releasedRooms: 0, checkedOutTenants: 0 };
   },
 
   // --- SURVEYS ---
@@ -2372,24 +2524,71 @@ export const database = {
 
   // --- COUPONS ---
   async fetchCoupons(options?: { limit?: number; offset?: number }): Promise<Coupon[]> {
-    if (!isSupabaseConfigured) return [];
     const limit = options?.limit ?? 1000;
     const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('coupons')
-        .select('*')
-        .order('id', { ascending: true })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchCoupons', error);
-        return [];
-      }
-      return data as Coupon[];
-    } catch (err) {
-      logSupabaseError('fetchCoupons', err, true);
+    const cacheKey = 'samara_cache_coupons';
+
+    const getCached = (): Coupon[] => {
+      try {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem(cacheKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+        }
+      } catch (e) {}
       return [];
+    };
+
+    const setCached = (items: Coupon[]) => {
+      try {
+        if (typeof window !== 'undefined' && items && items.length > 0) {
+          localStorage.setItem(cacheKey, JSON.stringify(items));
+        }
+      } catch (e) {}
+    };
+
+    // 1. Direct Supabase query if configured and not under quota restriction
+    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+      try {
+        const { data, error } = await supabase
+          .from('coupons')
+          .select('*')
+          .order('id', { ascending: true })
+          .range(offset, offset + limit - 1);
+        if (!error && data) {
+          setCached(data as Coupon[]);
+          return data as Coupon[];
+        }
+        if (error) {
+          logSupabaseError('fetchCoupons', error);
+        }
+      } catch (err) {
+        logSupabaseError('fetchCoupons', err, true);
+      }
     }
+
+    // 2. Server API fallback
+    try {
+      const resp = await fetch(`/api/data/coupons?limit=${limit}&offset=${offset}&order_col=id&order_asc=true`);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          setCached(json.data as Coupon[]);
+          return json.data as Coupon[];
+        }
+      }
+    } catch (e) {}
+
+    // 3. Local offline cache fallback
+    const cached = getCached();
+    if (cached.length > 0) {
+      return cached;
+    }
+
+    // 4. Default seed coupons fallback
+    return DEFAULT_COUPONS;
   },
 
   async saveCoupon(coupon: Partial<Coupon>): Promise<Coupon> {
@@ -2787,61 +2986,101 @@ export const database = {
 
   // --- RULES SETTINGS ---
   async fetchSettings(): Promise<SystemSettings> {
-    const defaultSettings: SystemSettings = {
-      id: 1,
-      booking_rules: "1. Tamu dilarang membawa lawan jenis masuk ke dalam kamar.\n2. Menjaga ketenangan setelah pukul 22:00 WIB.",
-      survey_rules: "1. Pembayaran DP Survey senilai Rp 500.000 sebagai jaminan.",
-      standard_facilities: "[]",
-      why_choose_us: "[]",
-      faqs: "[]",
-      owner_signature_url: DEFAULT_OWNER_SIGNATURE
+    const cacheKey = 'samara_cache_settings';
+
+    const getCached = (): SystemSettings | null => {
+      try {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem(cacheKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') return parsed as SystemSettings;
+          }
+        }
+      } catch (e) {}
+      return null;
     };
 
-    if (!isSupabaseConfigured) return defaultSettings;
-    try {
-      const { data, error } = await supabase.from('settings').select('*').maybeSingle();
-      if (error) {
-        logSupabaseError('fetchSettings', error);
-      }
-      let settingsObj = data ? { ...defaultSettings, ...(data as SystemSettings) } : defaultSettings;
-      if (!settingsObj.owner_signature_url) {
-        settingsObj.owner_signature_url = DEFAULT_OWNER_SIGNATURE;
-      }
+    const setCached = (item: SystemSettings) => {
+      try {
+        if (typeof window !== 'undefined' && item) {
+          localStorage.setItem(cacheKey, JSON.stringify(item));
+        }
+      } catch (e) {}
+    };
 
-      // Check if Admin has configured front-end facilities in settings
-      let hasValidStandard = false;
-      if (settingsObj.standard_facilities) {
-        try {
-          const parsed = JSON.parse(settingsObj.standard_facilities);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            hasValidStandard = true;
+    // 1. Direct Supabase query if configured and not under quota restriction
+    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+      try {
+        const { data, error } = await supabase.from('settings').select('*').maybeSingle();
+        if (error) {
+          logSupabaseError('fetchSettings', error);
+        } else if (data) {
+          let settingsObj = { ...DEFAULT_SETTINGS, ...(data as SystemSettings) };
+          if (!settingsObj.owner_signature_url) {
+            settingsObj.owner_signature_url = DEFAULT_OWNER_SIGNATURE;
           }
-        } catch (e) {}
+
+          // Check if Admin has configured front-end facilities in settings
+          let hasValidStandard = false;
+          if (settingsObj.standard_facilities) {
+            try {
+              const parsed = JSON.parse(settingsObj.standard_facilities);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                hasValidStandard = true;
+              }
+            } catch (e) {}
+          }
+
+          // If Admin hasn't customized standard_facilities yet, fallback to seed from facilities table
+          if (!hasValidStandard) {
+            try {
+              const { data: facData, error: facError } = await supabase
+                .from('facilities')
+                .select('*')
+                .order('id', { ascending: true });
+
+              if (!facError && facData && facData.length > 0) {
+                const mappedFacilities = facData.map(f => ({
+                  id: f.id,
+                  icon: f.icon || 'Sparkles',
+                  title: f.name,
+                  subtitle: f.description || '',
+                  category: f.category || 'general'
+                }));
+                settingsObj.standard_facilities = JSON.stringify(mappedFacilities);
+              }
+            } catch (facErr) {}
+          }
+          setCached(settingsObj);
+          return settingsObj;
+        }
+      } catch (err) {
+        logSupabaseError('fetchSettings', err, true);
       }
+    }
 
-      // If Admin hasn't customized standard_facilities yet, fallback to seed from facilities table
-      if (!hasValidStandard) {
-        const { data: facData, error: facError } = await supabase
-          .from('facilities')
-          .select('*')
-          .order('id', { ascending: true });
-
-        if (!facError && facData && facData.length > 0) {
-          const mappedFacilities = facData.map(f => ({
-            id: f.id,
-            icon: f.icon || 'Sparkles',
-            title: f.name,
-            subtitle: f.description || '',
-            category: f.category || 'general'
-          }));
-          settingsObj.standard_facilities = JSON.stringify(mappedFacilities);
+    // 2. Server API fallback
+    try {
+      const resp = await fetch('/api/data/settings?limit=1');
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          const item = { ...DEFAULT_SETTINGS, ...json.data[0] };
+          setCached(item);
+          return item;
         }
       }
-      return settingsObj;
-    } catch (err) {
-      logSupabaseError('fetchSettings', err, true);
+    } catch (e) {}
+
+    // 3. Local offline cache fallback
+    const cached = getCached();
+    if (cached) {
+      return cached;
     }
-    return defaultSettings;
+
+    // 4. Default seed settings fallback
+    return DEFAULT_SETTINGS;
   },
 
   async saveSettings(settings: SystemSettings): Promise<SystemSettings> {
@@ -3282,8 +3521,30 @@ export const database = {
     const offset = options?.offset ?? 0;
     const statusParam = options?.status ? `&status=${encodeURIComponent(options.status)}` : '';
     const tenantParam = options?.tenant_id ? `&tenant_id=${encodeURIComponent(options.tenant_id)}` : '';
+    const cacheKey = 'samara_cache_contract_extensions';
 
-    // 1. Prioritize Server-Side API endpoint (Bypasses PostgreSQL anon 42501 permission restrictions)
+    const getCached = (): ContractExtension[] => {
+      try {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem(cacheKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+        }
+      } catch (e) {}
+      return [];
+    };
+
+    const setCached = (items: ContractExtension[]) => {
+      try {
+        if (typeof window !== 'undefined' && items && items.length > 0) {
+          localStorage.setItem(cacheKey, JSON.stringify(items));
+        }
+      } catch (e) {}
+    };
+
+    // 1. Prioritize Server-Side API endpoint
     try {
       const headers = await getAuthHeaders();
       const resp = await fetch(`/api/contract-extensions?limit=${limit}&offset=${offset}${statusParam}${tenantParam}`, {
@@ -3292,7 +3553,8 @@ export const database = {
       });
       if (resp.ok) {
         const json = await resp.json();
-        if (json.success && Array.isArray(json.data)) {
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          setCached(json.data as ContractExtension[]);
           return json.data as ContractExtension[];
         }
       }
@@ -3300,31 +3562,43 @@ export const database = {
       // Fall through to direct Supabase client if server endpoint unavailable
     }
 
-    if (!isSupabaseConfigured) return [];
-    try {
-      let query = supabase
-        .from('contract_extensions')
-        .select('*')
-        .order('id', { ascending: false })
-        .range(offset, offset + limit - 1);
+    // 2. Direct Supabase query if configured and not under quota restriction
+    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+      try {
+        let query = supabase
+          .from('contract_extensions')
+          .select('*')
+          .order('id', { ascending: false })
+          .range(offset, offset + limit - 1);
 
-      if (options?.status) {
-        query = query.eq('status', options.status);
-      }
-      if (options?.tenant_id) {
-        query = query.eq('tenant_id', options.tenant_id);
-      }
+        if (options?.status) {
+          query = query.eq('status', options.status);
+        }
+        if (options?.tenant_id) {
+          query = query.eq('tenant_id', options.tenant_id);
+        }
 
-      const { data, error } = await query;
-      if (error) {
-        logSupabaseError('fetchContractExtensions', error);
-        return [];
+        const { data, error } = await query;
+        if (!error && data) {
+          setCached(data as ContractExtension[]);
+          return data as ContractExtension[];
+        }
+        if (error) {
+          logSupabaseError('fetchContractExtensions', error);
+        }
+      } catch (err) {
+        logSupabaseError('fetchContractExtensions', err, true);
       }
-      return data as ContractExtension[];
-    } catch (err) {
-      logSupabaseError('fetchContractExtensions', err, true);
-      return [];
     }
+
+    // 3. Local offline cache fallback
+    const cached = getCached();
+    if (cached.length > 0) {
+      return cached;
+    }
+
+    // 4. Default seed contract extensions fallback
+    return DEFAULT_CONTRACT_EXTENSIONS;
   },
 
   async saveContractExtension(ext: Partial<ContractExtension>): Promise<ContractExtension> {
@@ -4478,3 +4752,6 @@ export const database = {
     window.location.reload();
   }
 };
+
+export { egressGuard, measureJsonSize, useEgressDiagnostics } from './egressGuard';
+

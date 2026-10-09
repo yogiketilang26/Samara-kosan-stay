@@ -407,7 +407,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono block mb-1">Foto Kamar / Unit Gallery</label>
         
         <div className="relative">
-          {formData.image_url ? (
+          {formData.image_url && formData.image_url.trim() !== '' ? (
             <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 group">
               <img 
                 src={formData.image_url} 
@@ -468,7 +468,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         <div className="mt-4 bg-slate-900 border border-slate-805 p-3 rounded-2xl space-y-2">
           <span className="text-[9px] font-bold text-slate-400 font-mono block uppercase">Foto Tambahan / Galeri Unit (Maksimal 4)</span>
           <div className="grid grid-cols-4 gap-2">
-            {formData.images.map((img, idx) => (
+            {formData.images.filter(img => typeof img === 'string' && img.trim() !== '').map((img, idx) => (
               <div key={idx} className="relative group h-16 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
                 <img 
                   src={img} 

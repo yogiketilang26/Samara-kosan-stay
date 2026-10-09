@@ -942,7 +942,7 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
 
                   {/* Rendered Signature Box */}
                   <div className="my-3 py-2 flex items-center justify-center min-h-[90px] bg-white/80 rounded-xl border border-slate-200/80 shadow-2xs">
-                    {ownerSigUrl ? (
+                    {ownerSigUrl && ownerSigUrl.trim() !== '' ? (
                       <img
                         src={ownerSigUrl}
                         alt="Spesimen TTD Owner"
@@ -1149,7 +1149,7 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                       <div className="grid grid-cols-2 gap-2 pt-1">
                         <div className="bg-white border border-slate-200 rounded-lg p-1.5 text-center">
                           <span className="text-[9px] font-mono uppercase text-slate-400 block">TTD Penyewa</span>
-                          {b.signature_url ? (
+                          {b.signature_url && b.signature_url.trim() !== '' ? (
                             <img src={b.signature_url} alt="TTD Penyewa" className="h-7 mx-auto object-contain mt-1" />
                           ) : (
                             <span className="text-[10px] text-slate-400 italic block py-1">Disetujui Digital</span>
@@ -1158,7 +1158,11 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
 
                         <div className="border border-emerald-200 bg-emerald-50/60 rounded-lg p-1.5 text-center">
                           <span className="text-[9px] font-mono uppercase text-slate-400 block">Stempel & TTD Owner</span>
-                          <img src={b.owner_signature_url || ownerSigUrl} alt="TTD Owner" className="h-7 mx-auto object-contain mt-1" />
+                          {(b.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE) ? (
+                            <img src={b.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE} alt="TTD Owner" className="h-7 mx-auto object-contain mt-1" />
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic block py-1">-</span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1232,7 +1236,11 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
               <div className="text-center space-y-1">
                 <span className="text-[10px] font-bold text-[#2E6F40] uppercase font-mono block">Pihak Pertama (Pemilik)</span>
                 <div className="h-20 flex items-center justify-center border-b border-slate-300 my-2">
-                  <img src={ownerSigUrl} alt="TTD Owner" className="max-h-16 max-w-[200px] object-contain" />
+                  {(ownerSigUrl || DEFAULT_OWNER_SIGNATURE) && (ownerSigUrl || DEFAULT_OWNER_SIGNATURE).trim() !== '' ? (
+                    <img src={ownerSigUrl || DEFAULT_OWNER_SIGNATURE} alt="TTD Owner" className="max-h-16 max-w-[200px] object-contain" />
+                  ) : (
+                    <span className="text-[10px] text-slate-400 italic">[Stempel & Tanda Tangan Owner]</span>
+                  )}
                 </div>
                 <strong className="text-xs text-slate-900 block">{ownerName}</strong>
                 <span className="text-[10px] text-[#2E6F40] font-bold">{ownerTitle}</span>
@@ -1323,7 +1331,11 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                   {/* Owner Sig */}
                   <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-3 text-center">
                     <span className="text-[10px] font-mono uppercase text-[#2E6F40] block mb-1">Stempel & TTD Owner (Otomatis)</span>
-                    <img src={selectedBookingForSign.owner_signature_url || ownerSigUrl} alt="TTD Owner" className="h-12 mx-auto object-contain" />
+                    {(selectedBookingForSign.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE) && (selectedBookingForSign.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE).trim() !== '' ? (
+                      <img src={selectedBookingForSign.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE} alt="TTD Owner" className="h-12 mx-auto object-contain" />
+                    ) : (
+                      <span className="text-xs text-slate-400 italic block py-2">[Tanda Tangan Owner]</span>
+                    )}
                     <span className="text-[11px] font-bold text-slate-900 block mt-1">{ownerName}</span>
                   </div>
                 </div>

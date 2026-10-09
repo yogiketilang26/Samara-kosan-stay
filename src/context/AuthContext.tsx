@@ -62,7 +62,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               await supabase.auth.setSession({
                 access_token: data.access_token,
                 refresh_token: data.refresh_token
-              }).catch((e) => console.error('[AUTH] Failed to set client-side supabase session on mount:', e));
+              }).catch((e) => console.warn('[AUTH] Supabase session sync notice:', e?.message || e));
             }
             setUser(data.user);
           } else {
@@ -71,8 +71,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           setUser(null);
         }
-      } catch (err) {
-        console.error('[AUTH] Failed to fetch current session:', err);
+      } catch (err: any) {
+        console.warn('[AUTH] Current session check notice:', err?.message || err);
         setUser(null);
       } finally {
         setLoading(false);

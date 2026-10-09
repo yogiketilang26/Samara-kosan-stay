@@ -86,11 +86,15 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ receipt, onClose }) =>
               PIHAK PERTAMA (OWNER)
             </span>
             <div className="h-10 flex items-center justify-center my-1">
-              <img
-                src={receipt.ownerSignatureUrl || DEFAULT_OWNER_SIGNATURE}
-                alt="Tanda Tangan Owner"
-                className="h-10 max-w-[110px] object-contain"
-              />
+              {(receipt.ownerSignatureUrl || DEFAULT_OWNER_SIGNATURE) && (receipt.ownerSignatureUrl || DEFAULT_OWNER_SIGNATURE).trim() !== '' ? (
+                <img
+                  src={receipt.ownerSignatureUrl || DEFAULT_OWNER_SIGNATURE}
+                  alt="Tanda Tangan Owner"
+                  className="h-10 max-w-[110px] object-contain"
+                />
+              ) : (
+                <span className="text-[7.5px] text-slate-400 italic my-auto">Ttd Owner Sah</span>
+              )}
             </div>
             <span className="text-[7.5px] text-slate-500 font-mono">Samara Management</span>
           </div>
@@ -101,7 +105,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ receipt, onClose }) =>
               PIHAK KEDUA (PEMESAN)
             </span>
             <div className="h-10 flex items-center justify-center my-1">
-              {receipt.signatureUrl ? (
+              {receipt.signatureUrl && receipt.signatureUrl.trim() !== '' ? (
                 <img
                   src={receipt.signatureUrl}
                   alt="Tanda Tangan Pemesan"
