@@ -122,9 +122,10 @@ BEGIN
 END;
 $$;
 
--- 5. GRANT PERMISSIONS
-REVOKE ALL ON FUNCTION hold_room_atomic(BIGINT, BIGINT, INT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION hold_room_atomic(BIGINT, BIGINT, INT) TO anon, authenticated, service_role;
+-- 5. GRANT PERMISSIONS (Strictly service_role only; invoked via backend API)
+REVOKE ALL ON FUNCTION hold_room_atomic(BIGINT, BIGINT, INT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION hold_room_atomic(BIGINT, BIGINT, INT) TO service_role;
 
-REVOKE ALL ON FUNCTION cleanup_expired_room_holds() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION cleanup_expired_room_holds() TO authenticated, service_role;
+REVOKE ALL ON FUNCTION cleanup_expired_room_holds() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION cleanup_expired_room_holds() TO service_role;
+

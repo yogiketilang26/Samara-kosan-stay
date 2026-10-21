@@ -51,6 +51,12 @@ export interface Property {
   regulations?: string;
 }
 
+export type RoomStatus = 'available' | 'occupied' | 'maintenance' | 'reserved' | 'cleaning';
+
+export type PaymentStatus = 'paid' | 'pending' | 'overdue';
+
+export type UserRole = 'super' | 'super_admin' | 'owner' | 'anak_owner' | 'admin' | 'finance' | 'staff' | 'user';
+
 export interface Room {
   id: number;
   property_id: number;
@@ -59,7 +65,7 @@ export interface Room {
   price: number;
   size_sqm: number;
   floor: number;
-  status: 'available' | 'occupied' | 'maintenance' | 'reserved';
+  status: RoomStatus;
   current_tenant_name?: string | null;
   facilities: Facility[];
   image_url?: string;
@@ -97,7 +103,7 @@ export interface Tenant {
   room_number: string;
   start_date: string;
   duration_months: number;
-  payment_status: 'paid' | 'pending' | 'overdue';
+  payment_status: PaymentStatus;
   emergency_contact?: string;
   created_at?: string;
   status?: 'active' | 'checkout';
@@ -201,7 +207,7 @@ export interface PaymentInvoice {
   property_id: number | null;
   amount: number;
   method: string;
-  status: 'paid' | 'pending' | 'overdue';
+  status: PaymentStatus;
   payment_date: string;
   midtrans_order_id?: string;
   transaction_id?: string;
@@ -231,7 +237,7 @@ export interface Profile {
   id: string; // uuid
   full_name?: string | null;
   whatsapp?: string | null;
-  role: 'user' | 'admin' | 'super_admin' | 'owner' | 'finance' | 'staff' | 'anak_owner' | 'anak owner';
+  role: UserRole | 'anak owner';
   created_at?: string;
 }
 
@@ -239,7 +245,7 @@ export interface UserSystem {
   id: string;
   full_name: string;
   email: string;
-  role: 'super' | 'admin' | 'staff' | 'finance' | 'owner' | 'super_admin' | 'user' | 'anak_owner' | 'anak owner';
+  role: UserRole | 'anak owner';
   role_id: number; // 1=super/super_admin/owner, 2=admin/anak_owner, 3=finance, 4=user/staff/tenant
   access: string;
   last_login?: string;
@@ -306,10 +312,15 @@ export interface FinancialTransaction {
   id: number;
   transaction_no: string;
   transaction_date: string;
+  date?: string;
   category: string;
   description: string;
   amount: number;
-  type: 'income' | 'expense' | 'dp_booking' | 'reclassification';
+  type: 'income' | 'expense' | 'dp_booking' | 'reclassification' | 'transfer' | 'liability_refund' | 'expense_reversal' | 'deposit';
+  status?: string;
+  debit_account_id?: number | null;
+  credit_account_id?: number | null;
+  property_id?: number | null;
   reference_type?: string | null;
   reference_id?: string | null;
   created_by: string;

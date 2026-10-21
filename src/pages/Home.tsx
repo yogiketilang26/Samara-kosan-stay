@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { database, DEFAULT_OWNER_SIGNATURE } from '../lib/supabase';
+import { todayJakarta, toJakartaDate } from '../lib/dateUtils';
+import { pollWithBackoff } from '../lib/queryBudget';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import * as LucideIcons from 'lucide-react';
 import { Property, Room, Booking, Survey, Coupon, SystemSettings, StandardFacility, FAQItem, Tenant, ContractExtension } from '../types';
@@ -8,7 +10,6 @@ import BookingForm from '../components/transaction/BookingForm';
 import InvoiceCard from '../components/transaction/InvoiceCard';
 import Loader from '../components/common/Loader';
 import Modal from '../components/common/Modal';
-import MidtransSimulator from '../components/MidtransSimulator';
 import { compressImage, ensurePngDataUrl } from '../utils/imageCompressor';
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { 
@@ -221,18 +222,14 @@ export default function Home({}: HomeProps) {
   const { data: roomsData, loading: roomsLoading } = useRealtimeTable<Room>(
     'rooms',
     () => database.fetchRooms());
-  const { data: couponsData, loading: couponsLoading } = useRealtimeTable<Coupon>(
-    'coupons',
-    () => database.fetchCoupons());
   const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
     'settings',
     () => database.fetchSettings().then(res => [res]));
 
-  const hooksLoading = propertiesLoading || roomsLoading || couponsLoading || settingsLoading;
+  const hooksLoading = propertiesLoading || roomsLoading || settingsLoading;
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [contractExtensions, setContractExtensions] = useState<ContractExtension[]>([]);
@@ -245,7 +242,7 @@ export default function Home({}: HomeProps) {
   // Homepage Search Form States
   const [searchLocation, setSearchLocation] = useState<string>('');
   const [searchCheckInDate, setSearchCheckInDate] = useState<string>(
-    new Date(Date.now() + 86400000).toISOString().split('T')[0] // Default to tomorrow
+    toJakartaDate(new Date(Date.now() + 86400000)) // Default to tomorrow (Asia/Jakarta)
   );
   const [searchDurationType, setSearchDurationType] = useState<'monthly' | 'daily'>('monthly');
 
@@ -298,7 +295,7 @@ export default function Home({}: HomeProps) {
     phone: '081293840293',
     address: 'Sleman, D.I. Yogyakarta',
     job: 'Software Engineer',
-    date: new Date(Date.now() + 86400000).toISOString().split('T')[0], // tomorrow
+    date: toJakartaDate(new Date(Date.now() + 86400000)), // tomorrow (Asia/Jakarta)
     slot: '13:00 - 15:00',
     moveInDate: '',
     isWithoutDp: false
@@ -326,13 +323,12 @@ export default function Home({}: HomeProps) {
   // Booking details states
   const [bookingPeriodMonths, setBookingPeriodMonths] = useState<number>(1);
   const [bookingPeriodDays, setBookingPeriodDays] = useState<number>(1);
-  const [bookingCheckInDate, setBookingCheckInDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [bookingCheckInDate, setBookingCheckInDate] = useState<string>(todayJakarta());
   const [couponInput, setCouponInput] = useState<string>('');
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
   const [couponError, setCouponError] = useState<string>('');
 
-  // Midtrans simulator states
-  const [snapOpen, setSnapOpen] = useState(false);
+  // Midtrans payment context states
   const [snapPaymentContext, setSnapPaymentContext] = useState<any | null>(null);
   const snapPaymentContextRef = useRef<any | null>(null);
 
@@ -435,7 +431,6 @@ export default function Home({}: HomeProps) {
 
     setProperties(filteredProps);
     setRooms(filteredRooms);
-    setCoupons(couponsData || []);
     setSettings(sett);
 
     // Keep active selection states synchronized with live database changes
@@ -457,7 +452,7 @@ export default function Home({}: HomeProps) {
     if (filteredProps && filteredProps.length > 0) {
       setPriceRange(5000000);
     }
-  }, [propertiesData, roomsData, couponsData, settingsData]);
+  }, [propertiesData, roomsData, settingsData]);
 
   useEffect(() => {
     if (!hooksLoading) {
@@ -616,14 +611,20 @@ export default function Home({}: HomeProps) {
     return fallback;
   })();
 
-  const handleApplyCoupon = () => {
+  const handleApplyCoupon = async () => {
     setCouponError('');
     setAppliedCoupon(null);
     if (!couponInput.trim()) return;
 
-    const validated = coupons.find(c => c.code.toUpperCase() === couponInput.toUpperCase());
-    if (!validated || !validated.is_active) {
-      setCouponError('Kode promo salah atau sudah kedaluwarsa.');
+    const validationRes = await database.validateCouponCode(couponInput.trim(), {
+      property_id: activeProperty?.id,
+      duration_months: bookingPeriodMonths,
+      duration_days: bookingPeriodDays,
+      base_amount: activeRoom?.price
+    });
+    const validated = validationRes?.valid && validationRes.coupon ? (validationRes.coupon as Coupon) : null;
+    if (!validated || validated.is_active === false) {
+      setCouponError(validationRes?.message || 'Kode promo salah atau sudah kedaluwarsa.');
       return;
     }
 
@@ -653,7 +654,6 @@ export default function Home({}: HomeProps) {
     setSelectedRoomForDetail(null);
     setIsCatalogOpen(false);
     setCheckoutFlow('none');
-    setSnapOpen(false);
     setSnapPaymentContext(null);
     snapPaymentContextRef.current = null;
     setIsAgreed(false);
@@ -760,6 +760,8 @@ export default function Home({}: HomeProps) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               to: surveyForm.email,
+              reservation_number: freeOrderId,
+              order_id: freeOrderId,
               subject: `[Samara Stay] Jadwal Kunjungan Survey Terkonfirmasi - Unit ${activeRoom!.room_number}`,
               html: `
                 <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
@@ -829,13 +831,109 @@ export default function Home({}: HomeProps) {
     setLoading(true);
 
     try {
+      // R4 & R7: Pre-save pending survey or booking record to Supabase and atomically hold room BEFORE requesting Midtrans Snap token
+      if (checkoutFlow === 'survey') {
+        const surveyRecord: Partial<Survey> = {
+          tenant_name: surveyForm.fullName,
+          nik: surveyForm.nik,
+          email: surveyForm.email,
+          phone: surveyForm.phone,
+          address: surveyForm.address,
+          job: surveyForm.job,
+          planned_move_in_date: surveyForm.moveInDate || '',
+          property_id: activeProperty!.id,
+          room_number: activeRoom!.room_number,
+          survey_date: surveyForm.date,
+          survey_time_slot: surveyForm.slot,
+          status: 'pending_payment',
+          dp_amount: 500000,
+          payment_method: 'Midtrans SNAP',
+          invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
+          reservation_number: orderId,
+          signature_url: signatureUrl
+        };
+        await database.saveSurvey(surveyRecord);
+      } else {
+        const isDaily = checkoutFlow === 'daily';
+        const discount = appliedCoupon ? (appliedCoupon.discount_type === 'fixed' ? appliedCoupon.discount_value : Math.round((activeRoom!.price * appliedCoupon.discount_value) / 100)) : 0;
+        
+        const bookingRecord: Partial<Booking> = {
+          property_id: activeProperty!.id,
+          room_id: activeRoom!.id,
+          room_number: activeRoom!.room_number,
+          tenant_name: bookingForm.fullName,
+          phone: bookingForm.phone,
+          email: bookingForm.email,
+          nik: bookingForm.nik,
+          booking_date: todayJakarta(),
+          check_in_date: bookingCheckInDate,
+          duration_months: isDaily ? 0 : bookingPeriodMonths,
+          booking_type: isDaily ? 'daily' : 'monthly',
+          duration_days: isDaily ? bookingPeriodDays : undefined,
+          total_price: calculatedTotal,
+          status: 'pending',
+          payment_method: 'Midtrans SNAP',
+          midtrans_order_id: orderId,
+          is_dp: false,
+          coupon_code: appliedCoupon ? appliedCoupon.code : null,
+          discount_amount: discount,
+          is_for_other: bookingForm.isForOther,
+          occupant_name: bookingForm.isForOther ? bookingForm.occupantName : undefined,
+          occupant_phone: bookingForm.isForOther ? bookingForm.occupantPhone : undefined,
+          occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
+          occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
+          occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
+          signature_url: signatureUrl,
+          is_married: bookingForm.isMarried,
+          marriage_certificate_url: bookingForm.isMarried ? bookingForm.marriageCertificateUrl : undefined,
+          spouse_name: bookingForm.isMarried ? bookingForm.spouseName : undefined,
+          spouse_nik: bookingForm.isMarried ? bookingForm.spouseNik : undefined,
+          spouse_phone: bookingForm.isMarried ? bookingForm.spousePhone : undefined,
+          spouse_relation: bookingForm.isMarried ? (bookingForm.spouseRelation || 'istri') : undefined
+        };
+        const savedBooking = await database.saveBooking(bookingRecord);
+        if (!savedBooking || !savedBooking.id || !activeRoom?.id) {
+          setLoading(false);
+          alert('Gagal membuat reservasi pemesanan kamar. Silakan coba lagi.');
+          return;
+        }
+        const holdRes = await database.holdRoomAtomic(activeRoom.id, savedBooking.id, 15);
+        if (!holdRes || !holdRes.success) {
+          setLoading(false);
+          alert(holdRes?.message || `Maaf, Kamar ${activeRoom.room_number} sedang diproses oleh calon penyewa lain.`);
+          database.fetchRooms().then(fresh => { if (fresh?.length) setRooms(fresh); }).catch(() => {});
+          return;
+        }
+        // Server-side lock room as reserved to prevent double booking by others
+        fetch('/api/rooms/lock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            room_id: activeRoom.id,
+            booking_id: savedBooking.id,
+            midtrans_order_id: orderId,
+            status: 'reserved',
+            tenant_name: bookingForm.fullName
+          })
+        }).catch(() => {});
+        // Immediately update local rooms state so it locks visually
+        setRooms(prev => prev.map(r => r.id === activeRoom.id ? { ...r, status: 'reserved' } : r));
+      }
+
       const { loadMidtransSnapScript, requestSnapTokenFromServer } = await import('../lib/midtrans');
       
       const chargeResult = await requestSnapTokenFromServer({
         orderId,
         grossAmount: calculatedTotal,
         description,
-        customerDetails
+        customerDetails,
+        room_id: activeRoom?.id,
+        property_id: activeProperty?.id,
+        booking_type: checkoutFlow === 'daily' ? 'daily' : 'monthly',
+        duration_months: checkoutFlow === 'daily' ? 0 : bookingPeriodMonths,
+        duration_days: checkoutFlow === 'daily' ? bookingPeriodDays : undefined,
+        coupon_code: appliedCoupon ? appliedCoupon.code : null,
+        is_dp: checkoutFlow === 'survey'
       });
 
       await loadMidtransSnapScript(chargeResult.mode === 'sandbox');
@@ -850,121 +948,52 @@ export default function Home({}: HomeProps) {
         setSnapPaymentContext(currentCtx);
         snapPaymentContextRef.current = currentCtx;
 
-        // Pre-save pending survey or booking record to Supabase
-        try {
-          if (checkoutFlow === 'survey') {
-            const surveyRecord: Partial<Survey> = {
-              tenant_name: surveyForm.fullName,
-              nik: surveyForm.nik,
-              email: surveyForm.email,
-              phone: surveyForm.phone,
-              address: surveyForm.address,
-              job: surveyForm.job,
-              planned_move_in_date: surveyForm.moveInDate || '',
-              property_id: activeProperty!.id,
-              room_number: activeRoom!.room_number,
-              survey_date: surveyForm.date,
-              survey_time_slot: surveyForm.slot,
-              status: 'pending_payment',
-              dp_amount: 500000,
-              payment_method: 'Midtrans SNAP',
-              invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
-              reservation_number: orderId,
-              signature_url: signatureUrl
-            };
-            await database.saveSurvey(surveyRecord);
-          } else {
-            const isDaily = checkoutFlow === 'daily';
-            const discount = appliedCoupon ? (appliedCoupon.discount_type === 'fixed' ? appliedCoupon.discount_value : Math.round((activeRoom!.price * appliedCoupon.discount_value) / 100)) : 0;
-            
-            const bookingRecord: Partial<Booking> = {
-              property_id: activeProperty!.id,
-              room_id: activeRoom!.id,
-              room_number: activeRoom!.room_number,
-              tenant_name: bookingForm.fullName,
-              phone: bookingForm.phone,
-              email: bookingForm.email,
-              nik: bookingForm.nik,
-              booking_date: new Date().toISOString().split('T')[0],
-              check_in_date: bookingCheckInDate,
-              duration_months: isDaily ? 0 : bookingPeriodMonths,
-              booking_type: isDaily ? 'daily' : 'monthly',
-              duration_days: isDaily ? bookingPeriodDays : undefined,
-              total_price: calculatedTotal,
-              status: 'pending',
-              payment_method: 'Midtrans SNAP',
-              midtrans_order_id: orderId,
-              is_dp: false,
-              coupon_code: appliedCoupon ? appliedCoupon.code : null,
-              discount_amount: discount,
-              is_for_other: bookingForm.isForOther,
-              occupant_name: bookingForm.isForOther ? bookingForm.occupantName : undefined,
-              occupant_phone: bookingForm.isForOther ? bookingForm.occupantPhone : undefined,
-              occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
-              occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
-              occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
-              signature_url: signatureUrl,
-              is_married: bookingForm.isMarried,
-              marriage_certificate_url: bookingForm.isMarried ? bookingForm.marriageCertificateUrl : undefined,
-              spouse_name: bookingForm.isMarried ? bookingForm.spouseName : undefined,
-              spouse_nik: bookingForm.isMarried ? bookingForm.spouseNik : undefined,
-              spouse_phone: bookingForm.isMarried ? bookingForm.spousePhone : undefined,
-              spouse_relation: bookingForm.isMarried ? (bookingForm.spouseRelation || 'istri') : undefined
-            };
-            const savedBooking = await database.saveBooking(bookingRecord);
-            if (savedBooking && savedBooking.id && activeRoom?.id) {
-              await database.holdRoomAtomic(activeRoom.id, savedBooking.id, 15);
-              // Server-side lock room as reserved to prevent double booking by others
-              fetch('/api/rooms/lock', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  room_id: activeRoom.id,
-                  status: 'reserved',
-                  tenant_name: bookingForm.fullName
-                })
-              }).catch(() => {});
-              // Immediately update local rooms state so it locks visually
-              setRooms(prev => prev.map(r => r.id === activeRoom.id ? { ...r, status: 'reserved' } : r));
-            }
-          }
-        } catch (dbErr) {
-          console.warn('Silent database pre-save warning:', dbErr);
-        }
-
         let isSettled = false;
-        let pollTimer: any = null;
+        let pollCtrl: ReturnType<typeof pollWithBackoff> | null = null;
 
-        const checkOrderStatus = async () => {
-          if (isSettled) return;
+        const checkOrderStatus = async (): Promise<boolean> => {
+          if (isSettled) return true;
           try {
             const resp = await fetch(`/api/midtrans/status/${orderId}`);
+            if (resp.status >= 400 && resp.status < 500) {
+              const err: any = new Error(`Client error ${resp.status}`);
+              err.status = resp.status;
+              throw err;
+            }
             if (resp.ok) {
               const resData = await resp.json();
-              const txStatus = resData?.midtrans?.transaction_status;
-              if (txStatus === 'settlement' || txStatus === 'capture') {
+              if (resData?.settled === true) {
                 isSettled = true;
-                if (pollTimer) clearInterval(pollTimer);
+                if (pollCtrl) pollCtrl.stop();
                 handleSandboxPaymentSuccess({
-                  transactionId: resData.midtrans.transaction_id || `mid-${Date.now()}`,
-                  paymentMethod: resData.midtrans.payment_type || 'Midtrans SNAP',
-                  settlementTime: resData.midtrans.settlement_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
+                  transactionId: resData?.midtrans?.transaction_id || `mid-${Date.now()}`,
+                  paymentMethod: resData?.midtrans?.payment_type || 'Midtrans SNAP',
+                  settlementTime: resData?.midtrans?.settlement_time || new Date().toISOString().replace('T', ' ').slice(0, 19),
+                  settled: true
                 }, currentCtx);
+                return true;
               }
             }
-          } catch (e) {
+          } catch (e: any) {
+            if (e?.status >= 400 && e?.status < 500) throw e;
             // Polling check silent fallback
           }
+          return false;
         };
 
-        // Poll every 2.5 seconds so as soon as user pays (e.g. BCA VA, QRIS), room locks and email sends automatically!
-        pollTimer = setInterval(checkOrderStatus, 2500);
-        setTimeout(() => { if (pollTimer) clearInterval(pollTimer); }, 180000);
+        // E3: Stepped exponential backoff polling (2.5s -> 3.5s -> 5s -> 7.5s -> 10s -> 15s, 2x slower when tab hidden)
+        pollCtrl = pollWithBackoff({
+          fn: () => checkOrderStatus(),
+          isTerminal: (settled) => Boolean(settled),
+          baseIntervalMs: 2500,
+          maxIntervalMs: 15000,
+          hiddenTabMultiplier: 2,
+          maxAttempts: 25
+        });
 
         (window as any).snap.pay(chargeResult.token, {
-          onSuccess: (result: any) => {
-            isSettled = true;
-            if (pollTimer) clearInterval(pollTimer);
+          onSuccess: async (result: any) => {
+            if (pollCtrl) pollCtrl.stop();
             fetch('/api/midtrans/logs', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -978,11 +1007,32 @@ export default function Home({}: HomeProps) {
               })
             }).catch(() => {});
 
-            handleSandboxPaymentSuccess({
-              transactionId: result.transaction_id || `mid-${Math.floor(Math.random() * 100000000)}`,
-              paymentMethod: result.payment_type || 'Midtrans SNAP',
-              settlementTime: result.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
-            }, currentCtx);
+            // G5: Verify and auto-settle on server via /api/midtrans/status/:orderId (settled flag)
+            try {
+              const verifyRes = await fetch(`/api/midtrans/status/${encodeURIComponent(orderId)}`);
+              const verifyData = verifyRes.ok ? await verifyRes.json() : null;
+              if (verifyData?.settled === true) {
+                isSettled = true;
+                await handleSandboxPaymentSuccess({
+                  transactionId: verifyData?.midtrans?.transaction_id || result?.transaction_id || `mid-${Date.now()}`,
+                  paymentMethod: verifyData?.midtrans?.payment_type || result?.payment_type || 'Midtrans SNAP',
+                  settlementTime: verifyData?.midtrans?.settlement_time || result?.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19),
+                  settled: true
+                }, currentCtx);
+              } else {
+                handleSandboxPaymentPending({
+                  transactionId: result?.transaction_id || `mid-${Date.now()}`,
+                  paymentMethod: result?.payment_type || 'Midtrans SNAP',
+                  settlementTime: result?.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
+                }, currentCtx);
+              }
+            } catch {
+              handleSandboxPaymentPending({
+                transactionId: result?.transaction_id || `mid-${Date.now()}`,
+                paymentMethod: result?.payment_type || 'Midtrans SNAP',
+                settlementTime: result?.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
+              }, currentCtx);
+            }
           },
           onPending: (result: any) => {
             fetch('/api/midtrans/logs', {
@@ -1004,10 +1054,10 @@ export default function Home({}: HomeProps) {
               settlementTime: result.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
             }, currentCtx);
             // Trigger check immediately in case payment already occurred
-            checkOrderStatus();
+            checkOrderStatus().catch(() => {});
           },
           onError: (result: any) => {
-            if (pollTimer) clearInterval(pollTimer);
+            if (pollCtrl) pollCtrl.stop();
             fetch('/api/midtrans/logs', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1026,24 +1076,24 @@ export default function Home({}: HomeProps) {
           onClose: async () => {
             // Immediate check: User may have paid in m-Banking or external simulator before closing popup
             try {
-              const resp = await fetch(`/api/midtrans/status/${orderId}`);
+              const resp = await fetch(`/api/midtrans/status/${encodeURIComponent(orderId)}`);
               if (resp.ok) {
                 const resData = await resp.json();
-                const txStatus = resData?.midtrans?.transaction_status;
-                if (txStatus === 'settlement' || txStatus === 'capture') {
+                if (resData?.settled === true) {
                   isSettled = true;
-                  if (pollTimer) clearInterval(pollTimer);
+                  if (pollCtrl) pollCtrl.stop();
                   handleSandboxPaymentSuccess({
-                    transactionId: resData.midtrans.transaction_id || `mid-${Date.now()}`,
-                    paymentMethod: resData.midtrans.payment_type || 'Midtrans SNAP',
-                    settlementTime: resData.midtrans.settlement_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
+                    transactionId: resData?.midtrans?.transaction_id || `mid-${Date.now()}`,
+                    paymentMethod: resData?.midtrans?.payment_type || 'Midtrans SNAP',
+                    settlementTime: resData?.midtrans?.settlement_time || new Date().toISOString().replace('T', ' ').slice(0, 19),
+                    settled: true
                   }, currentCtx);
                   return;
                 }
               }
             } catch (e) {}
 
-            if (pollTimer) clearInterval(pollTimer);
+            if (pollCtrl) pollCtrl.stop();
 
             fetch('/api/midtrans/logs', {
               method: 'POST',
@@ -1059,14 +1109,8 @@ export default function Home({}: HomeProps) {
           }
         });
       } else {
-        const currentCtx = {
-          orderId,
-          grossAmount: calculatedTotal,
-          description
-        };
-        setSnapPaymentContext(currentCtx);
-        snapPaymentContextRef.current = currentCtx;
-        setSnapOpen(true);
+        setLoading(false);
+        alert('Modul pembayaran Midtrans Snap belum siap dimuat. Pastikan koneksi internet stabil dan coba lagi.');
       }
     } catch (err: any) {
       setLoading(false);
@@ -1111,7 +1155,7 @@ export default function Home({}: HomeProps) {
         amount: 500000,
         method: details.paymentMethod || 'Midtrans SNAP',
         status: 'pending' as const,
-        payment_date: new Date().toISOString().split('T')[0],
+        payment_date: todayJakarta(),
         midtrans_order_id: currentOrderId,
         transaction_id: details.transactionId || `mid-${Math.floor(Math.random() * 100000000)}`
       };
@@ -1142,7 +1186,7 @@ export default function Home({}: HomeProps) {
         phone: bookingForm.phone,
         email: bookingForm.email,
         nik: bookingForm.nik,
-        booking_date: new Date().toISOString().split('T')[0],
+        booking_date: todayJakarta(),
         check_in_date: bookingCheckInDate,
         duration_months: isDaily ? 0 : bookingPeriodMonths,
         booking_type: isDaily ? 'daily' : 'monthly',
@@ -1179,7 +1223,7 @@ export default function Home({}: HomeProps) {
         amount: currentGrossAmount,
         method: details.paymentMethod || 'Midtrans SNAP',
         status: 'pending' as const,
-        payment_date: new Date().toISOString().split('T')[0],
+        payment_date: todayJakarta(),
         midtrans_order_id: currentOrderId,
         transaction_id: details.transactionId || `mid-${Math.floor(Math.random() * 100000000)}`
       };
@@ -1193,14 +1237,13 @@ export default function Home({}: HomeProps) {
         propertyName: activeProperty.name,
         amountPaid: currentGrossAmount,
         method: details.paymentMethod,
-        date: new Date().toISOString().split('T')[0],
+        date: todayJakarta(),
         details: 'Sewa Unit Tertunda (Pending).',
         signatureUrl: signatureUrl,
         ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
       });
     }
 
-    setSnapOpen(false);
     setShowReceipt(true);
   };
 
@@ -1210,6 +1253,25 @@ export default function Home({}: HomeProps) {
 
     const currentGrossAmount = ctx?.grossAmount ?? activeRoom.price;
     const currentOrderId = ctx?.orderId ?? `BOOK-${Date.now()}`;
+
+    // G5: Booking & survey settlement MUST be verified and executed by the server (/api/midtrans/status -> settled: true)
+    let serverSettled = details?.settled === true;
+    if (!serverSettled) {
+      try {
+        const statusResp = await fetch(`/api/midtrans/status/${encodeURIComponent(currentOrderId)}`);
+        if (statusResp.ok) {
+          const statusData = await statusResp.json();
+          serverSettled = statusData?.settled === true;
+        }
+      } catch {
+        serverSettled = false;
+      }
+    }
+
+    if (!serverSettled) {
+      alert('Pembayaran belum terkonfirmasi lunas oleh server Midtrans. Silakan cek kembali status pembayaran Anda.');
+      return;
+    }
 
     if (checkoutFlow === 'survey') {
       let finalSurveySigUrl = signatureUrl;
@@ -1227,26 +1289,8 @@ export default function Home({}: HomeProps) {
         }
       }
 
-      const surveyRecord: Partial<Survey> = {
-        tenant_name: surveyForm.fullName,
-        nik: surveyForm.nik,
-        email: surveyForm.email,
-        phone: surveyForm.phone,
-        address: surveyForm.address,
-        job: surveyForm.job,
-        planned_move_in_date: surveyForm.moveInDate || '',
-        property_id: activeProperty.id,
-        room_number: activeRoom.room_number,
-        survey_date: surveyForm.date,
-        survey_time_slot: surveyForm.slot,
-        status: 'survey_confirmed',
-        dp_amount: 500000,
-        payment_method: details.paymentMethod,
-        invoice_id: `INV-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
-        signature_url: finalSurveySigUrl
-      };
-
-      const saved = await database.saveSurvey(surveyRecord);
+      // Server auto-settles the survey status to 'survey_confirmed' via /api/midtrans/status/:orderId
+      const saved = { invoice_id: currentOrderId };
 
       // Send survey payment receipt email to end user
       if (surveyForm.email) {
@@ -1258,6 +1302,8 @@ export default function Home({}: HomeProps) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             to: surveyForm.email,
+            reservation_number: currentOrderId,
+            order_id: currentOrderId,
             subject: `[Samara Stay] Bukti Pembayaran DP Survey - Unit ${activeRoom.room_number}`,
             html: `
               <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
@@ -1399,101 +1445,11 @@ export default function Home({}: HomeProps) {
         }
       }
 
-      const bookingRecord: Partial<Booking> = {
-        property_id: activeProperty.id,
-        room_id: activeRoom.id,
-        room_number: activeRoom.room_number,
-        tenant_name: bookingForm.fullName,
-        phone: bookingForm.phone,
-        email: bookingForm.email,
-        nik: bookingForm.nik,
-        booking_date: new Date().toISOString().split('T')[0],
-        check_in_date: bookingCheckInDate,
-        duration_months: isDaily ? 0 : bookingPeriodMonths,
-        booking_type: isDaily ? 'daily' : 'monthly',
-        duration_days: isDaily ? bookingPeriodDays : undefined,
-        total_price: currentGrossAmount,
-        status: 'approved',
-        payment_method: details.paymentMethod,
-        midtrans_order_id: currentOrderId,
-        is_dp: false,
-        coupon_code: appliedCoupon ? appliedCoupon.code : null,
-        discount_amount: discount,
-        is_for_other: bookingForm.isForOther,
-        occupant_name: bookingForm.isForOther ? bookingForm.occupantName : undefined,
-        occupant_phone: bookingForm.isForOther ? bookingForm.occupantPhone : undefined,
-        occupant_email: bookingForm.isForOther ? bookingForm.occupantEmail : undefined,
-        occupant_nik: bookingForm.isForOther ? bookingForm.occupantNik : undefined,
-        occupant_arrival_status: bookingForm.isForOther ? 'pending' : undefined,
-        signature_url: finalBookingSigUrl,
-        is_married: bookingForm.isMarried,
-        marriage_certificate_url: bookingForm.isMarried ? bookingForm.marriageCertificateUrl : undefined,
-        spouse_name: bookingForm.isMarried ? bookingForm.spouseName : undefined,
-        spouse_nik: bookingForm.isMarried ? bookingForm.spouseNik : undefined,
-        spouse_phone: bookingForm.isMarried ? bookingForm.spousePhone : undefined,
-        spouse_relation: bookingForm.isMarried ? (bookingForm.spouseRelation || 'istri') : undefined
-      };
-
-      // Set room status to occupied if direct booking
-      const effectiveOccupantName = bookingForm.isForOther ? (bookingForm.occupantName || bookingForm.fullName) : bookingForm.fullName;
-      const updatedRoom: Room = { 
-        ...activeRoom, 
-        status: 'occupied', 
-        current_tenant_name: effectiveOccupantName 
-      };
-      await database.saveRoom(updatedRoom);
-
-      // IMMEDIATELY update local state so catalog & all UI views show "TERISI" and "UNIT SUDAH TERISI PENGHUNI" instantly!
-      setRooms(prev => prev.map(r => r.id === activeRoom.id ? updatedRoom : r));
+      // G5: Booking, room occupancy, tenant activation, and ledger entries are settled by the server
+      // (/api/midtrans/status/:orderId auto-settle & Midtrans webhook). Client only refreshes room state.
       database.fetchRooms().then(fresh => {
         if (fresh && fresh.length > 0) setRooms(fresh);
       }).catch(() => {});
-
-      const saved = await database.saveBooking(bookingRecord);
-
-      // Register or update complete tenant record so admin and owner see all tenant data including spouse in real-time
-      try {
-        const tenantRecord = {
-          full_name: effectiveOccupantName,
-          phone: bookingForm.isForOther ? (bookingForm.occupantPhone || bookingForm.phone) : bookingForm.phone,
-          email: bookingForm.isForOther ? (bookingForm.occupantEmail || bookingForm.email) : bookingForm.email,
-          nik: bookingForm.isForOther ? (bookingForm.occupantNik || bookingForm.nik) : bookingForm.nik,
-          property_id: activeProperty.id,
-          room_number: activeRoom.room_number,
-          start_date: bookingCheckInDate,
-          duration_months: isDaily ? 0 : bookingPeriodMonths,
-          payment_status: 'paid' as const,
-          status: 'active' as const,
-          avatar_initials: effectiveOccupantName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
-          avatar_color: 'bg-teal-600',
-          is_married: bookingForm.isMarried,
-          marriage_certificate_url: bookingForm.isMarried ? bookingForm.marriageCertificateUrl : undefined,
-          spouse_name: bookingForm.isMarried ? bookingForm.spouseName : undefined,
-          spouse_nik: bookingForm.isMarried ? bookingForm.spouseNik : undefined,
-          spouse_phone: bookingForm.isMarried ? bookingForm.spousePhone : undefined,
-          spouse_relation: bookingForm.isMarried ? (bookingForm.spouseRelation || 'istri') : undefined
-        };
-        await database.saveTenant(tenantRecord);
-      } catch (tenantErr) {
-        console.warn('[Home] Auto-registering tenant error (non-blocking):', tenantErr);
-      }
-
-      // Call server settlement API to ensure atomic lock, clearing entry, and double-entry accounting
-      try {
-        fetch('/api/midtrans/settle-booking', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            order_id: currentOrderId,
-            transaction_id: details.transactionId,
-            payment_type: details.paymentMethod || 'Midtrans SNAP',
-            gross_amount: currentGrossAmount,
-            booking_data: bookingRecord
-          })
-        }).catch(err => console.warn('[Home] Direct settle API background warning:', err));
-      } catch (err) {
-        console.warn('[Home] Direct settle call warning:', err);
-      }
 
       // Send booking confirmation email
       const ownerSigUrl = settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
@@ -1507,6 +1463,8 @@ export default function Home({}: HomeProps) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             to: targetEmail,
+            order_id: currentOrderId,
+            reservation_number: currentOrderId,
             subject: `[Samara Stay] Invoice Pembayaran & Konfirmasi Sewa - Unit ${activeRoom.room_number}`,
             html: `
               <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
@@ -1617,20 +1575,19 @@ export default function Home({}: HomeProps) {
 
       setReceiptData({
         type: 'booking',
-        id: saved.midtrans_order_id || '999',
+        id: currentOrderId || '999',
         name: bookingForm.fullName,
         roomNo: activeRoom.room_number,
         propertyName: activeProperty.name,
         amountPaid: currentGrossAmount,
         method: details.paymentMethod,
-        date: new Date().toISOString().split('T')[0],
+        date: todayJakarta(),
         details: 'Bukti lunas kontrak sewa sepihak.',
         signatureUrl: signatureUrl,
         ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
       });
     }
 
-    setSnapOpen(false);
     setShowReceipt(true);
   };
 
@@ -4023,32 +3980,6 @@ export default function Home({}: HomeProps) {
           </div>
         )}
       </Modal>
-
-      {/* Midtrans SNAP Simulator Backdrop overlay (PRESERVING EXISTING INTERACTION) */}
-      {snapOpen && snapPaymentContext && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/95 p-4">
-          <div className="bg-[#121215] border border-slate-800 rounded-2xl w-full max-w-md p-6 overflow-hidden">
-            <MidtransSimulator 
-              isOpen={snapOpen}
-              onClose={() => setSnapOpen(false)}
-              orderId={snapPaymentContext.orderId}
-              grossAmount={snapPaymentContext.grossAmount}
-              itemDescription={snapPaymentContext.description || 'Sewa Unit'}
-              customerDetails={{
-                name: checkoutFlow === 'survey' ? surveyForm.fullName : bookingForm.fullName,
-                email: checkoutFlow === 'survey' ? surveyForm.email : bookingForm.email,
-                phone: checkoutFlow === 'survey' ? surveyForm.phone : bookingForm.phone
-              }}
-              onPaymentSuccess={handleSandboxPaymentSuccess}
-              onPaymentPending={handleSandboxPaymentPending}
-              onPaymentFail={(status) => {
-                console.log("Failed:", status);
-                setSnapOpen(false);
-              }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Printable Receipt Invoice Popup modal (PRESERVING EXISTING FLOW) */}
       <Modal

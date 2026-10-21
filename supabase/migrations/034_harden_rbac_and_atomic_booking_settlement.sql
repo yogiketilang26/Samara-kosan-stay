@@ -146,30 +146,84 @@ BEGIN
     RETURNING id INTO v_tenant_id;
   END IF;
 
-  -- 7. Insert Payment Invoice record
-  v_invoice_id := 'INV-' || v_booking.id::TEXT || '-' || EXTRACT(EPOCH FROM NOW())::BIGINT::TEXT || '-' || FLOOR(1000 + RANDOM() * 9000)::TEXT;
+  -- 7. Upsert Payment Invoice record (prevent duplicate midtrans_order_id)
+  v_invoice_id := NULL;
+  IF v_booking.midtrans_order_id IS NOT NULL THEN
+    SELECT id INTO v_invoice_id
+    FROM payments
+    WHERE midtrans_order_id = v_booking.midtrans_order_id
+    ORDER BY created_at ASC
+    LIMIT 1;
+  END IF;
 
-  INSERT INTO payments (
-    id,
-    tenant_name,
-    property_id,
-    amount,
-    method,
-    status,
-    payment_date,
-    midtrans_order_id,
-    transaction_id
-  ) VALUES (
-    v_invoice_id,
-    v_occupant_name,
-    v_booking.property_id,
-    v_amount,
-    v_payment_method,
-    'paid',
-    v_trx_date,
-    v_booking.midtrans_order_id,
-    COALESCE(v_booking.midtrans_order_id, 'manual-tr-' || FLOOR(100000 + RANDOM() * 900000)::TEXT)
-  );
+  IF v_invoice_id IS NOT NULL THEN
+    UPDATE payments
+    SET tenant_name = v_occupant_name,
+        property_id = v_booking.property_id,
+        amount = v_amount,
+        method = v_payment_method,
+        status = 'paid',
+        payment_date = v_trx_date
+    WHERE id = v_invoice_id;
+  ELSE
+    v_invoice_id := 'INV-' || v_booking.id::TEXT || '-' || EXTRACT(EPOCH FROM NOW())::BIGINT::TEXT || '-' || FLOOR(1000 + RANDOM() * 9000)::TEXT;
+    INSERT INTO payments (
+      id,
+      tenant_name,
+      property_id,
+      amount,
+      method,
+      status,
+      payment_date,
+      midtrans_order_id,
+      transaction_id
+    ) VALUES (
+      v_invoice_id,
+      v_occupant_name,
+      v_booking.property_id,
+      v_amount,
+      v_payment_method,
+      'paid',
+      v_trx_date,
+      v_booking.midtrans_order_id,
+      COALESCE(v_booking.midtrans_order_id, 'manual-tr-' || FLOOR(100000 + RANDOM() * 900000)::TEXT)
+    );
+  END IF;
+
+  -- 7b. Record Midtrans Clearing Transaction if payment method is Midtrans
+  IF LOWER(v_payment_method) LIKE '%midtrans%' AND v_booking.midtrans_order_id IS NOT NULL THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM midtrans_clearing_transactions WHERE midtrans_order_id = v_booking.midtrans_order_id
+    ) THEN
+      INSERT INTO midtrans_clearing_transactions (
+        booking_id,
+        midtrans_order_id,
+        midtrans_transaction_id,
+        gross_amount,
+        fee_amount,
+        net_amount,
+        reconciled_amount,
+        outstanding_amount,
+        clearing_status,
+        property_id,
+        tenant_name,
+        settled_at
+      ) VALUES (
+        v_booking.id,
+        v_booking.midtrans_order_id,
+        v_booking.midtrans_order_id,
+        v_amount,
+        0,
+        v_amount,
+        0,
+        v_amount,
+        'cleared',
+        COALESCE(v_booking.property_id, 1),
+        v_occupant_name,
+        NOW()
+      );
+    END IF;
+  END IF;
 
   -- 8. Post Double-Entry Journal to General Ledger
   v_trx_no := 'TRX-' || TO_CHAR(v_trx_date, 'YYYYMMDD') || '-' || FLOOR(100 + RANDOM() * 900)::TEXT;

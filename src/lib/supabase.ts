@@ -24,6 +24,16 @@ import {
   getTableDefaultSeeds 
 } from '../data/fallbackData';
 import { egressGuard, inspectPayloadForBase64 } from './egressGuard';
+import {
+  REALTIME_TABLES,
+  resolveLimit,
+  resolveOffset,
+  sanitizeColumns,
+  dedupeInflight,
+  queryBudget,
+  getScopedCacheKey
+} from './queryBudget';
+import { todayJakarta } from './dateUtils';
 
 // Detect credentials from Vite environment variables (VITE_ prefixed tags are safe for browser use)
 let activeSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || (import.meta as any).env?.SUPABASE_URL || '';
@@ -268,6 +278,9 @@ class SupabaseRealtimeManager {
   private droppedSubscriptions = 0;
   private onLogCallbacks: Set<(level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', message: string) => void> = new Set();
   private isNetworkListenersRegistered = false;
+  private idlePauseTimeout: any = null;
+  private isIdlePaused = false;
+  private readonly IDLE_PAUSE_MS = 10 * 60 * 1000; // 10 minutes hidden tab auto-pause (E1)
 
   public registerOnLog(callback: (level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL', message: string) => void) {
     this.onLogCallbacks.add(callback);
@@ -390,10 +403,31 @@ class SupabaseRealtimeManager {
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
+        if (this.idlePauseTimeout) {
+          clearTimeout(this.idlePauseTimeout);
+          this.idlePauseTimeout = null;
+        }
+        this.isIdlePaused = false;
         console.log('[REALTIME MANAGER] App tab regained visibility. Verifying channel health...');
         if (this.isConfigured && (this.connectionStatus === 'DISCONNECTED' || !this.globalChannel)) {
           this.establishGlobalChannel(true);
         }
+      } else if (document.visibilityState === 'hidden') {
+        if (this.idlePauseTimeout) {
+          clearTimeout(this.idlePauseTimeout);
+        }
+        this.idlePauseTimeout = setTimeout(() => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && this.globalChannel && this.client) {
+            this.isIdlePaused = true;
+            const ch = this.globalChannel;
+            this.globalChannel = null;
+            try {
+              this.client.removeChannel(ch).catch(() => {});
+            } catch (e) {}
+            this.handleRealtimeDisconnected();
+            this.triggerLog('INFO', 'Realtime channel paused after 10m hidden tab inactivity.');
+          }
+        }, this.IDLE_PAUSE_MS);
       }
     });
   }
@@ -438,16 +472,21 @@ class SupabaseRealtimeManager {
 
       const channel = this.client.channel('db-global-realtime');
       this.globalChannel = channel;
-      
+
+      const handlePgChange = (payload: any) => {
+        if (payload && payload.table) {
+          try {
+            egressGuard.recordRealtimeEvent(payload.table, payload);
+          } catch (egressErr) {}
+          this.dispatchLocalEvent(payload.table, payload);
+        }
+      };
+
+      for (const tbl of REALTIME_TABLES) {
+        channel.on('postgres_changes', { event: '*', schema: 'public', table: tbl }, handlePgChange);
+      }
+
       channel
-        .on('postgres_changes', { event: '*', schema: 'public' }, (payload: any) => {
-          if (payload && payload.table) {
-            try {
-              egressGuard.recordRealtimeEvent(payload.table, payload);
-            } catch (egressErr) {}
-            this.dispatchLocalEvent(payload.table, payload);
-          }
-        })
         .on('broadcast', { event: 'db_mutation' }, (payload: any) => {
           const msg = payload?.payload || payload;
           if (msg && msg.table && msg.sourceTabId !== this.tabId) {
@@ -585,7 +624,24 @@ class SupabaseRealtimeManager {
     } catch (e) {}
   }
 
+  private warnedUnlistedTables = new Set<string>();
+
+  public getListenerCount(tableName?: string): number {
+    if (tableName) {
+      return this.listeners.get(tableName)?.size || 0;
+    }
+    let total = 0;
+    this.listeners.forEach((set) => {
+      total += set.size;
+    });
+    return total;
+  }
+
   public subscribe(tableName: string, criteria: any, callback: RealtimeCallback): () => void {
+    if (!REALTIME_TABLES.includes(tableName) && !this.warnedUnlistedTables.has(tableName)) {
+      this.warnedUnlistedTables.add(tableName);
+      console.warn(`[REALTIME MANAGER] Table "${tableName}" is not in REALTIME_TABLES allowlist.`);
+    }
     if (!this.listeners.has(tableName)) {
       this.listeners.set(tableName, new Set());
     }
@@ -651,6 +707,7 @@ class SupabaseRealtimeManager {
   public getStatus() {
     return {
       connectionStatus: this.connectionStatus,
+      isIdlePaused: this.isIdlePaused,
       listenersCount: Array.from(this.listeners.entries()).map(([table, set]) => ({
         table,
         count: set.size
@@ -790,8 +847,9 @@ const tableSchemas: Record<string, string[]> = {
     'id', 'name', 'type', 'balance', 'created_at', 'category'
   ],
   financial_transactions: [
-    'id', 'transaction_no', 'transaction_date', 'category', 'description', 'amount',
-    'type', 'reference_type', 'reference_id', 'created_by', 'created_at', 'property_id'
+    'id', 'transaction_no', 'transaction_date', 'date', 'category', 'description', 'amount',
+    'type', 'status', 'debit_account_id', 'credit_account_id', 'reference_type', 'reference_id',
+    'created_by', 'created_at', 'property_id'
   ],
   journal_entries: [
     'id', 'journal_no', 'transaction_id', 'account_id', 'debit', 'credit', 'created_at'
@@ -959,20 +1017,20 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
   }
 
   if (table === 'users' && activePayload.role) {
-    if (activePayload.role === 'anak_owner' || activePayload.role === 'anak owner') {
-      activePayload.role = 'admin';
+    if (activePayload.role === 'anak owner') {
+      activePayload.role = 'anak_owner';
     }
-    const allowed = ['super', 'admin', 'staff', 'finance', 'owner', 'super_admin'];
+    const allowed = ['super', 'admin', 'staff', 'finance', 'owner', 'super_admin', 'anak_owner', 'user'];
     if (!allowed.includes(activePayload.role)) {
-      activePayload.role = 'admin';
+      activePayload.role = 'user';
     }
   }
 
   if (table === 'profiles' && activePayload.role) {
-    if (activePayload.role === 'anak_owner' || activePayload.role === 'anak owner') {
-      activePayload.role = 'admin';
+    if (activePayload.role === 'anak owner') {
+      activePayload.role = 'anak_owner';
     }
-    const allowed = ['user', 'admin', 'super_admin', 'owner', 'finance', 'staff'];
+    const allowed = ['user', 'admin', 'super_admin', 'owner', 'anak_owner', 'finance', 'staff'];
     if (!allowed.includes(activePayload.role)) {
       activePayload.role = 'user';
     }
@@ -993,7 +1051,7 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
   }
 
   if (table === 'financial_transactions' && activePayload.type) {
-    const allowed = ['income', 'expense', 'dp_booking', 'reclassification'];
+    const allowed = ['income', 'expense', 'dp_booking', 'reclassification', 'transfer', 'liability_refund', 'expense_reversal', 'deposit'];
     if (!allowed.includes(activePayload.type)) {
       activePayload.type = 'expense';
     }
@@ -1140,6 +1198,26 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
           } catch (serverErr) {
             console.warn('[safeSupabaseUpsert] Server fallback notice for users update:', serverErr);
           }
+        } else if (table === 'bookings' || table === 'surveys') {
+          try {
+            const headers = await getAuthHeaders();
+            const endpoint = table === 'bookings' ? '/api/bookings/save' : '/api/surveys/save';
+            const apiRes = await fetch(endpoint, {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify({ ...activePayload, id })
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation(table, 'UPDATE', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn(`[safeSupabaseUpsert] Server fallback notice for ${table} update:`, serverErr);
+          }
         }
       }
       if (result && !result.error && result.data && result.data.length > 0) {
@@ -1247,6 +1325,26 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
           } catch (serverErr) {
             console.warn('[safeSupabaseUpsert] Server fallback notice for users insert:', serverErr);
           }
+        } else if (table === 'bookings' || table === 'surveys') {
+          try {
+            const headers = await getAuthHeaders();
+            const endpoint = table === 'bookings' ? '/api/bookings/save' : '/api/surveys/save';
+            const apiRes = await fetch(endpoint, {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify(activePayload)
+            });
+            if (apiRes.ok) {
+              const json = await apiRes.json();
+              if (json.success && json.data) {
+                notifyRealtimeMutation(table, 'INSERT', json.data);
+                return { data: [json.data], error: null };
+              }
+            }
+          } catch (serverErr) {
+            console.warn(`[safeSupabaseUpsert] Server fallback notice for ${table} insert:`, serverErr);
+          }
         }
       }
       if (result && !result.error && result.data && result.data.length > 0) {
@@ -1307,79 +1405,91 @@ export function logSupabaseError(context: string, error: any, isException = fals
 
 export async function fetchTableWithFallback<T>(
   tableName: string,
-  options?: { limit?: number; offset?: number; orderCol?: string; orderAsc?: boolean }
+  options?: { limit?: number; offset?: number; orderCol?: string; orderAsc?: boolean; columns?: string | readonly string[]; isManual?: boolean }
 ): Promise<T[]> {
-  const limit = options?.limit ?? 1000;
-  const offset = options?.offset ?? 0;
+  const budgetStatus = queryBudget.check(tableName, { isManual: Boolean(options?.isManual) });
+  if (!budgetStatus.allowed) {
+    console.warn(`[QUERY BUDGET] Fetch rate limit active for table "${tableName}": ${budgetStatus.reason}`);
+  }
+  const limit = resolveLimit(tableName, options?.limit);
+  const offset = resolveOffset(options?.offset);
   const orderCol = options?.orderCol || (tableName === 'bookings' || tableName === 'surveys' ? 'created_at' : 'id');
   const orderAsc = options?.orderAsc ?? false;
-  const cacheKey = `samara_cache_${tableName}`;
+  const { selectExpr, columnsParam } = sanitizeColumns(tableName, options?.columns, tableSchemas);
+  const cacheKey = getScopedCacheKey(tableName);
+  const dedupeKey = `${tableName}:${limit}:${offset}:${orderCol}:${orderAsc}:${columnsParam || '*'}`;
 
-  const getCachedData = (): T[] => {
-    try {
-      if (typeof window !== 'undefined') {
-        const raw = localStorage.getItem(cacheKey);
-        if (raw) return JSON.parse(raw);
+  return dedupeInflight<T[]>(dedupeKey, async () => {
+    const getCachedData = (): T[] => {
+      try {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem(cacheKey);
+          if (raw) return JSON.parse(raw);
+        }
+      } catch (e) {}
+      return [];
+    };
+
+    const setCachedData = (items: T[]) => {
+      try {
+        if (typeof window !== 'undefined' && items && items.length > 0 && !columnsParam) {
+          localStorage.setItem(cacheKey, JSON.stringify(items));
+        }
+      } catch (e) {}
+    };
+
+    // 1. Direct Supabase query if configured and not under quota restriction
+    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+      try {
+        const { data, error } = await supabase
+          .from(tableName)
+          .select(selectExpr)
+          .order(orderCol, { ascending: orderAsc })
+          .range(offset, offset + limit - 1);
+
+        if (!error && data) {
+          queryBudget.recordRequest(tableName, data.length);
+          egressGuard.measureAndRecord(tableName, data, 'supabase');
+          setCachedData(data as unknown as T[]);
+          return data as unknown as T[];
+        }
+        if (error) {
+          logSupabaseError(`fetchTableWithFallback:${tableName}`, error);
+        }
+      } catch (err: any) {
+        logSupabaseError(`fetchTableWithFallback:${tableName}`, err, true);
       }
-    } catch (e) {}
+    }
+
+    // 2. Server API fallback (/api/bookings or /api/data/:table)
+    try {
+      const colQuery = columnsParam ? `&columns=${encodeURIComponent(columnsParam)}` : '';
+      const headers = await getAuthHeaders();
+      const endpoint = tableName === 'bookings' 
+        ? `/api/bookings?limit=${limit}&offset=${offset}${colQuery}`
+        : `/api/data/${tableName}?limit=${limit}&offset=${offset}&order_col=${orderCol}&order_asc=${orderAsc}${colQuery}`;
+      const resp = await fetch(endpoint, { headers, credentials: 'include' });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.success && Array.isArray(json.data)) {
+          queryBudget.recordRequest(tableName, json.data.length);
+          egressGuard.measureAndRecord(tableName, json.data, 'rest-fallback');
+          setCachedData(json.data);
+          return json.data as T[];
+        }
+      }
+    } catch (apiErr: any) {
+      console.warn(`[DATA FALLBACK] /api/data/${tableName} failed:`, apiErr?.message || apiErr);
+    }
+
+    // 3. Local offline cache fallback
+    const cached = getCachedData();
+    if (cached && cached.length > 0) {
+      return cached;
+    }
+
     return [];
-  };
-
-  const setCachedData = (items: T[]) => {
-    try {
-      if (typeof window !== 'undefined' && items && items.length > 0) {
-        localStorage.setItem(cacheKey, JSON.stringify(items));
-      }
-    } catch (e) {}
-  };
-
-  // 1. Direct Supabase query if configured and not under quota restriction
-  if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
-    try {
-      const { data, error } = await supabase
-        .from(tableName)
-        .select('*')
-        .order(orderCol, { ascending: orderAsc })
-        .range(offset, offset + limit - 1);
-
-      if (!error && data) {
-        egressGuard.measureAndRecord(tableName, data, 'supabase');
-        setCachedData(data as T[]);
-        return data as T[];
-      }
-      if (error) {
-        logSupabaseError(`fetchTableWithFallback:${tableName}`, error);
-      }
-    } catch (err: any) {
-      logSupabaseError(`fetchTableWithFallback:${tableName}`, err, true);
-    }
-  }
-
-  // 2. Server API fallback (/api/bookings or /api/data/:table)
-  try {
-    const endpoint = tableName === 'bookings' 
-      ? `/api/bookings?limit=${limit}&offset=${offset}`
-      : `/api/data/${tableName}?limit=${limit}&offset=${offset}&order_col=${orderCol}&order_asc=${orderAsc}`;
-    const resp = await fetch(endpoint);
-    if (resp.ok) {
-      const json = await resp.json();
-      if (json.success && Array.isArray(json.data)) {
-        egressGuard.measureAndRecord(tableName, json.data, 'rest-fallback');
-        setCachedData(json.data);
-        return json.data as T[];
-      }
-    }
-  } catch (apiErr: any) {
-    console.warn(`[DATA FALLBACK] /api/data/${tableName} failed:`, apiErr?.message || apiErr);
-  }
-
-  // 3. Local offline cache fallback
-  const cached = getCachedData();
-  if (cached && cached.length > 0) {
-    return cached;
-  }
-
-  return [];
+  });
 }
 
 // =========================================================================
@@ -1389,129 +1499,134 @@ export async function fetchTableWithFallback<T>(
 export const database = {
   // --- PROPERTIES ---
   async fetchProperties(options?: { limit?: number; offset?: number }): Promise<Property[]> {
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    const cacheKey = 'samara_cache_properties';
+    const limit = resolveLimit('properties', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    const cacheKey = getScopedCacheKey('properties');
+    const dedupeKey = `properties:${limit}:${offset}`;
 
-    const getCached = (): Property[] => {
-      try {
-        if (typeof window !== 'undefined') {
-          const raw = localStorage.getItem(cacheKey);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    return dedupeInflight<Property[]>(dedupeKey, async () => {
+      const getCached = (): Property[] => {
+        try {
+          if (typeof window !== 'undefined') {
+            const raw = localStorage.getItem(cacheKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            }
           }
-        }
-      } catch (e) {}
-      return [];
-    };
+        } catch (e) {}
+        return [];
+      };
 
-    const setCached = (items: Property[]) => {
-      try {
-        if (typeof window !== 'undefined' && items && items.length > 0) {
-          localStorage.setItem(cacheKey, JSON.stringify(items));
-        }
-      } catch (e) {}
-    };
+      const setCached = (items: Property[]) => {
+        try {
+          if (typeof window !== 'undefined' && items && items.length > 0) {
+            localStorage.setItem(cacheKey, JSON.stringify(items));
+          }
+        } catch (e) {}
+      };
 
-    // 1. Direct Supabase query if configured and not under quota restriction
-    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
-      try {
-        let { data, error } = await supabase
-          .from('properties')
-          .select(`
-            *,
-            property_facilities (
-              facility_id,
-              facilities (
-                id,
-                name,
-                icon,
-                category,
-                description
-              )
-            )
-          `)
-          .order('id', { ascending: true })
-          .range(offset, offset + limit - 1);
-
-        if (error) {
-          console.warn('[fetchProperties] Relational select failed, attempting fallback select:', error.message);
-          const fallback = await supabase
+      // 1. Direct Supabase query if configured and not under quota restriction
+      if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+        try {
+          let { data, error } = await supabase
             .from('properties')
-            .select('*')
+            .select(`
+              *,
+              property_facilities (
+                facility_id,
+                facilities (
+                  id,
+                  name,
+                  icon,
+                  category,
+                  description
+                )
+              )
+            `)
             .order('id', { ascending: true })
             .range(offset, offset + limit - 1);
-          if (fallback.error) {
-            logSupabaseError('fetchProperties', fallback.error);
-          } else {
-            data = fallback.data;
+
+          if (error) {
+            console.warn('[fetchProperties] Relational select failed, attempting fallback select:', error.message);
+            const fallback = await supabase
+              .from('properties')
+              .select('*')
+              .order('id', { ascending: true })
+              .range(offset, offset + limit - 1);
+            if (fallback.error) {
+              logSupabaseError('fetchProperties', fallback.error);
+            } else {
+              data = fallback.data;
+            }
           }
-        }
-        
-        if (data && data.length > 0) {
-          const mapped = (data || []).map((p: any) => {
-            const resolvedFacilities = (p.property_facilities || [])
-              .map((pf: any) => pf?.facilities)
-              .filter((f: any) => f !== null && f !== undefined)
-              .map((f: any) => ({
-                id: f.id,
-                name: f.name,
-                icon: f.icon,
-                category: f.category,
-                description: f.description
-              }));
-            
-            let depositVal = p.deposit_amount;
-            if (depositVal === undefined || depositVal === null) {
-              if (p.terms && typeof p.terms === 'string') {
-                const match = p.terms.match(/\[DEPOSIT:(\d+)\]/);
-                if (match) {
-                  depositVal = Number(match[1]);
+          
+          if (data && data.length > 0) {
+            queryBudget.recordRequest('properties', data.length);
+            const mapped = (data || []).map((p: any) => {
+              const resolvedFacilities = (p.property_facilities || [])
+                .map((pf: any) => pf?.facilities)
+                .filter((f: any) => f !== null && f !== undefined)
+                .map((f: any) => ({
+                  id: f.id,
+                  name: f.name,
+                  icon: f.icon,
+                  category: f.category,
+                  description: f.description
+                }));
+              
+              let depositVal = p.deposit_amount;
+              if (depositVal === undefined || depositVal === null) {
+                if (p.terms && typeof p.terms === 'string') {
+                  const match = p.terms.match(/\[DEPOSIT:(\d+)\]/);
+                  if (match) {
+                    depositVal = Number(match[1]);
+                  }
                 }
               }
-            }
 
-            const coords = sanitizePropertyCoordinates(p);
+              const coords = sanitizePropertyCoordinates(p);
 
-            const cleanProperty = { 
-              ...p, 
-              lat: coords.lat,
-              lng: coords.lng,
-              facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(p.facilities) ? p.facilities : []),
-              deposit_amount: depositVal ?? 500000
-            };
-            delete cleanProperty.property_facilities;
-            return cleanProperty;
-          });
-          setCached(mapped as Property[]);
-          return mapped as Property[];
-        }
-      } catch (err) {
-        logSupabaseError('fetchProperties', err, true);
-      }
-    }
-
-    // 2. Server API fallback
-    try {
-      const resp = await fetch(`/api/data/properties?limit=${limit}&offset=${offset}`);
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setCached(json.data as Property[]);
-          return json.data as Property[];
+              const cleanProperty = { 
+                ...p, 
+                lat: coords.lat,
+                lng: coords.lng,
+                facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(p.facilities) ? p.facilities : []),
+                deposit_amount: depositVal ?? 500000
+              };
+              delete cleanProperty.property_facilities;
+              return cleanProperty;
+            });
+            setCached(mapped as Property[]);
+            return mapped as Property[];
+          }
+        } catch (err) {
+          logSupabaseError('fetchProperties', err, true);
         }
       }
-    } catch (e) {}
 
-    // 3. Local offline cache fallback
-    const cached = getCached();
-    if (cached.length > 0) {
-      return cached;
-    }
+      // 2. Server API fallback
+      try {
+        const resp = await fetch(`/api/data/properties?limit=${limit}&offset=${offset}`);
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            queryBudget.recordRequest('properties', json.data.length);
+            setCached(json.data as Property[]);
+            return json.data as Property[];
+          }
+        }
+      } catch (e) {}
 
-    // 4. Default seed properties fallback
-    return DEFAULT_PROPERTIES;
+      // 3. Local offline cache fallback
+      const cached = getCached();
+      if (cached.length > 0) {
+        return cached;
+      }
+
+      // 4. Default seed properties fallback
+      return DEFAULT_PROPERTIES;
+    });
   },
 
   async saveProperty(prop: Partial<Property> & { facilities?: Facility[] | number[] | any[] }): Promise<Property> {
@@ -1910,123 +2025,128 @@ export const database = {
 
   // --- ROOMS ---
   async fetchRooms(options?: { limit?: number; offset?: number }): Promise<Room[]> {
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    const cacheKey = 'samara_cache_rooms';
+    const limit = resolveLimit('rooms', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    const cacheKey = getScopedCacheKey('rooms');
+    const dedupeKey = `rooms:${limit}:${offset}`;
 
-    const getCached = (): Room[] => {
-      try {
-        if (typeof window !== 'undefined') {
-          const raw = localStorage.getItem(cacheKey);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    return dedupeInflight<Room[]>(dedupeKey, async () => {
+      const getCached = (): Room[] => {
+        try {
+          if (typeof window !== 'undefined') {
+            const raw = localStorage.getItem(cacheKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            }
           }
-        }
-      } catch (e) {}
-      return [];
-    };
+        } catch (e) {}
+        return [];
+      };
 
-    const setCached = (items: Room[]) => {
-      try {
-        if (typeof window !== 'undefined' && items && items.length > 0) {
-          localStorage.setItem(cacheKey, JSON.stringify(items));
-        }
-      } catch (e) {}
-    };
+      const setCached = (items: Room[]) => {
+        try {
+          if (typeof window !== 'undefined' && items && items.length > 0) {
+            localStorage.setItem(cacheKey, JSON.stringify(items));
+          }
+        } catch (e) {}
+      };
 
-    // 1. Direct Supabase query if configured and not under quota restriction
-    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
-      try {
-        let { data, error } = await supabase
-          .from('rooms')
-          .select(`
-            *,
-            room_facilities (
-              facility_id,
-              facilities (
-                id,
-                name,
-                icon,
-                category,
-                description
-              )
-            )
-          `)
-          .order('room_number', { ascending: true })
-          .range(offset, offset + limit - 1);
-
-        if (error) {
-          console.warn('[fetchRooms] Relational select failed, attempting fallback select:', error.message);
-          const fallback = await supabase
+      // 1. Direct Supabase query if configured and not under quota restriction
+      if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+        try {
+          let { data, error } = await supabase
             .from('rooms')
-            .select('*')
+            .select(`
+              *,
+              room_facilities (
+                facility_id,
+                facilities (
+                  id,
+                  name,
+                  icon,
+                  category,
+                  description
+                )
+              )
+            `)
             .order('room_number', { ascending: true })
             .range(offset, offset + limit - 1);
-          if (fallback.error) {
-            logSupabaseError('fetchRooms', fallback.error);
-          } else {
-            data = fallback.data;
+
+          if (error) {
+            console.warn('[fetchRooms] Relational select failed, attempting fallback select:', error.message);
+            const fallback = await supabase
+              .from('rooms')
+              .select('*')
+              .order('room_number', { ascending: true })
+              .range(offset, offset + limit - 1);
+            if (fallback.error) {
+              logSupabaseError('fetchRooms', fallback.error);
+            } else {
+              data = fallback.data;
+            }
+          }
+          
+          if (data && data.length > 0) {
+            queryBudget.recordRequest('rooms', data.length);
+            const mapped = (data || []).map((r: any) => {
+              const resolvedFacilities = (r.room_facilities || [])
+                .map((rf: any) => rf?.facilities)
+                .filter((f: any) => f !== null && f !== undefined)
+                .map((f: any) => ({
+                  id: f.id,
+                  name: f.name,
+                  icon: f.icon,
+                  category: f.category,
+                  description: f.description
+                }));
+
+              // Business rule: Rooms remain available for other tenants and surveys until officially paid/occupied.
+              const normalizedStatus = (r.status === 'reserved' || !r.status) ? 'available' : r.status;
+              
+              // Auto-heal any lingering 'reserved' status in Supabase
+              if (r.status === 'reserved') {
+                safeSupabaseUpsert('rooms', { status: 'available' }, r.id).catch(e => console.warn('[Auto-heal Room Status]', e));
+              }
+
+              const cleanRoom = { 
+                ...r, 
+                status: normalizedStatus,
+                facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(r.facilities) ? r.facilities : [])
+              };
+              delete cleanRoom.room_facilities;
+              return cleanRoom;
+            });
+            setCached(mapped as Room[]);
+            return mapped as Room[];
+          }
+        } catch (err) {
+          logSupabaseError('fetchRooms', err, true);
+        }
+      }
+
+      // 2. Server API fallback
+      try {
+        const resp = await fetch(`/api/data/rooms?limit=${limit}&offset=${offset}&order_col=room_number&order_asc=true`);
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            queryBudget.recordRequest('rooms', json.data.length);
+            setCached(json.data as Room[]);
+            return json.data as Room[];
           }
         }
-        
-        if (data && data.length > 0) {
-          const mapped = (data || []).map((r: any) => {
-            const resolvedFacilities = (r.room_facilities || [])
-              .map((rf: any) => rf?.facilities)
-              .filter((f: any) => f !== null && f !== undefined)
-              .map((f: any) => ({
-                id: f.id,
-                name: f.name,
-                icon: f.icon,
-                category: f.category,
-                description: f.description
-              }));
+      } catch (e) {}
 
-            // Business rule: Rooms remain available for other tenants and surveys until officially paid/occupied.
-            const normalizedStatus = (r.status === 'reserved' || !r.status) ? 'available' : r.status;
-            
-            // Auto-heal any lingering 'reserved' status in Supabase
-            if (r.status === 'reserved') {
-              safeSupabaseUpsert('rooms', { status: 'available' }, r.id).catch(e => console.warn('[Auto-heal Room Status]', e));
-            }
-
-            const cleanRoom = { 
-              ...r, 
-              status: normalizedStatus,
-              facilities: resolvedFacilities.length > 0 ? resolvedFacilities : (Array.isArray(r.facilities) ? r.facilities : [])
-            };
-            delete cleanRoom.room_facilities;
-            return cleanRoom;
-          });
-          setCached(mapped as Room[]);
-          return mapped as Room[];
-        }
-      } catch (err) {
-        logSupabaseError('fetchRooms', err, true);
+      // 3. Local offline cache fallback
+      const cached = getCached();
+      if (cached.length > 0) {
+        return cached;
       }
-    }
 
-    // 2. Server API fallback
-    try {
-      const resp = await fetch(`/api/data/rooms?limit=${limit}&offset=${offset}&order_col=room_number&order_asc=true`);
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setCached(json.data as Room[]);
-          return json.data as Room[];
-        }
-      }
-    } catch (e) {}
-
-    // 3. Local offline cache fallback
-    const cached = getCached();
-    if (cached.length > 0) {
-      return cached;
-    }
-
-    // 4. Default seed rooms fallback
-    return DEFAULT_ROOMS;
+      // 4. Default seed rooms fallback
+      return DEFAULT_ROOMS;
+    });
   },
 
   async saveRoom(room: Partial<Room> & { facilities?: Facility[] | number[] | any[] }): Promise<Room> {
@@ -2238,10 +2358,11 @@ export const database = {
   },
 
   // --- BOOKINGS ---
-  async fetchBookings(options?: { limit?: number; offset?: number }): Promise<Booking[]> {
+  async fetchBookings(options?: { limit?: number; offset?: number; columns?: string | readonly string[] }): Promise<Booking[]> {
     return fetchTableWithFallback<Booking>('bookings', {
       limit: options?.limit,
       offset: options?.offset,
+      columns: options?.columns,
       orderCol: 'created_at',
       orderAsc: false
     });
@@ -2295,7 +2416,7 @@ export const database = {
 
       // Non-approval standard save/update
       if (!id && !payload.status) payload.status = 'pending';
-      if (!id && !payload.booking_date) payload.booking_date = new Date().toISOString().split('T')[0];
+      if (!id && !payload.booking_date) payload.booking_date = todayJakarta();
 
       const { data, error } = await safeSupabaseUpsert('bookings', payload, id);
       if (error) {
@@ -2319,44 +2440,47 @@ export const database = {
     }
   },
 
-  // Atomic Room Hold for Concurrency & Anti-Double Booking
+  // Atomic Room Hold for Concurrency & Anti-Double Booking (Invokes service_role RPC via backend)
   async holdRoomAtomic(roomId: number, bookingId: number, holdMinutes: number = 15): Promise<{ success: boolean; message: string; hold_expires_at?: string }> {
     if (!isSupabaseConfigured) {
-      return { success: true, message: 'Local mode active' };
+      return { success: false, message: 'Database belum terkonfigurasi untuk mengunci kamar.' };
     }
     try {
+      const apiRes = await fetch('/api/bookings/hold-room', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: roomId,
+          booking_id: bookingId,
+          hold_minutes: holdMinutes
+        })
+      });
+      const resJson = await apiRes.json().catch(() => null);
+      if (resJson && typeof resJson.success === 'boolean') {
+        return {
+          success: resJson.success === true,
+          message: resJson.message || (resJson.success ? 'Kamar berhasil dikunci sementara.' : 'Kamar sedang dikunci oleh pemesan lain atau sudah terisi.'),
+          hold_expires_at: resJson.hold_expires_at
+        };
+      }
+
       const { data, error } = await supabase.rpc('hold_room_atomic', {
         p_room_id: roomId,
         p_booking_id: bookingId,
         p_hold_minutes: holdMinutes
       });
 
-      if (error) {
-        console.warn('[SUPABASE] RPC hold_room_atomic fallback:', error);
-        // Fallback atomic check via direct query if RPC is not deployed yet
-        const { data: roomData } = await supabase
-          .from('rooms')
-          .select('id, status')
-          .eq('id', roomId)
-          .single();
-
-        if (roomData && roomData.status === 'occupied') {
-          return { success: false, message: 'Kamar sudah terisi (Occupied).' };
-        }
-
-        const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000).toISOString();
-        await supabase
-          .from('bookings')
-          .update({ hold_expires_at: expiresAt })
-          .eq('id', bookingId);
-
-        return { success: true, message: 'Kamar berhasil di-hold (fallback)', hold_expires_at: expiresAt };
+      if (error || !data || (data as any).success !== true) {
+        return {
+          success: false,
+          message: (data as any)?.message || error?.message || 'Kamar sedang dikunci oleh pemesan lain atau sudah terisi.'
+        };
       }
 
       return data as { success: boolean; message: string; hold_expires_at?: string };
     } catch (err: any) {
       console.error('[SUPABASE] holdRoomAtomic execution error:', err);
-      return { success: false, message: err?.message || 'Gagal mengunci kamar' };
+      return { success: false, message: err?.message || 'Gagal mengunci kamar secara atomik.' };
     }
   },
 
@@ -2416,10 +2540,11 @@ export const database = {
   },
 
   // --- SURVEYS ---
-  async fetchSurveys(options?: { limit?: number; offset?: number }): Promise<Survey[]> {
+  async fetchSurveys(options?: { limit?: number; offset?: number; columns?: string | readonly string[] }): Promise<Survey[]> {
     return fetchTableWithFallback<Survey>('surveys', {
       limit: options?.limit,
       offset: options?.offset,
+      columns: options?.columns,
       orderCol: 'id',
       orderAsc: false
     });
@@ -2442,15 +2567,15 @@ export const database = {
       delete (payload as any).id;
 
       if (!id && !payload.reservation_number) {
-        payload.reservation_number = `SRV-${new Date().toISOString().slice(0,10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
+        payload.reservation_number = `SRV-${todayJakarta().replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
       }
       if (!id && !payload.status) payload.status = 'pending_payment';
       if (!id && !payload.dp_amount) payload.dp_amount = 500000;
       if (!id && !payload.pelunasan_deadline_days) payload.pelunasan_deadline_days = 3;
       if (!id && !payload.pelunasan_deadline_date) {
-        payload.pelunasan_deadline_date = new Date(Date.now() + 3*24*3600*1000).toISOString().split('T')[0];
+        payload.pelunasan_deadline_date = todayJakarta(new Date(Date.now() + 3 * 24 * 3600 * 1000));
       }
-      if (!id && !payload.created_at) payload.created_at = new Date().toISOString().split('T')[0];
+      if (!id && !payload.created_at) payload.created_at = todayJakarta();
 
       const { data, error } = await safeSupabaseUpsert('surveys', payload, id);
       if (error) {
@@ -2459,62 +2584,9 @@ export const database = {
       }
 
       const updated = (data && data.length > 0 ? data[0] : { ...existing, ...survey }) as Survey;
-
-      // Confirmed survey side-effects (payment invoice creation)
-      // Note: In accordance with business rules, rooms remain OPEN/AVAILABLE for public booking & surveys
-      // until full official rental payment (pelunasan resmi) is completed. Only the specific time-slot is locked.
-      if (updated.status === 'survey_confirmed') {
-        const isFree = Number(updated.dp_amount) === 0;
-        if (!isFree) {
-          const targetInvoiceId = updated.invoice_id || `INV-SRV-${Math.floor(1000 + Math.random()*9000)}`;
-          const srvInvPayload = {
-            id: targetInvoiceId,
-            tenant_name: updated.tenant_name,
-            property_id: updated.property_id,
-            amount: updated.dp_amount,
-            method: updated.payment_method || "Midtrans Snap QRIS",
-            status: "paid",
-            payment_date: new Date().toISOString().split('T')[0],
-            midtrans_order_id: updated.reservation_number
-          };
-
-          const { data: existingPayment } = await supabase
-            .from('payments')
-            .select('id')
-            .eq('midtrans_order_id', updated.reservation_number)
-            .maybeSingle();
-
-          const payId = existingPayment ? existingPayment.id : targetInvoiceId;
-          await safeSupabaseUpsert('payments', srvInvPayload, existingPayment ? existingPayment.id : undefined);
-
-          // Note: Recording financial revenue double-entry accounting is an admin/webhook accounting operation.
-          // Wrapped in try/catch so unauthenticated users saving a survey do not fail.
-          try {
-            await this.recordFinancialRevenue(payId, 1300, updated.dp_amount, `DP Survey Kamar ${updated.room_number} - ${updated.tenant_name}`);
-          } catch (finErr) {
-            console.warn('[SUPABASE NOTICE] Financial revenue double-entry recording deferred to server webhook or admin session:', finErr);
-          }
-        }
-      } else if (updated.status === 'no_show' || updated.status === 'expired') {
-        const { data: existingPayment } = await supabase
-          .from('payments')
-          .select('*')
-          .eq('midtrans_order_id', updated.reservation_number)
-          .maybeSingle();
-
-        if (existingPayment) {
-          await safeSupabaseUpsert('payments', { status: 'overdue' }, existingPayment.id);
-        }
-
-        if (updated.status === 'no_show' && Number(updated.dp_amount) > 0) {
-          try {
-            await this.recordFinancialReclassification(1300, 4200, updated.dp_amount, `DP Survey Hangus (No Show) - Reservasi ${updated.reservation_number}`);
-          } catch (finErr) {
-            console.warn('[SUPABASE NOTICE] Financial reclassification recording deferred to server webhook or admin session:', finErr);
-          }
-        }
-      }
-
+      // R6: Survey DP recognition (Dr 1200 / Cr 1300) and forfeit/refund (Dr 1300 / Cr 4200 or Cr 1010)
+      // are strictly handled on the server via atomic RPCs (settle_survey_dp_payment / forfeit_or_refund_survey_dp).
+      // Client-side saveSurvey never posts financial transactions directly.
       return updated;
     } catch (err: any) {
       console.error('saveSurvey failed:', err);
@@ -2522,73 +2594,125 @@ export const database = {
     }
   },
 
+  async forfeitOrRefundSurvey(
+    surveyId: number,
+    action: 'forfeit' | 'no_show' | 'refund',
+    options?: { bank_account_id?: number; notes?: string }
+  ): Promise<{ success: boolean; action?: string; journal?: any; message?: string }> {
+    const headers = await getAuthHeaders();
+    const res = await fetch('/api/surveys/forfeit-or-refund', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({
+        survey_id: surveyId,
+        action,
+        bank_account_id: options?.bank_account_id || 1010,
+        notes: options?.notes || null
+      })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json?.success === false) {
+      throw new Error(json?.error || json?.message || 'Gagal memproses status DP survei di server.');
+    }
+    notifyRealtimeMutation('surveys', 'UPDATE', { id: surveyId });
+    notifyRealtimeMutation('financial_transactions', 'INSERT');
+    notifyRealtimeMutation('journal_entries', 'INSERT');
+    notifyRealtimeMutation('accounts', 'UPDATE');
+    return json;
+  },
+
+  async validateCouponCode(
+    code: string,
+    options?: { property_id?: number; duration_months?: number; duration_days?: number; base_amount?: number }
+  ): Promise<{ valid: boolean; coupon?: Partial<Coupon>; discount_amount?: number; message?: string }> {
+    const res = await fetch('/api/coupons/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        property_id: options?.property_id,
+        duration_months: options?.duration_months,
+        duration_days: options?.duration_days,
+        base_amount: options?.base_amount
+      })
+    });
+    const json = await res.json().catch(() => ({ valid: false, message: 'Gagal memvalidasi kupon.' }));
+    return json;
+  },
+
   // --- COUPONS ---
   async fetchCoupons(options?: { limit?: number; offset?: number }): Promise<Coupon[]> {
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    const cacheKey = 'samara_cache_coupons';
+    const limit = resolveLimit('coupons', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    const cacheKey = getScopedCacheKey('coupons');
+    const dedupeKey = `coupons:${limit}:${offset}`;
 
-    const getCached = (): Coupon[] => {
+    return dedupeInflight<Coupon[]>(dedupeKey, async () => {
+      const getCached = (): Coupon[] => {
+        try {
+          if (typeof window !== 'undefined') {
+            const raw = localStorage.getItem(cacheKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            }
+          }
+        } catch (e) {}
+        return [];
+      };
+
+      const setCached = (items: Coupon[]) => {
+        try {
+          if (typeof window !== 'undefined' && items && items.length > 0) {
+            localStorage.setItem(cacheKey, JSON.stringify(items));
+          }
+        } catch (e) {}
+      };
+
+      // 1. Direct Supabase query if configured and not under quota restriction
+      if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+        try {
+          const { data, error } = await supabase
+            .from('coupons')
+            .select('*')
+            .order('id', { ascending: true })
+            .range(offset, offset + limit - 1);
+          if (!error && data) {
+            queryBudget.recordRequest('coupons', data.length);
+            setCached(data as Coupon[]);
+            return data as Coupon[];
+          }
+          if (error) {
+            logSupabaseError('fetchCoupons', error);
+          }
+        } catch (err) {
+          logSupabaseError('fetchCoupons', err, true);
+        }
+      }
+
+      // 2. Server API fallback
       try {
-        if (typeof window !== 'undefined') {
-          const raw = localStorage.getItem(cacheKey);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        const resp = await fetch(`/api/data/coupons?limit=${limit}&offset=${offset}&order_col=id&order_asc=true`);
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            queryBudget.recordRequest('coupons', json.data.length);
+            setCached(json.data as Coupon[]);
+            return json.data as Coupon[];
           }
         }
       } catch (e) {}
-      return [];
-    };
 
-    const setCached = (items: Coupon[]) => {
-      try {
-        if (typeof window !== 'undefined' && items && items.length > 0) {
-          localStorage.setItem(cacheKey, JSON.stringify(items));
-        }
-      } catch (e) {}
-    };
-
-    // 1. Direct Supabase query if configured and not under quota restriction
-    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
-      try {
-        const { data, error } = await supabase
-          .from('coupons')
-          .select('*')
-          .order('id', { ascending: true })
-          .range(offset, offset + limit - 1);
-        if (!error && data) {
-          setCached(data as Coupon[]);
-          return data as Coupon[];
-        }
-        if (error) {
-          logSupabaseError('fetchCoupons', error);
-        }
-      } catch (err) {
-        logSupabaseError('fetchCoupons', err, true);
+      // 3. Local offline cache fallback
+      const cached = getCached();
+      if (cached.length > 0) {
+        return cached;
       }
-    }
 
-    // 2. Server API fallback
-    try {
-      const resp = await fetch(`/api/data/coupons?limit=${limit}&offset=${offset}&order_col=id&order_asc=true`);
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setCached(json.data as Coupon[]);
-          return json.data as Coupon[];
-        }
-      }
-    } catch (e) {}
-
-    // 3. Local offline cache fallback
-    const cached = getCached();
-    if (cached.length > 0) {
-      return cached;
-    }
-
-    // 4. Default seed coupons fallback
-    return DEFAULT_COUPONS;
+      // 4. Default seed coupons fallback
+      return DEFAULT_COUPONS;
+    });
   },
 
   async saveCoupon(coupon: Partial<Coupon>): Promise<Coupon> {
@@ -2630,80 +2754,77 @@ export const database = {
   // --- FINANCIAL ACCOUNTING SYSTEMS ---
   async fetchAccounts(options?: { limit?: number; offset?: number }): Promise<AccountCOA[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('accounts')
-        .select('*')
-        .order('id', { ascending: true })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchAccounts', error);
+    const limit = resolveLimit('accounts', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<AccountCOA[]>(`accounts:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('accounts')
+          .select('*')
+          .order('id', { ascending: true })
+          .range(offset, offset + limit - 1);
+        if (error) {
+          logSupabaseError('fetchAccounts', error);
+          return [];
+        }
+        queryBudget.recordRequest('accounts', (data || []).length);
+        return data as AccountCOA[];
+      } catch (err) {
+        logSupabaseError('fetchAccounts', err, true);
         return [];
       }
-      return data as AccountCOA[];
-    } catch (err) {
-      logSupabaseError('fetchAccounts', err, true);
-      return [];
-    }
+    });
   },
 
-  async fetchFinancialTransactions(options?: { limit?: number; offset?: number }): Promise<FinancialTransaction[]> {
+  async fetchFinancialTransactions(options?: { limit?: number; offset?: number; columns?: string | readonly string[] }): Promise<FinancialTransaction[]> {
     if (!isSupabaseConfigured) {
-      try {
-        const raw = localStorage.getItem('kamar_financial_transactions');
-        return raw ? JSON.parse(raw) : [];
-      } catch {
-        return [];
-      }
-    }
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('financial_transactions')
-        .select('*')
-        .order('id', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchFinancialTransactions', error);
-        try {
-          const raw = localStorage.getItem('kamar_financial_transactions');
-          if (raw) return JSON.parse(raw);
-        } catch { /* ignore */ }
-        return [];
-      }
-      return (data || []) as FinancialTransaction[];
-    } catch (err) {
-      logSupabaseError('fetchFinancialTransactions', err, true);
-      try {
-        const raw = localStorage.getItem('kamar_financial_transactions');
-        if (raw) return JSON.parse(raw);
-      } catch { /* ignore */ }
       return [];
     }
+    const limit = resolveLimit('financial_transactions', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    const { selectExpr, columnsParam } = sanitizeColumns('financial_transactions', options?.columns, tableSchemas);
+    return dedupeInflight<FinancialTransaction[]>(`financial_transactions:${limit}:${offset}:${columnsParam || '*'}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('financial_transactions')
+          .select(selectExpr)
+          .order('id', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) {
+          logSupabaseError('fetchFinancialTransactions', error);
+          return [];
+        }
+        queryBudget.recordRequest('financial_transactions', (data || []).length);
+        return (data as unknown as FinancialTransaction[]) || [];
+      } catch (err) {
+        logSupabaseError('fetchFinancialTransactions', err, true);
+        return [];
+      }
+    });
   },
 
   async fetchJournalEntries(options?: { limit?: number; offset?: number }): Promise<JournalEntry[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('journal_entries')
-        .select('*')
-        .order('id', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchJournalEntries', error);
+    const limit = resolveLimit('journal_entries', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<JournalEntry[]>(`journal_entries:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('journal_entries')
+          .select('*')
+          .order('id', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) {
+          logSupabaseError('fetchJournalEntries', error);
+          return [];
+        }
+        queryBudget.recordRequest('journal_entries', (data || []).length);
+        return data as JournalEntry[];
+      } catch (err) {
+        logSupabaseError('fetchJournalEntries', err, true);
         return [];
       }
-      return data as JournalEntry[];
-    } catch (err) {
-      logSupabaseError('fetchJournalEntries', err, true);
-      return [];
-    }
+    });
   },
 
   async postFinancialTransaction(payload: {
@@ -2718,106 +2839,96 @@ export const database = {
     credit_account_id: number;
     property_id?: number | null;
   }): Promise<void> {
-    let postedViaServer = false;
-    try {
-      const headers = await getAuthHeaders();
-      const res = await fetch('/api/admin/financial-transaction/post', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        postedViaServer = true;
-      }
-    } catch (apiErr) {
-      console.warn('[SUPABASE API] /api/admin/financial-transaction/post fallback triggered:', apiErr);
+    const headers = await getAuthHeaders();
+    const res = await fetch('/api/admin/financial-transaction/post', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload)
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || json.success !== true) {
+      throw new Error(json?.error || json?.message || `Gagal memposting jurnal buku besar (HTTP ${res.status}).`);
     }
-
-    const trxDate = new Date().toISOString().split('T')[0];
-    const trxNo = `TRX-${trxDate.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
-
-    if (!postedViaServer && isSupabaseConfigured) {
-      try {
-        const { data: insertedTrx, error: trxErr } = await supabase
-          .from('financial_transactions')
-          .insert({
-            transaction_no: trxNo,
-            transaction_date: trxDate,
-            category: payload.category,
-            description: payload.description,
-            amount: Number(payload.amount),
-            type: payload.type,
-            reference_type: payload.reference_type || null,
-            reference_id: payload.reference_id ? String(payload.reference_id) : null,
-            created_by: payload.created_by || 'Admin',
-            property_id: payload.property_id || null
-          })
-          .select()
-          .single();
-
-        if (!trxErr && insertedTrx) {
-          const journalNo = `JRN-${trxDate.replace(/-/g, '')}-${insertedTrx.id}`;
-          try {
-            await supabase.from('journal_entries').insert([
-              {
-                journal_no: journalNo,
-                transaction_id: insertedTrx.id,
-                account_id: payload.debit_account_id,
-                debit: Number(payload.amount),
-                credit: 0
-              },
-              {
-                journal_no: journalNo,
-                transaction_id: insertedTrx.id,
-                account_id: payload.credit_account_id,
-                debit: 0,
-                credit: Number(payload.amount)
-              }
-            ]);
-          } catch { /* ignore journal error */ }
-        }
-      } catch (directErr) {
-        console.warn('Direct financial transaction fallback failed:', directErr);
-      }
-    }
-
-    // Always update local cache for instant UI and offline/fallback display
-    try {
-      const raw = localStorage.getItem('kamar_financial_transactions');
-      const list = raw ? JSON.parse(raw) : [];
-      list.unshift({
-        id: Date.now(),
-        transaction_no: trxNo,
-        transaction_date: trxDate,
-        category: payload.category,
-        description: payload.description,
-        amount: Number(payload.amount),
-        type: payload.type,
-        reference_type: payload.reference_type || null,
-        reference_id: payload.reference_id || null,
-        created_by: payload.created_by || 'Admin',
-        property_id: payload.property_id || null,
-        created_at: new Date().toISOString()
-      });
-      localStorage.setItem('kamar_financial_transactions', JSON.stringify(list));
-    } catch { /* ignore */ }
 
     notifyRealtimeMutation('financial_transactions', 'INSERT');
     notifyRealtimeMutation('journal_entries', 'INSERT');
     notifyRealtimeMutation('accounts', 'UPDATE');
   },
 
+  async fetchDashboardSummary(options?: {
+    property_id?: string | number | null;
+    from?: string;
+    to?: string;
+    months?: number;
+  }): Promise<{
+    success: boolean;
+    summary?: {
+      total_rooms: number;
+      occupied_rooms: number;
+      available_rooms: number;
+      occupancy_rate: number;
+      total_inflow: number;
+      total_expenses: number;
+      noi: number;
+      gross_pipeline: number;
+      total_gross_settled: number;
+      total_mdr_fee: number;
+      unreconciled_escrow: number;
+      expense_by_category: Record<string, number>;
+    };
+    monthly_cashflow?: Array<{
+      month: string;
+      inflow: number;
+      outflow: number;
+      noi: number;
+    }>;
+  }> {
+    const propParam = options?.property_id && options.property_id !== 'all' ? String(options.property_id) : '';
+    const fromParam = options?.from || '';
+    const toParam = options?.to || '';
+    const monthsParam = options?.months || 6;
+    const dedupeKey = `dashboard_summary:${propParam}:${fromParam}:${toParam}:${monthsParam}`;
+
+    return dedupeInflight(dedupeKey, async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const qs = new URLSearchParams();
+        if (propParam) qs.set('property_id', propParam);
+        if (fromParam) qs.set('from', fromParam);
+        if (toParam) qs.set('to', toParam);
+        qs.set('months', String(monthsParam));
+        const res = await fetch(`/api/analytics/dashboard-summary?${qs.toString()}`, {
+          headers,
+          credentials: 'include'
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.success) {
+            return json;
+          }
+        }
+      } catch (err) {
+        // Fallback handled by caller
+      }
+      return { success: false };
+    });
+  },
+
   async recordFinancialRevenue(invoiceId: string, creditAccountId: number, amount: number, description: string) {
+    // R3: Never credit 1010 (Bank) on a revenue entry where debit is 1010; map 1010 -> 4000 (Pendapatan Sewa)
+    const resolvedCreditAccount = creditAccountId === 1010 ? 4000 : creditAccountId;
     await this.postFinancialTransaction({
-      category: "Penerimaan Sewa",
+      category: resolvedCreditAccount === 1300 ? "DP Survey" : "Penerimaan Sewa",
       description,
       amount,
-      type: creditAccountId === 1300 ? "dp_booking" : "income",
+      type: resolvedCreditAccount === 1300 ? "dp_booking" : "income",
       reference_type: "payment",
       reference_id: invoiceId,
       created_by: "System Webhook",
       debit_account_id: 1010, // Kas dan Bank Mandiri
-      credit_account_id: creditAccountId
+      credit_account_id: resolvedCreditAccount
     });
   },
 
@@ -2986,101 +3097,105 @@ export const database = {
 
   // --- RULES SETTINGS ---
   async fetchSettings(): Promise<SystemSettings> {
-    const cacheKey = 'samara_cache_settings';
+    const cacheKey = getScopedCacheKey('settings');
 
-    const getCached = (): SystemSettings | null => {
+    return dedupeInflight<SystemSettings>('settings:1:0', async () => {
+      const getCached = (): SystemSettings | null => {
+        try {
+          if (typeof window !== 'undefined') {
+            const raw = localStorage.getItem(cacheKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') return parsed as SystemSettings;
+            }
+          }
+        } catch (e) {}
+        return null;
+      };
+
+      const setCached = (item: SystemSettings) => {
+        try {
+          if (typeof window !== 'undefined' && item) {
+            localStorage.setItem(cacheKey, JSON.stringify(item));
+          }
+        } catch (e) {}
+      };
+
+      // 1. Direct Supabase query if configured and not under quota restriction
+      if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+        try {
+          const { data, error } = await supabase.from('settings').select('*').limit(1).maybeSingle();
+          if (error) {
+            logSupabaseError('fetchSettings', error);
+          } else if (data) {
+            queryBudget.recordRequest('settings', 1);
+            let settingsObj = { ...DEFAULT_SETTINGS, ...(data as SystemSettings) };
+            if (!settingsObj.owner_signature_url) {
+              settingsObj.owner_signature_url = DEFAULT_OWNER_SIGNATURE;
+            }
+
+            // Check if Admin has configured front-end facilities in settings
+            let hasValidStandard = false;
+            if (settingsObj.standard_facilities) {
+              try {
+                const parsed = JSON.parse(settingsObj.standard_facilities);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  hasValidStandard = true;
+                }
+              } catch (e) {}
+            }
+
+            // If Admin hasn't customized standard_facilities yet, fallback to seed from facilities table
+            if (!hasValidStandard) {
+              try {
+                const { data: facData, error: facError } = await supabase
+                  .from('facilities')
+                  .select('*')
+                  .order('id', { ascending: true });
+
+                if (!facError && facData && facData.length > 0) {
+                  const mappedFacilities = facData.map(f => ({
+                    id: f.id,
+                    icon: f.icon || 'Sparkles',
+                    title: f.name,
+                    subtitle: f.description || '',
+                    category: f.category || 'general'
+                  }));
+                  settingsObj.standard_facilities = JSON.stringify(mappedFacilities);
+                }
+              } catch (facErr) {}
+            }
+            setCached(settingsObj);
+            return settingsObj;
+          }
+        } catch (err) {
+          logSupabaseError('fetchSettings', err, true);
+        }
+      }
+
+      // 2. Server API fallback
       try {
-        if (typeof window !== 'undefined') {
-          const raw = localStorage.getItem(cacheKey);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object') return parsed as SystemSettings;
+        const resp = await fetch('/api/data/settings?limit=1');
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            queryBudget.recordRequest('settings', 1);
+            const item = { ...DEFAULT_SETTINGS, ...json.data[0] };
+            setCached(item);
+            return item;
           }
         }
       } catch (e) {}
-      return null;
-    };
 
-    const setCached = (item: SystemSettings) => {
-      try {
-        if (typeof window !== 'undefined' && item) {
-          localStorage.setItem(cacheKey, JSON.stringify(item));
-        }
-      } catch (e) {}
-    };
-
-    // 1. Direct Supabase query if configured and not under quota restriction
-    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
-      try {
-        const { data, error } = await supabase.from('settings').select('*').maybeSingle();
-        if (error) {
-          logSupabaseError('fetchSettings', error);
-        } else if (data) {
-          let settingsObj = { ...DEFAULT_SETTINGS, ...(data as SystemSettings) };
-          if (!settingsObj.owner_signature_url) {
-            settingsObj.owner_signature_url = DEFAULT_OWNER_SIGNATURE;
-          }
-
-          // Check if Admin has configured front-end facilities in settings
-          let hasValidStandard = false;
-          if (settingsObj.standard_facilities) {
-            try {
-              const parsed = JSON.parse(settingsObj.standard_facilities);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                hasValidStandard = true;
-              }
-            } catch (e) {}
-          }
-
-          // If Admin hasn't customized standard_facilities yet, fallback to seed from facilities table
-          if (!hasValidStandard) {
-            try {
-              const { data: facData, error: facError } = await supabase
-                .from('facilities')
-                .select('*')
-                .order('id', { ascending: true });
-
-              if (!facError && facData && facData.length > 0) {
-                const mappedFacilities = facData.map(f => ({
-                  id: f.id,
-                  icon: f.icon || 'Sparkles',
-                  title: f.name,
-                  subtitle: f.description || '',
-                  category: f.category || 'general'
-                }));
-                settingsObj.standard_facilities = JSON.stringify(mappedFacilities);
-              }
-            } catch (facErr) {}
-          }
-          setCached(settingsObj);
-          return settingsObj;
-        }
-      } catch (err) {
-        logSupabaseError('fetchSettings', err, true);
+      // 3. Local offline cache fallback
+      const cached = getCached();
+      if (cached) {
+        return cached;
       }
-    }
 
-    // 2. Server API fallback
-    try {
-      const resp = await fetch('/api/data/settings?limit=1');
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          const item = { ...DEFAULT_SETTINGS, ...json.data[0] };
-          setCached(item);
-          return item;
-        }
-      }
-    } catch (e) {}
-
-    // 3. Local offline cache fallback
-    const cached = getCached();
-    if (cached) {
-      return cached;
-    }
-
-    // 4. Default seed settings fallback
-    return DEFAULT_SETTINGS;
+      // 4. Default seed settings fallback
+      return DEFAULT_SETTINGS;
+    });
   },
 
   async saveSettings(settings: SystemSettings): Promise<SystemSettings> {
@@ -3416,23 +3531,26 @@ export const database = {
 
   async fetchActivityLogs(options?: { limit?: number; offset?: number }): Promise<ActivityLog[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 40;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('activity_logs')
-        .select('*')
-        .order('id', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchActivityLogs', error);
+    const limit = resolveLimit('activity_logs', options?.limit ?? 50);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<ActivityLog[]>(`activity_logs:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('activity_logs')
+          .select('*')
+          .order('id', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) {
+          logSupabaseError('fetchActivityLogs', error);
+          return [];
+        }
+        queryBudget.recordRequest('activity_logs', (data || []).length);
+        return data as ActivityLog[];
+      } catch (err) {
+        logSupabaseError('fetchActivityLogs', err, true);
         return [];
       }
-      return data as ActivityLog[];
-    } catch (err) {
-      logSupabaseError('fetchActivityLogs', err, true);
-      return [];
-    }
+    });
   },
 
   async clearActivityLogs(): Promise<boolean> {
@@ -3451,10 +3569,11 @@ export const database = {
   },
 
   // --- TENANTS ---
-  async fetchTenants(options?: { limit?: number; offset?: number }): Promise<Tenant[]> {
+  async fetchTenants(options?: { limit?: number; offset?: number; columns?: string | readonly string[] }): Promise<Tenant[]> {
     return fetchTableWithFallback<Tenant>('tenants', {
       limit: options?.limit,
       offset: options?.offset,
+      columns: options?.columns,
       orderCol: 'id',
       orderAsc: false
     });
@@ -3516,89 +3635,96 @@ export const database = {
   },
 
   // --- CONTRACT EXTENSIONS ---
-  async fetchContractExtensions(options?: { limit?: number; offset?: number; status?: string; tenant_id?: string }): Promise<ContractExtension[]> {
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
+  async fetchContractExtensions(options?: { limit?: number; offset?: number; status?: string; tenant_id?: string | number; columns?: string | readonly string[] }): Promise<ContractExtension[]> {
+    const limit = resolveLimit('contract_extensions', options?.limit);
+    const offset = resolveOffset(options?.offset);
     const statusParam = options?.status ? `&status=${encodeURIComponent(options.status)}` : '';
-    const tenantParam = options?.tenant_id ? `&tenant_id=${encodeURIComponent(options.tenant_id)}` : '';
-    const cacheKey = 'samara_cache_contract_extensions';
+    const tenantParam = options?.tenant_id !== undefined && options?.tenant_id !== null ? `&tenant_id=${encodeURIComponent(String(options.tenant_id))}` : '';
+    const { selectExpr, columnsParam } = sanitizeColumns('contract_extensions', options?.columns, tableSchemas);
+    const colQuery = columnsParam ? `&columns=${encodeURIComponent(columnsParam)}` : '';
+    const cacheKey = getScopedCacheKey('contract_extensions');
+    const dedupeKey = `contract_extensions:${limit}:${offset}:${options?.status || ''}:${options?.tenant_id ?? ''}:${columnsParam || '*'}`;
 
-    const getCached = (): ContractExtension[] => {
+    return dedupeInflight<ContractExtension[]>(dedupeKey, async () => {
+      const getCached = (): ContractExtension[] => {
+        try {
+          if (typeof window !== 'undefined') {
+            const raw = localStorage.getItem(cacheKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            }
+          }
+        } catch (e) {}
+        return [];
+      };
+
+      const setCached = (items: ContractExtension[]) => {
+        try {
+          if (typeof window !== 'undefined' && items && items.length > 0 && !columnsParam) {
+            localStorage.setItem(cacheKey, JSON.stringify(items));
+          }
+        } catch (e) {}
+      };
+
+      // 1. Prioritize Server-Side API endpoint
       try {
-        if (typeof window !== 'undefined') {
-          const raw = localStorage.getItem(cacheKey);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        const headers = await getAuthHeaders();
+        const resp = await fetch(`/api/contract-extensions?limit=${limit}&offset=${offset}${statusParam}${tenantParam}${colQuery}`, {
+          headers,
+          signal: AbortSignal.timeout(5000)
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            queryBudget.recordRequest('contract_extensions', json.data.length);
+            setCached(json.data as ContractExtension[]);
+            return json.data as ContractExtension[];
           }
         }
-      } catch (e) {}
-      return [];
-    };
+      } catch (apiErr) {
+        // Fall through to direct Supabase client if server endpoint unavailable
+      }
 
-    const setCached = (items: ContractExtension[]) => {
-      try {
-        if (typeof window !== 'undefined' && items && items.length > 0) {
-          localStorage.setItem(cacheKey, JSON.stringify(items));
-        }
-      } catch (e) {}
-    };
+      // 2. Direct Supabase query if configured and not under quota restriction
+      if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
+        try {
+          let query = supabase
+            .from('contract_extensions')
+            .select(selectExpr)
+            .order('id', { ascending: false })
+            .range(offset, offset + limit - 1);
 
-    // 1. Prioritize Server-Side API endpoint
-    try {
-      const headers = await getAuthHeaders();
-      const resp = await fetch(`/api/contract-extensions?limit=${limit}&offset=${offset}${statusParam}${tenantParam}`, {
-        headers,
-        signal: AbortSignal.timeout(5000)
-      });
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setCached(json.data as ContractExtension[]);
-          return json.data as ContractExtension[];
+          if (options?.status) {
+            query = query.eq('status', options.status);
+          }
+          if (options?.tenant_id) {
+            query = query.eq('tenant_id', options.tenant_id);
+          }
+
+          const { data, error } = await query;
+          if (!error && data) {
+            queryBudget.recordRequest('contract_extensions', data.length);
+            setCached(data as unknown as ContractExtension[]);
+            return data as unknown as ContractExtension[];
+          }
+          if (error) {
+            logSupabaseError('fetchContractExtensions', error);
+          }
+        } catch (err) {
+          logSupabaseError('fetchContractExtensions', err, true);
         }
       }
-    } catch (apiErr) {
-      // Fall through to direct Supabase client if server endpoint unavailable
-    }
 
-    // 2. Direct Supabase query if configured and not under quota restriction
-    if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
-      try {
-        let query = supabase
-          .from('contract_extensions')
-          .select('*')
-          .order('id', { ascending: false })
-          .range(offset, offset + limit - 1);
-
-        if (options?.status) {
-          query = query.eq('status', options.status);
-        }
-        if (options?.tenant_id) {
-          query = query.eq('tenant_id', options.tenant_id);
-        }
-
-        const { data, error } = await query;
-        if (!error && data) {
-          setCached(data as ContractExtension[]);
-          return data as ContractExtension[];
-        }
-        if (error) {
-          logSupabaseError('fetchContractExtensions', error);
-        }
-      } catch (err) {
-        logSupabaseError('fetchContractExtensions', err, true);
+      // 3. Local offline cache fallback
+      const cached = getCached();
+      if (cached.length > 0) {
+        return cached;
       }
-    }
 
-    // 3. Local offline cache fallback
-    const cached = getCached();
-    if (cached.length > 0) {
-      return cached;
-    }
-
-    // 4. Default seed contract extensions fallback
-    return DEFAULT_CONTRACT_EXTENSIONS;
+      // 4. Default seed contract extensions fallback
+      return DEFAULT_CONTRACT_EXTENSIONS;
+    });
   },
 
   async saveContractExtension(ext: Partial<ContractExtension>): Promise<ContractExtension> {
@@ -3775,25 +3901,29 @@ export const database = {
   },
 
   // --- PAYMENTS ---
-  async fetchPayments(options?: { limit?: number; offset?: number }): Promise<PaymentInvoice[]> {
+  async fetchPayments(options?: { limit?: number; offset?: number; columns?: string | readonly string[] }): Promise<PaymentInvoice[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('payments')
-        .select('*')
-        .order('payment_date', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchPayments', error);
+    const limit = resolveLimit('payments', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    const { selectExpr, columnsParam } = sanitizeColumns('payments', options?.columns, tableSchemas);
+    return dedupeInflight<PaymentInvoice[]>(`payments:${limit}:${offset}:${columnsParam || '*'}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('payments')
+          .select(selectExpr)
+          .order('payment_date', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) {
+          logSupabaseError('fetchPayments', error);
+          return [];
+        }
+        queryBudget.recordRequest('payments', (data || []).length);
+        return (data as unknown as PaymentInvoice[]) || [];
+      } catch (err) {
+        logSupabaseError('fetchPayments', err, true);
         return [];
       }
-      return data as PaymentInvoice[];
-    } catch (err) {
-      logSupabaseError('fetchPayments', err, true);
-      return [];
-    }
+    });
   },
 
   async savePayment(payment: PaymentInvoice): Promise<PaymentInvoice> {
@@ -3819,50 +3949,51 @@ export const database = {
   // --- USERS ---
   async fetchUsers(options?: { limit?: number; offset?: number }): Promise<UserSystem[]> {
     if (!isSupabaseConfigured) return [];
-    // 1. Try secure server-side endpoint first (bypasses anon RLS restrictions)
-    try {
-      const headers = await getAuthHeaders();
-      const res = await fetch('/api/admin/users', {
-        headers,
-        credentials: 'include',
-        signal: AbortSignal.timeout(6000)
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.users)) {
-          return json.users as UserSystem[];
+    const limit = resolveLimit('users', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<UserSystem[]>(`users:${limit}:${offset}`, async () => {
+      // 1. Try secure server-side endpoint first (bypasses anon RLS restrictions)
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch('/api/admin/users', {
+          headers,
+          credentials: 'include',
+          signal: AbortSignal.timeout(6000)
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.users)) {
+            queryBudget.recordRequest('users', json.users.length);
+            return json.users as UserSystem[];
+          }
         }
+      } catch (apiErr) {
+        console.warn('[Supabase API] fetchUsers fallback to client query:', apiErr);
       }
-    } catch (apiErr) {
-      console.warn('[Supabase API] fetchUsers fallback to client query:', apiErr);
-    }
 
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .order('id', { ascending: false })
-        .range(offset, offset + limit - 1);
-      if (error) {
-        logSupabaseError('fetchUsers', error);
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .order('id', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) {
+          logSupabaseError('fetchUsers', error);
+          return [];
+        }
+        queryBudget.recordRequest('users', (data || []).length);
+        return ((data || []) as UserSystem[]).map((u: any) => {
+          const normRole = u.role === 'anak owner' ? 'anak_owner' : u.role;
+          return {
+            ...u,
+            role: normRole
+          };
+        }) as UserSystem[];
+      } catch (err) {
+        logSupabaseError('fetchUsers', err, true);
         return [];
       }
-      return ((data || []) as UserSystem[]).map((u: any) => {
-        const isAnakOwner = (u.email || '').toLowerCase().includes('anakowner') ||
-          (u.email || '').toLowerCase() === 'sabita@samarastay.co' ||
-          (u.access && u.access.toLowerCase().includes('anak owner')) ||
-          u.role === 'anak_owner' || u.role === 'anak owner';
-        return {
-          ...u,
-          role: isAnakOwner ? 'anak_owner' : u.role
-        };
-      }) as UserSystem[];
-    } catch (err) {
-      logSupabaseError('fetchUsers', err, true);
-      return [];
-    }
+    });
   },
 
   async saveUser(user: Partial<UserSystem>): Promise<UserSystem> {
@@ -4001,47 +4132,50 @@ export const database = {
   // --- MAINTENANCE ---
   async fetchMaintenance(options?: { limit?: number; offset?: number }): Promise<Maintenance[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      let { data, error } = await supabase
-        .from('maintenance')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: false });
-
-      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
-        const fallbackRes = await supabase
-          .from('maintenances')
+    const limit = resolveLimit('maintenance', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<Maintenance[]>(`maintenance:${limit}:${offset}`, async () => {
+      try {
+        let { data, error } = await supabase
+          .from('maintenance')
           .select('*')
           .range(offset, offset + limit - 1)
           .order('id', { ascending: false });
-        data = fallbackRes.data;
-        error = fallbackRes.error;
-      }
 
-      if (error) {
-        logSupabaseError('fetchMaintenance', error);
+        if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+          const fallbackRes = await supabase
+            .from('maintenances')
+            .select('*')
+            .range(offset, offset + limit - 1)
+            .order('id', { ascending: false });
+          data = fallbackRes.data;
+          error = fallbackRes.error;
+        }
+
+        if (error) {
+          logSupabaseError('fetchMaintenance', error);
+          return [];
+        }
+        queryBudget.recordRequest('maintenance', (data || []).length);
+        return (data || []).map((m: any) => ({
+          id: m.id,
+          title: m.title || m.issue || 'Pemeliharaan Fasilitas',
+          property_id: m.property_id || 1,
+          room: m.room || m.room_number || 'Umum',
+          priority: m.priority || 'Normal',
+          cost: Number(m.cost || 0),
+          tech: m.tech || m.technician || m.technician_name || 'Teknisi In-House',
+          desc_field: m.desc_field || m.description || '',
+          reported_by: m.reported_by || m.reporter || m.pelapor || 'Staf Lapangan',
+          status: m.status || 'open',
+          date: m.date || m.created_at?.split('T')[0] || todayJakarta(),
+          created_at: m.created_at
+        })) as Maintenance[];
+      } catch (err) {
+        logSupabaseError('fetchMaintenance', err, true);
         return [];
       }
-      return (data || []).map((m: any) => ({
-        id: m.id,
-        title: m.title || m.issue || 'Pemeliharaan Fasilitas',
-        property_id: m.property_id || 1,
-        room: m.room || m.room_number || 'Umum',
-        priority: m.priority || 'Normal',
-        cost: Number(m.cost || 0),
-        tech: m.tech || m.technician || m.technician_name || 'Teknisi In-House',
-        desc_field: m.desc_field || m.description || '',
-        reported_by: m.reported_by || m.reporter || m.pelapor || 'Staf Lapangan',
-        status: m.status || 'open',
-        date: m.date || m.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-        created_at: m.created_at
-      })) as Maintenance[];
-    } catch (err) {
-      logSupabaseError('fetchMaintenance', err, true);
-      return [];
-    }
+    });
   },
 
   async saveMaintenance(maint: Partial<Maintenance> & {
@@ -4063,7 +4197,7 @@ export const database = {
         tech: maint.tech || 'Teknisi In-House',
         desc_field: maint.desc_field || '',
         status: maint.status || 'open',
-        date: maint.date || new Date().toISOString().split('T')[0]
+        date: maint.date || todayJakarta()
       };
       if (maint.reported_by) {
         payload.reported_by = maint.reported_by;
@@ -4140,23 +4274,26 @@ export const database = {
   // --- PETTY CASH REQUESTS ---
   async fetchPettyCashRequests(options?: { limit?: number; offset?: number }): Promise<PettyCashRequest[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('petty_cash_requests')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: true });
-      if (error) {
-        logSupabaseError('fetchPettyCashRequests', error);
+    const limit = resolveLimit('petty_cash_requests', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<PettyCashRequest[]>(`petty_cash_requests:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('petty_cash_requests')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: true });
+        if (error) {
+          logSupabaseError('fetchPettyCashRequests', error);
+          return [];
+        }
+        queryBudget.recordRequest('petty_cash_requests', (data || []).length);
+        return data as PettyCashRequest[];
+      } catch (err) {
+        logSupabaseError('fetchPettyCashRequests', err, true);
         return [];
       }
-      return data as PettyCashRequest[];
-    } catch (err) {
-      logSupabaseError('fetchPettyCashRequests', err, true);
-      return [];
-    }
+    });
   },
 
   async savePettyCashRequest(request: Partial<PettyCashRequest>): Promise<PettyCashRequest> {
@@ -4186,77 +4323,54 @@ export const database = {
 
   // --- FIXED ASSETS ---
   async fetchFixedAssets(options?: { limit?: number; offset?: number }): Promise<FixedAsset[]> {
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
+    if (!isSupabaseConfigured) {
+      return [];
+    }
+    const limit = resolveLimit('fixed_assets', options?.limit);
+    const offset = resolveOffset(options?.offset);
 
-    // Helper to sanitize any legacy cached dummy assets from client localStorage
-    const getCleanLocalCache = (): FixedAsset[] => {
+    return dedupeInflight<FixedAsset[]>(`fixed_assets:${limit}:${offset}`, async () => {
       try {
-        const raw = localStorage.getItem('kamar_fixed_assets');
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return [];
-        const filtered = parsed.filter((a: any) => ![101, 102, 103, 201, 202, 203, 301, 302].includes(a.id));
-        if (filtered.length !== parsed.length) {
-          localStorage.setItem('kamar_fixed_assets', JSON.stringify(filtered));
+        const { data, error } = await supabase
+          .from('fixed_assets')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: true });
+        
+        if (error) {
+          logSupabaseError('fetchFixedAssets', error);
+          return [];
         }
-        return filtered;
-      } catch {
+
+        if (!data || data.length === 0) {
+          return [];
+        }
+
+        queryBudget.recordRequest('fixed_assets', data.length);
+        return data.map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          property_id: item.property_id ? Number(item.property_id) : undefined,
+          location: item.location || '',
+          category: item.category || 'Elektronik & AC',
+          cost: Number(item.cost || 0),
+          lifeYears: Number(item.life_years || 1),
+          residual: Number(item.residual || 0),
+          deprRate: Number(item.depr_rate || 0),
+          accumDepr: Number(item.accum_depr || 0),
+          maintenance_interval_months: item.maintenance_interval_months ? Number(item.maintenance_interval_months) : 3,
+          last_maintenance_date: item.last_maintenance_date || '',
+          next_maintenance_date: item.next_maintenance_date || '',
+          maintenance_notes: item.maintenance_notes || '',
+          last_repair_cost: item.last_repair_cost ? Number(item.last_repair_cost) : undefined,
+          condition: item.condition || 'Baik',
+          created_at: item.created_at
+        }));
+      } catch (err) {
+        logSupabaseError('fetchFixedAssets', err, true);
         return [];
       }
-    };
-
-    if (!isSupabaseConfigured) {
-      return getCleanLocalCache();
-    }
-
-    try {
-      const { data, error } = await supabase
-        .from('fixed_assets')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: true });
-      
-      if (error) {
-        logSupabaseError('fetchFixedAssets', error);
-        return getCleanLocalCache();
-      }
-
-      if (!data || data.length === 0) {
-        // Return only real assets saved in local cache, no dummy seeds
-        return getCleanLocalCache();
-      }
-
-      const mapped = data.map((item: any) => ({
-        id: item.id,
-        name: item.name,
-        property_id: item.property_id ? Number(item.property_id) : undefined,
-        location: item.location || '',
-        category: item.category || 'Elektronik & AC',
-        cost: Number(item.cost || 0),
-        lifeYears: Number(item.life_years || 1),
-        residual: Number(item.residual || 0),
-        deprRate: Number(item.depr_rate || 0),
-        accumDepr: Number(item.accum_depr || 0),
-        maintenance_interval_months: item.maintenance_interval_months ? Number(item.maintenance_interval_months) : 3,
-        last_maintenance_date: item.last_maintenance_date || '',
-        next_maintenance_date: item.next_maintenance_date || '',
-        maintenance_notes: item.maintenance_notes || '',
-        last_repair_cost: item.last_repair_cost ? Number(item.last_repair_cost) : undefined,
-        condition: item.condition || 'Baik',
-        created_at: item.created_at
-      }));
-
-      // Cache locally
-      try {
-        localStorage.setItem('kamar_fixed_assets', JSON.stringify(mapped));
-      } catch { /* ignore */ }
-
-      return mapped;
-    } catch (err) {
-      logSupabaseError('fetchFixedAssets', err, true);
-      return getCleanLocalCache();
-    }
+    });
   },
 
   async saveFixedAsset(asset: Partial<FixedAsset>): Promise<FixedAsset> {
@@ -4281,21 +4395,8 @@ export const database = {
       created_at: new Date().toISOString()
     };
 
-    // Update local cache first
-    try {
-      const raw = localStorage.getItem('kamar_fixed_assets');
-      let list: FixedAsset[] = raw ? JSON.parse(raw) : [];
-      if (id) {
-        list = list.map(item => item.id === id ? { ...item, ...finalRecord } : item);
-      } else {
-        list.push(finalRecord);
-      }
-      localStorage.setItem('kamar_fixed_assets', JSON.stringify(list));
-    } catch { /* ignore */ }
-
     if (!isSupabaseConfigured) {
-      notifyRealtimeMutation('fixed_assets', id ? 'UPDATE' : 'INSERT', finalRecord);
-      return finalRecord;
+      throw new Error('Supabase not configured');
     }
 
     try {
@@ -4353,6 +4454,7 @@ export const database = {
 
       if (error) {
         logSupabaseError('saveFixedAsset', error);
+        throw error;
       } else if (data) {
         finalRecord.id = data.id;
         finalRecord.created_at = data.created_at;
@@ -4362,66 +4464,58 @@ export const database = {
       return finalRecord;
     } catch (err) {
       logSupabaseError('saveFixedAsset', err, true);
-      notifyRealtimeMutation('fixed_assets', id ? 'UPDATE' : 'INSERT', finalRecord);
-      return finalRecord;
+      throw err;
     }
   },
 
   async deleteFixedAsset(id: number): Promise<boolean> {
-    try {
-      const raw = localStorage.getItem('kamar_fixed_assets');
-      if (raw) {
-        const list: FixedAsset[] = JSON.parse(raw);
-        const filtered = list.filter(item => item.id !== id);
-        localStorage.setItem('kamar_fixed_assets', JSON.stringify(filtered));
-      }
-    } catch { /* ignore */ }
-
     if (!isSupabaseConfigured) {
-      notifyRealtimeMutation('fixed_assets', 'DELETE', { id });
-      return true;
+      throw new Error('Supabase not configured');
     }
 
     try {
       const { error } = await supabase.from('fixed_assets').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteFixedAsset', error);
+        throw error;
       }
       notifyRealtimeMutation('fixed_assets', 'DELETE', { id });
       return true;
     } catch (err) {
       logSupabaseError('deleteFixedAsset', err, true);
-      notifyRealtimeMutation('fixed_assets', 'DELETE', { id });
-      return true;
+      throw err;
     }
   },
 
   // --- BUDGETS ---
   async fetchBudgets(options?: { limit?: number; offset?: number }): Promise<Budget[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('budgets')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: true });
-      if (error) {
-        logSupabaseError('fetchBudgets', error);
+    const limit = resolveLimit('budgets', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<Budget[]>(`budgets:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('budgets')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: true });
+        if (error) {
+          logSupabaseError('fetchBudgets', error);
+          return [];
+        }
+        queryBudget.recordRequest('budgets', (data || []).length);
+        return (data || []).map((item: any) => ({
+          id: item.id,
+          category: item.category,
+          limit: Number(item.limit_amount || 0),
+          spent: Number(item.spent || 0),
+          created_at: item.created_at
+        }));
+      } catch (err) {
+        logSupabaseError('fetchBudgets', err, true);
         return [];
       }
-      return (data || []).map((item: any) => ({
-        id: item.id,
-        category: item.category,
-        limit: Number(item.limit_amount || 0),
-        spent: Number(item.spent || 0),
-        created_at: item.created_at
-      }));
-    } catch (err) {
-      logSupabaseError('fetchBudgets', err, true);
-      return [];
-    }
+    });
   },
 
   async saveBudget(budget: Partial<Budget>): Promise<Budget> {
@@ -4456,23 +4550,26 @@ export const database = {
   // --- VENDORS ---
   async fetchVendors(options?: { limit?: number; offset?: number }): Promise<Vendor[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('vendors')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: true });
-      if (error) {
-        logSupabaseError('fetchVendors', error);
+    const limit = resolveLimit('vendors', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<Vendor[]>(`vendors:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('vendors')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: true });
+        if (error) {
+          logSupabaseError('fetchVendors', error);
+          return [];
+        }
+        queryBudget.recordRequest('vendors', (data || []).length);
+        return data as Vendor[];
+      } catch (err) {
+        logSupabaseError('fetchVendors', err, true);
         return [];
       }
-      return data as Vendor[];
-    } catch (err) {
-      logSupabaseError('fetchVendors', err, true);
-      return [];
-    }
+    });
   },
 
   async saveVendor(vendor: Partial<Vendor>): Promise<Vendor> {
@@ -4501,23 +4598,26 @@ export const database = {
   // --- PURCHASE ORDERS ---
   async fetchPurchaseOrders(options?: { limit?: number; offset?: number }): Promise<PurchaseOrder[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('purchase_orders')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: false });
-      if (error) {
-        logSupabaseError('fetchPurchaseOrders', error);
+    const limit = resolveLimit('purchase_orders', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<PurchaseOrder[]>(`purchase_orders:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('purchase_orders')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: false });
+        if (error) {
+          logSupabaseError('fetchPurchaseOrders', error);
+          return [];
+        }
+        queryBudget.recordRequest('purchase_orders', (data || []).length);
+        return data as PurchaseOrder[];
+      } catch (err) {
+        logSupabaseError('fetchPurchaseOrders', err, true);
         return [];
       }
-      return data as PurchaseOrder[];
-    } catch (err) {
-      logSupabaseError('fetchPurchaseOrders', err, true);
-      return [];
-    }
+    });
   },
 
   async savePurchaseOrder(po: Partial<PurchaseOrder>): Promise<PurchaseOrder> {
@@ -4548,31 +4648,34 @@ export const database = {
   // --- INVENTORY ITEMS ---
   async fetchInventoryItems(options?: { limit?: number; offset?: number }): Promise<InventoryItem[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('inventory_items')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: true });
-      if (error) {
-        logSupabaseError('fetchInventoryItems', error);
+    const limit = resolveLimit('inventory_items', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<InventoryItem[]>(`inventory_items:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('inventory_items')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: true });
+        if (error) {
+          logSupabaseError('fetchInventoryItems', error);
+          return [];
+        }
+        queryBudget.recordRequest('inventory_items', (data || []).length);
+        return (data || []).map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          stock: Number(item.stock),
+          unit: item.unit,
+          minStock: Number(item.min_stock),
+          category: item.category,
+          created_at: item.created_at
+        }));
+      } catch (err) {
+        logSupabaseError('fetchInventoryItems', err, true);
         return [];
       }
-      return (data || []).map((item: any) => ({
-        id: item.id,
-        name: item.name,
-        stock: Number(item.stock),
-        unit: item.unit,
-        minStock: Number(item.min_stock),
-        category: item.category,
-        created_at: item.created_at
-      }));
-    } catch (err) {
-      logSupabaseError('fetchInventoryItems', err, true);
-      return [];
-    }
+    });
   },
 
   async saveInventoryItem(item: Partial<InventoryItem>): Promise<InventoryItem> {
@@ -4611,32 +4714,35 @@ export const database = {
   // --- BANK STATEMENT ITEMS ---
   async fetchBankStatementItems(options?: { limit?: number; offset?: number }): Promise<BankStatementItem[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('bank_statement_items')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: true });
-      if (error) {
-        logSupabaseError('fetchBankStatementItems', error);
+    const limit = resolveLimit('bank_statement_items', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<BankStatementItem[]>(`bank_statement_items:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('bank_statement_items')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: true });
+        if (error) {
+          logSupabaseError('fetchBankStatementItems', error);
+          return [];
+        }
+        queryBudget.recordRequest('bank_statement_items', (data || []).length);
+        return (data || []).map((item: any) => ({
+          id: item.id,
+          date: item.date,
+          desc: item.desc,
+          amount: Number(item.amount),
+          type: item.type,
+          matched: item.matched,
+          matchedRef: item.matched_ref,
+          created_at: item.created_at
+        }));
+      } catch (err) {
+        logSupabaseError('fetchBankStatementItems', err, true);
         return [];
       }
-      return (data || []).map((item: any) => ({
-        id: item.id,
-        date: item.date,
-        desc: item.desc,
-        amount: Number(item.amount),
-        type: item.type,
-        matched: item.matched,
-        matchedRef: item.matched_ref,
-        created_at: item.created_at
-      }));
-    } catch (err) {
-      logSupabaseError('fetchBankStatementItems', err, true);
-      return [];
-    }
+    });
   },
 
   async saveBankStatementItem(stmt: Partial<BankStatementItem>): Promise<BankStatementItem> {
@@ -4675,77 +4781,84 @@ export const database = {
   },
 
   // --- MIDTRANS CLEARING & RECONCILIATION ---
-  async fetchMidtransClearingTransactions(options?: { limit?: number; offset?: number }): Promise<MidtransClearingTransaction[]> {
+  async fetchMidtransClearingTransactions(options?: { limit?: number; offset?: number; columns?: string | readonly string[] }): Promise<MidtransClearingTransaction[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('midtrans_clearing_transactions')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: false });
-      if (error) {
-        logSupabaseError('fetchMidtransClearingTransactions', error);
+    const limit = resolveLimit('midtrans_clearing_transactions', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    const { selectExpr, columnsParam } = sanitizeColumns('midtrans_clearing_transactions', options?.columns, tableSchemas);
+    return dedupeInflight<MidtransClearingTransaction[]>(`midtrans_clearing_transactions:${limit}:${offset}:${columnsParam || '*'}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('midtrans_clearing_transactions')
+          .select(selectExpr)
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: false });
+        if (error) {
+          logSupabaseError('fetchMidtransClearingTransactions', error);
+          return [];
+        }
+        queryBudget.recordRequest('midtrans_clearing_transactions', (data || []).length);
+        return (data || []).map((item: any) => ({
+          id: item.id,
+          payment_id: item.payment_id,
+          booking_id: item.booking_id,
+          survey_id: item.survey_id,
+          contract_extension_id: item.contract_extension_id,
+          midtrans_order_id: item.midtrans_order_id,
+          midtrans_transaction_id: item.midtrans_transaction_id,
+          gross_amount: Number(item.gross_amount || 0),
+          fee_amount: Number(item.fee_amount || 0),
+          net_amount: Number(item.net_amount || 0),
+          reconciled_amount: Number(item.reconciled_amount || 0),
+          outstanding_amount: Number(item.outstanding_amount || 0),
+          clearing_status: item.clearing_status,
+          property_id: item.property_id,
+          tenant_name: item.tenant_name,
+          created_at: item.created_at,
+          settled_at: item.settled_at
+        }));
+      } catch (err) {
+        logSupabaseError('fetchMidtransClearingTransactions', err, true);
         return [];
       }
-      return (data || []).map((item: any) => ({
-        id: item.id,
-        payment_id: item.payment_id,
-        booking_id: item.booking_id,
-        survey_id: item.survey_id,
-        contract_extension_id: item.contract_extension_id,
-        midtrans_order_id: item.midtrans_order_id,
-        midtrans_transaction_id: item.midtrans_transaction_id,
-        gross_amount: Number(item.gross_amount || 0),
-        fee_amount: Number(item.fee_amount || 0),
-        net_amount: Number(item.net_amount || 0),
-        reconciled_amount: Number(item.reconciled_amount || 0),
-        outstanding_amount: Number(item.outstanding_amount || 0),
-        clearing_status: item.clearing_status,
-        property_id: item.property_id,
-        tenant_name: item.tenant_name,
-        created_at: item.created_at,
-        settled_at: item.settled_at
-      }));
-    } catch (err) {
-      logSupabaseError('fetchMidtransClearingTransactions', err, true);
-      return [];
-    }
+    });
   },
 
   async fetchBankReconciliationMatches(options?: { limit?: number; offset?: number }): Promise<BankReconciliationMatch[]> {
     if (!isSupabaseConfigured) return [];
-    const limit = options?.limit ?? 1000;
-    const offset = options?.offset ?? 0;
-    try {
-      const { data, error } = await supabase
-        .from('bank_reconciliation_matches')
-        .select('*')
-        .range(offset, offset + limit - 1)
-        .order('id', { ascending: false });
-      if (error) {
-        logSupabaseError('fetchBankReconciliationMatches', error);
+    const limit = resolveLimit('bank_reconciliation_matches', options?.limit);
+    const offset = resolveOffset(options?.offset);
+    return dedupeInflight<BankReconciliationMatch[]>(`bank_reconciliation_matches:${limit}:${offset}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('bank_reconciliation_matches')
+          .select('*')
+          .range(offset, offset + limit - 1)
+          .order('id', { ascending: false });
+        if (error) {
+          logSupabaseError('fetchBankReconciliationMatches', error);
+          return [];
+        }
+        queryBudget.recordRequest('bank_reconciliation_matches', (data || []).length);
+        return (data || []).map((item: any) => ({
+          id: item.id,
+          bank_statement_id: item.bank_statement_id,
+          clearing_transaction_id: item.clearing_transaction_id,
+          matched_amount: Number(item.matched_amount || 0),
+          fee_amount: Number(item.fee_amount || 0),
+          difference_amount: Number(item.difference_amount || 0),
+          adjustment_category: item.adjustment_category,
+          status: item.status,
+          notes: item.notes,
+          created_by: item.created_by,
+          created_at: item.created_at,
+          property_id: item.property_id
+        }));
+      } catch (err) {
+        logSupabaseError('fetchBankReconciliationMatches', err, true);
         return [];
       }
-      return (data || []).map((item: any) => ({
-        id: item.id,
-        bank_statement_id: item.bank_statement_id,
-        clearing_transaction_id: item.clearing_transaction_id,
-        matched_amount: Number(item.matched_amount || 0),
-        fee_amount: Number(item.fee_amount || 0),
-        difference_amount: Number(item.difference_amount || 0),
-        adjustment_category: item.adjustment_category,
-        status: item.status,
-        notes: item.notes,
-        created_by: item.created_by,
-        created_at: item.created_at,
-        property_id: item.property_id
-      }));
-    } catch (err) {
-      logSupabaseError('fetchBankReconciliationMatches', err, true);
-      return [];
-    }
+    });
   },
 
   async resetPlayground() {

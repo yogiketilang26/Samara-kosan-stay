@@ -12,6 +12,13 @@ export interface MidtransTransaction {
     email: string;
     phone: string;
   };
+  room_id?: number;
+  property_id?: number;
+  booking_type?: string;
+  duration_months?: number;
+  duration_days?: number;
+  coupon_code?: string | null;
+  is_dp?: boolean;
 }
 
 export const getMidtransClientKey = (): string => {
@@ -63,7 +70,7 @@ export const loadMidtransSnapScript = (forceSandbox: boolean = false): Promise<b
 export interface ChargeResponse {
   token: string;
   redirect_url: string;
-  mode: 'production' | 'sandbox' | 'simulation';
+  mode: 'production' | 'sandbox';
   error?: string;
 }
 
@@ -79,6 +86,13 @@ export const requestSnapTokenFromServer = async (
       body: JSON.stringify({
         order_id: transaction.orderId,
         gross_amount: transaction.grossAmount,
+        room_id: transaction.room_id,
+        property_id: transaction.property_id,
+        booking_type: transaction.booking_type,
+        duration_months: transaction.duration_months,
+        duration_days: transaction.duration_days,
+        coupon_code: transaction.coupon_code,
+        is_dp: transaction.is_dp,
         customer_details: {
           first_name: transaction.customerDetails.name,
           email: transaction.customerDetails.email,

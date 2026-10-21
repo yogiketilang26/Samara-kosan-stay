@@ -41,8 +41,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isAna
     rawRole === 'anak_owner' || 
     rawRole === 'anak owner' ||
     userAccess.includes('anak owner') ||
-    userEmail.includes('anakowner') ||
-    userEmail === 'sabita@samarastay.co' ||
     simulatedRole === 'anak_owner' ||
     (typeof window !== 'undefined' && (
       localStorage.getItem('samara_simulated_role') === 'anak_owner' ||

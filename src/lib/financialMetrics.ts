@@ -51,26 +51,66 @@ export function calculateOccupancy(rooms: any[] = []): OccupancyResult {
 /**
  * Menghitung total arus kas masuk (pemasukan riil yang telah settled)
  */
+function isPostedTx(t: any): boolean {
+  const s = String(t?.status || 'posted').toLowerCase();
+  return !['void', 'deleted', 'cancelled', 'rejected', 'failed'].includes(s);
+}
+
+function isRealRevenueTx(t: any): boolean {
+  if (!isPostedTx(t)) return false;
+  const txType = String(t?.type || '').toLowerCase();
+  if (txType !== 'income' && txType !== 'revenue') return false;
+  const refType = String(t?.reference_type || '').toLowerCase();
+  if (refType === 'bank_reconciliation' || refType === 'bank_unreconcile' || refType === 'survey_refund' || refType === 'bank_unreconcile_fee') {
+    return false;
+  }
+  const debitAcc = Number(t?.debit_account_id || 0);
+  const creditAcc = Number(t?.credit_account_id || 0);
+  // Exclude bank settlement clearing reclassification (DR 1010 / CR 1200) & DP Survey liability (CR 1300)
+  if (debitAcc === 1010 && creditAcc === 1200) return false;
+  if (creditAcc === 1300) return false;
+  if (debitAcc === 1200 && creditAcc === 5030) return false;
+  return true;
+}
+
+function isRealExpenseTx(t: any): boolean {
+  if (!isPostedTx(t)) return false;
+  const txType = String(t?.type || '').toLowerCase();
+  if (txType !== 'expense') return false;
+  const refType = String(t?.reference_type || '').toLowerCase();
+  if (refType === 'bank_reconciliation' || refType === 'bank_unreconcile' || refType === 'survey_refund') {
+    return false;
+  }
+  const debitAcc = Number(t?.debit_account_id || 0);
+  const creditAcc = Number(t?.credit_account_id || 0);
+  // Exclude DP Survey liability refund (DR 1300 / CR 1010) and unmatch reversal (DR 1200 / CR 1010)
+  if (debitAcc === 1300) return false;
+  if (debitAcc === 1200 && creditAcc === 1010) return false;
+  return true;
+}
+
 export function calculateTotalInflow(
   transactions: any[] = [],
   payments: any[] = []
 ): number {
-  // Jika ada data di financial_transactions dengan type 'income', prioritaskan itu
-  const incomeTx = transactions.filter(t => t.type === 'income');
+  const incomeTx = transactions.filter(isRealRevenueTx);
   if (incomeTx.length > 0) {
     return incomeTx.reduce((sum, t) => sum + Number(t.amount || 0), 0);
   }
 
-  // Fallback ke tabel payments dengan status 'paid'
-  const paidPayments = payments.filter(p => p.status === 'paid');
-  return paidPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  // Fallback ke tabel payments dengan status 'paid' hanya bila belum ada baris financial_transactions sama sekali
+  if (transactions.length === 0) {
+    const paidPayments = payments.filter(p => p.status === 'paid');
+    return paidPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  }
+  return 0;
 }
 
 /**
  * Menghitung total beban pengeluaran riil
  */
 export function calculateTotalExpenses(transactions: any[] = []): number {
-  const expenseTx = transactions.filter(t => t.type === 'expense');
+  const expenseTx = transactions.filter(isRealExpenseTx);
   return expenseTx.reduce((sum, t) => sum + Number(t.amount || 0), 0);
 }
 
@@ -81,7 +121,7 @@ export function calculateExpenseBreakdown(transactions: any[] = []): {
   byCategory: Record<string, number>;
   breakdown: Array<{ name: string; amount: number; percentage: number; color: string }>;
 } {
-  const expenseTx = transactions.filter(t => t.type === 'expense');
+  const expenseTx = transactions.filter(isRealExpenseTx);
   const byCategory: Record<string, number> = {};
   let totalExp = 0;
 
@@ -136,36 +176,33 @@ export interface COAExpenseItem {
 }
 
 /**
- * Menghitung rincian pengeluaran COA terperinci dengan klasifikasi akun resmi
+ * Menghitung rincian pengeluaran COA terperinci dengan klasifikasi akun resmi (tanpa fabrikasi angka)
  */
 export function calculateDetailedCOAExpenseBreakdown(
   transactions: any[] = [],
-  totalExpenses: number = 0,
+  _totalExpenses: number = 0,
   totalMdrFee: number = 0,
   maintenanceCost: number = 0
 ): COAExpenseItem[] {
-  const hasRealExpenses = totalExpenses > 0;
+  const realExpenses = transactions.filter(isRealExpenseTx);
 
-  // Filter dynamic categorized entries from transactions
-  const utilTx = transactions.filter(t => t.type === 'expense' && (t.category?.toLowerCase().includes('listrik') || t.category?.toLowerCase().includes('air') || t.category?.toLowerCase().includes('utilitas')));
-  const internetTx = transactions.filter(t => t.type === 'expense' && (t.category?.toLowerCase().includes('wifi') || t.category?.toLowerCase().includes('internet')));
-  const cleanTx = transactions.filter(t => t.type === 'expense' && (t.category?.toLowerCase().includes('bersih') || t.category?.toLowerCase().includes('sampah')));
-  const salaryTx = transactions.filter(t => t.type === 'expense' && (t.category?.toLowerCase().includes('gaji') || t.category?.toLowerCase().includes('staff') || t.category?.toLowerCase().includes('karyawan')));
+  const utilTx = realExpenses.filter(t => t.category?.toLowerCase().includes('listrik') || t.category?.toLowerCase().includes('air') || t.category?.toLowerCase().includes('utilitas'));
+  const internetTx = realExpenses.filter(t => t.category?.toLowerCase().includes('wifi') || t.category?.toLowerCase().includes('internet'));
+  const cleanTx = realExpenses.filter(t => t.category?.toLowerCase().includes('bersih') || t.category?.toLowerCase().includes('sampah'));
+  const salaryTx = realExpenses.filter(t => t.category?.toLowerCase().includes('gaji') || t.category?.toLowerCase().includes('staff') || t.category?.toLowerCase().includes('karyawan'));
 
-  const utilAmount = utilTx.length > 0 ? utilTx.reduce((s, t) => s + Number(t.amount || 0), 0) : (hasRealExpenses ? totalExpenses * 0.4 : 0);
-  const internetAmount = internetTx.length > 0 ? internetTx.reduce((s, t) => s + Number(t.amount || 0), 0) : (hasRealExpenses ? totalExpenses * 0.15 : 0);
-  const cleanAmount = cleanTx.length > 0 ? cleanTx.reduce((s, t) => s + Number(t.amount || 0), 0) : (hasRealExpenses ? totalExpenses * 0.15 : 0);
-  const salaryAmount = salaryTx.length > 0 ? salaryTx.reduce((s, t) => s + Number(t.amount || 0), 0) : (hasRealExpenses ? totalExpenses * 0.3 : 0);
-
-  const isSynthetic = hasRealExpenses && utilTx.length === 0 && salaryTx.length === 0;
+  const utilAmount = utilTx.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const internetAmount = internetTx.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const cleanAmount = cleanTx.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const salaryAmount = salaryTx.reduce((s, t) => s + Number(t.amount || 0), 0);
 
   return [
-    { code: '5000', name: 'Beban Listrik, Air & Utilitas Gedung', amount: utilAmount, isEstimated: isSynthetic },
-    { code: '5010', name: 'Beban Internet & WiFi High-Speed', amount: internetAmount, isEstimated: isSynthetic },
-    { code: '5020', name: 'Beban Kebersihan & Sanitasi Lingkungan', amount: cleanAmount, isEstimated: isSynthetic },
+    { code: '5000', name: 'Beban Listrik, Air & Utilitas Gedung', amount: utilAmount, isEstimated: false },
+    { code: '5010', name: 'Beban Internet & WiFi High-Speed', amount: internetAmount, isEstimated: false },
+    { code: '5020', name: 'Beban Kebersihan & Sanitasi Lingkungan', amount: cleanAmount, isEstimated: false },
     { code: '5030', name: 'Biaya Layanan Midtrans Gateway (MDR)', amount: totalMdrFee, isEstimated: false },
     { code: '5100', name: 'Beban Pemeliharaan & Perbaikan Gedung', amount: maintenanceCost, isEstimated: false },
-    { code: '5200', name: 'Beban Gaji Karyawan & Penjaga Kos', amount: salaryAmount, isEstimated: isSynthetic },
+    { code: '5200', name: 'Beban Gaji Karyawan & Penjaga Kos', amount: salaryAmount, isEstimated: false },
   ];
 }
 
@@ -186,7 +223,7 @@ export function calculateGrossPipeline(bookings: any[] = []): number {
 }
 
 /**
- * Ringkasan Finansial Eksekutif Lengkap
+ * Ringkasan Finansial Eksekutif Lengkap (tanpa fabrikasi beban sintetis 35%)
  */
 export function calculateExecutiveFinancialSummary(
   rooms: any[] = [],
@@ -204,22 +241,9 @@ export function calculateExecutiveFinancialSummary(
 } {
   const occupancy = calculateOccupancy(rooms);
   const inflow = calculateTotalInflow(transactions, payments);
-  let expenses = calculateTotalExpenses(transactions);
-  let { breakdown } = calculateExpenseBreakdown(transactions);
-  let isExpensesEstimated = false;
-
-  // Jika tidak ada data pengeluaran riil di database sama sekali,
-  // berikan proyeksi estimasi 35% dari inflow dengan flag tegas
-  if (expenses === 0 && inflow > 0) {
-    isExpensesEstimated = true;
-    expenses = Math.round(inflow * 0.35);
-    breakdown = [
-      { name: 'Utilitas & Listrik (Estimasi)', amount: Math.round(expenses * 0.40), percentage: 40, color: '#6366f1' },
-      { name: 'Pemeliharaan Gedung (Estimasi)', amount: Math.round(expenses * 0.25), percentage: 25, color: '#ef4444' },
-      { name: 'Operasional & Kebersihan (Estimasi)', amount: Math.round(expenses * 0.20), percentage: 20, color: '#10b981' },
-      { name: 'Layanan Gateway & Admin (Estimasi)', amount: Math.round(expenses * 0.15), percentage: 15, color: '#f59e0b' }
-    ];
-  }
+  const expenses = calculateTotalExpenses(transactions);
+  const { breakdown } = calculateExpenseBreakdown(transactions);
+  const isExpensesEstimated = false;
 
   const noi = calculateNOI(inflow, expenses);
   const pipeline = calculateGrossPipeline(bookings);

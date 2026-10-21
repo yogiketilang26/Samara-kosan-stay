@@ -1,10 +1,20 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as LucideIcons from 'lucide-react';
 import { database, getIsSupabaseConfigured, supabase, safeSupabaseUpsert, DEFAULT_OWNER_SIGNATURE, getAuthHeaders } from '../lib/supabase';
+import {
+  pollWithBackoff,
+  LIST_COLUMNS_BOOKINGS,
+  LIST_COLUMNS_TENANTS,
+  LIST_COLUMNS_FINANCIAL_TRANSACTIONS,
+  LIST_COLUMNS_PAYMENTS,
+  LIST_COLUMNS_CONTRACT_EXTENSIONS,
+  LIST_COLUMNS_MIDTRANS_CLEARING
+} from '../lib/queryBudget';
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { observability, useRenderCounter } from '../lib/observability';
-import { Property, Room, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, MidtransClearingTransaction, BankReconciliationMatch, Maintenance } from '../types';
+import { Property, Room, RoomStatus, PaymentStatus, UserRole as SharedUserRole, Booking, Survey, Coupon, FinancialTransaction, ActivityLog, Tenant, ContractExtension, UserSystem, AccountCOA, JournalEntry, PaymentInvoice, SystemSettings, PettyCashRequest, FixedAsset, Budget, Vendor, PurchaseOrder, InventoryItem, BankStatementItem, MidtransClearingTransaction, BankReconciliationMatch, Maintenance } from '../types';
+import { todayJakarta } from '../lib/dateUtils';
 import { loadMidtransSnapScript, requestSnapTokenFromServer } from '../lib/midtrans';
 import Sidebar from '../components/layout/Sidebar';
 import { useAuth } from '../hooks/useAuth';
@@ -390,7 +400,7 @@ export default function Admin({}: AdminProps) {
     () => database.fetchRooms());
   const { data: bookingsData, loading: bookingsLoading, refetch: refetchBookings } = useRealtimeTable<Booking>(
     'bookings',
-    () => database.fetchBookings());
+    () => database.fetchBookings({ columns: LIST_COLUMNS_BOOKINGS }));
   const { data: surveysData, loading: surveysLoading, refetch: refetchSurveys } = useRealtimeTable<Survey>(
     'surveys',
     () => database.fetchSurveys());
@@ -399,7 +409,7 @@ export default function Admin({}: AdminProps) {
     () => database.fetchCoupons());
   const { data: transactionsData, loading: transactionsLoading, refetch: refetchTransactions } = useRealtimeTable<FinancialTransaction>(
     'financial_transactions',
-    () => database.fetchFinancialTransactions());
+    () => database.fetchFinancialTransactions({ columns: LIST_COLUMNS_FINANCIAL_TRANSACTIONS }));
   const { data: activityLogsData, loading: activityLogsLoading, refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>(
     'activity_logs',
     () => database.fetchActivityLogs());
@@ -408,7 +418,7 @@ export default function Admin({}: AdminProps) {
     () => database.fetchUsers());
   const { data: tenantsData, loading: tenantsLoading, refetch: refetchTenants } = useRealtimeTable<Tenant>(
     'tenants',
-    () => database.fetchTenants());
+    () => database.fetchTenants({ columns: LIST_COLUMNS_TENANTS }));
   const { data: accountsData, loading: accountsLoading, refetch: refetchAccounts } = useRealtimeTable<AccountCOA>(
     'accounts',
     () => database.fetchAccounts());
@@ -417,7 +427,7 @@ export default function Admin({}: AdminProps) {
     () => database.fetchJournalEntries());
   const { data: paymentsData, loading: paymentsLoading, refetch: refetchPayments } = useRealtimeTable<PaymentInvoice>(
     'payments',
-    () => database.fetchPayments());
+    () => database.fetchPayments({ columns: LIST_COLUMNS_PAYMENTS }));
   const { data: settingsData, loading: settingsLoading, refetch: refetchSettings } = useRealtimeTable<SystemSettings>(
     'settings',
     () => database.fetchSettings().then(res => [res]));
@@ -426,7 +436,7 @@ export default function Admin({}: AdminProps) {
     () => database.fetchMasterFacilities());
   const { data: contractExtensionsData, refetch: refetchContractExtensions } = useRealtimeTable<ContractExtension>(
     'contract_extensions',
-    () => database.fetchContractExtensions());
+    () => database.fetchContractExtensions({ columns: LIST_COLUMNS_CONTRACT_EXTENSIONS }));
 
   const hooksLoading = propertiesLoading || roomsLoading || bookingsLoading || surveysLoading || couponsLoading ||
     transactionsLoading || activityLogsLoading || usersLoading || tenantsLoading || accountsLoading ||
@@ -435,8 +445,7 @@ export default function Admin({}: AdminProps) {
   const { user } = useAuth();
   const rawRole = (user?.raw_role || user?.role || '').trim().toLowerCase();
   const userEmail = (user?.email || '').toLowerCase();
-  const userAccess = ((user as any)?.access || '').toLowerCase();
-  const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin' || userEmail === 'yogiketilang33@gmail.com' || userEmail.includes('superadmin')));
+  const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin'));
 
   useEffect(() => {
     if (userEmail) {
@@ -461,16 +470,13 @@ export default function Admin({}: AdminProps) {
     return () => window.removeEventListener('samara-role-simulate', handler);
   }, []);
 
-  const isAnakOwner = 
-    rawRole === 'anak_owner' || 
+  const isAnakOwner =
+    rawRole === 'anak_owner' ||
     rawRole === 'anak owner' ||
-    userAccess.includes('anak owner') ||
-    userEmail.includes('anakowner') ||
-    userEmail === 'sabita@samarastay.co' ||
-    simulatedRole === 'anak_owner';
+    (isSuper && simulatedRole === 'anak_owner');
 
   const currentActorRole: UserRole = (
-    simulatedRole === 'anak_owner' || isAnakOwner ? 'anak_owner' :
+    isAnakOwner ? 'anak_owner' :
     isSuper ? 'super' :
     rawRole === 'owner' ? 'owner' :
     rawRole === 'admin' ? 'admin' :
@@ -525,6 +531,20 @@ export default function Admin({}: AdminProps) {
   const [selectedExtensionProof, setSelectedExtensionProof] = useState<ContractExtension | null>(null);
   const [selectedTenantForHistory, setSelectedTenantForHistory] = useState<Tenant | null>(null);
   const [showTenantHistoryModal, setShowTenantHistoryModal] = useState<boolean>(false);
+  const extensionPollCtrlRef = React.useRef<ReturnType<typeof pollWithBackoff> | null>(null);
+
+  useEffect(() => {
+    if (!showExtensionModal && extensionPollCtrlRef.current) {
+      extensionPollCtrlRef.current.stop();
+      extensionPollCtrlRef.current = null;
+    }
+    return () => {
+      if (extensionPollCtrlRef.current) {
+        extensionPollCtrlRef.current.stop();
+        extensionPollCtrlRef.current = null;
+      }
+    };
+  }, [showExtensionModal]);
 
   useEffect(() => {
     if (contractExtensionsData) setContractExtensionsList(contractExtensionsData);
@@ -690,7 +710,7 @@ export default function Admin({}: AdminProps) {
       ];
     });
     
-    exportToCSV(headers, rows, `samara_general_ledger_${new Date().toISOString().split('T')[0]}.csv`);
+    exportToCSV(headers, rows, `samara_general_ledger_${todayJakarta()}.csv`);
     database.logActivity("System Finance", "EXPORT_REPORT", "Ekspor General Ledger ke Excel CSV");
   };
 
@@ -702,7 +722,7 @@ export default function Admin({}: AdminProps) {
       acc.type.toUpperCase(),
       acc.balance
     ]);
-    exportToCSV(headers, rows, `samara_chart_of_accounts_${new Date().toISOString().split('T')[0]}.csv`);
+    exportToCSV(headers, rows, `samara_chart_of_accounts_${todayJakarta()}.csv`);
     database.logActivity("System Finance", "EXPORT_REPORT", "Ekspor Chart of Accounts ke Excel CSV");
   };
 
@@ -710,7 +730,7 @@ export default function Admin({}: AdminProps) {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ accounts, journalEntries, transactions }, null, 2));
     const link = document.createElement("a");
     link.setAttribute("href", dataStr);
-    link.setAttribute("download", `samara_financial_ledger_${new Date().toISOString().split('T')[0]}.json`);
+    link.setAttribute("download", `samara_financial_ledger_${todayJakarta()}.json`);
     link.click();
     database.logActivity("System Finance", "EXPORT_REPORT", "Ekspor General Ledger ke JSON");
   };
@@ -802,7 +822,7 @@ export default function Admin({}: AdminProps) {
     () => database.fetchBankStatementItems());
   const { data: clearingTransactionsData, refetch: refetchClearingTransactions } = useRealtimeTable<MidtransClearingTransaction>(
     'midtrans_clearing_transactions',
-    () => database.fetchMidtransClearingTransactions());
+    () => database.fetchMidtransClearingTransactions({ columns: LIST_COLUMNS_MIDTRANS_CLEARING }));
   const { data: reconciliationMatchesData, refetch: refetchReconciliationMatches } = useRealtimeTable<BankReconciliationMatch>(
     'bank_reconciliation_matches',
     () => database.fetchBankReconciliationMatches());
@@ -972,7 +992,7 @@ export default function Admin({}: AdminProps) {
         amount: Number(newPettyCashForm.amount),
         purpose: newPettyCashForm.purpose.trim(),
         status: 'pending',
-        date: newPettyCashForm.date || new Date().toISOString().split('T')[0]
+        date: newPettyCashForm.date || todayJakarta()
       });
 
       await database.logActivity("System Finance", "CREATE_PETTY_CASH_REQUEST", `Pengajuan Kas Kecil Baru oleh ${newPettyCashForm.applicant} Rp ${newPettyCashForm.amount}`);
@@ -983,7 +1003,7 @@ export default function Admin({}: AdminProps) {
         applicant: '',
         amount: '',
         purpose: '',
-        date: new Date().toISOString().split('T')[0]
+        date: todayJakarta()
       });
       setShowNewPettyCashModal(false);
       alert("[OK] Pengajuan Kas Kecil baru berhasil dibuat dan masuk dalam status 'pending' menunggu persetujuan.");
@@ -1074,7 +1094,7 @@ export default function Admin({}: AdminProps) {
   // Pelunasan & Cancellation of Survey states
   const [showPelunasanModal, setShowPelunasanModal] = useState(false);
   const [selectedSurveyForPelunasan, setSelectedSurveyForPelunasan] = useState<Survey | null>(null);
-  const [pelunasanCheckInDate, setPelunasanCheckInDate] = useState(new Date().toISOString().split('T')[0]);
+  const [pelunasanCheckInDate, setPelunasanCheckInDate] = useState(todayJakarta());
   const [pelunasanDurationMonths, setPelunasanDurationMonths] = useState(1);
   const [pelunasanIsSaving, setPelunasanIsSaving] = useState(false);
 
@@ -1301,8 +1321,10 @@ export default function Admin({}: AdminProps) {
     let interval: any;
     if (activeTab === 'midtrans_logs' && autoRefreshLogs && !isAnakOwner) {
       interval = setInterval(() => {
-        fetchMidtransLogs();
-      }, 5000);
+        if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+          fetchMidtransLogs();
+        }
+      }, 10000);
     }
     return () => clearInterval(interval);
   }, [activeTab, autoRefreshLogs, isAnakOwner]);
@@ -1541,40 +1563,65 @@ export default function Admin({}: AdminProps) {
             onSuccess: async (result: any) => {
               console.log('[Midtrans Snap Extension Success]', result);
               showToast('Pembayaran diterima Midtrans. Memverifikasi perpanjangan...');
-              setShowExtensionModal(false);
 
-              // Proactively trigger status check and auto-settle
-              try {
-                await fetch(`/api/midtrans/status/${orderId}`);
-              } catch (checkErr) {
-                console.warn('Auto-settle trigger warning:', checkErr);
+              if (extensionPollCtrlRef.current) {
+                extensionPollCtrlRef.current.stop();
               }
 
-              let attempts = 0;
-              const maxAttempts = 10; // ~20 detik total
-              const pollInterval = setInterval(async () => {
-                attempts++;
-                const exts = await database.fetchContractExtensions();
-                const updatedExt = exts.find(e => (e as any).midtrans_order_id === orderId);
+              const maxAttempts = 10;
+              let isSettled = false;
+              const pollCtrl = pollWithBackoff({
+                baseIntervalMs: 2000,
+                maxIntervalMs: 6000,
+                hiddenTabMultiplier: 2,
+                maxAttempts,
+                fn: async () => {
+                  const resp = await fetch(`/api/midtrans/status/${encodeURIComponent(orderId)}`);
+                  if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+                    const err: any = new Error(`Client error ${resp.status}`);
+                    err.status = resp.status;
+                    throw err;
+                  }
+                  if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
+                  }
+                  const statusData = await resp.json();
+                  if (statusData?.settled === true) {
+                    isSettled = true;
+                    return true;
+                  }
+                  return false;
+                },
+                isTerminal: (done) => Boolean(done)
+              });
+              extensionPollCtrlRef.current = pollCtrl;
 
-                if (updatedExt && updatedExt.status === 'paid') {
-                  clearInterval(pollInterval);
-                  startModuleRefresh('tenants');
-                  startModuleRefresh('payments');
-                  startModuleRefresh('transactions');
-                  await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+              await pollCtrl.promise;
+              extensionPollCtrlRef.current = null;
+              setShowExtensionModal(false);
 
-                  const newProof: ContractExtension = updatedExt as ContractExtension;
-                  setSelectedExtensionProof(newProof);
+              if (isSettled) {
+                // G4: Single scoped fetchContractExtensions ONLY after settled === true
+                const exts = await database.fetchContractExtensions({
+                  tenant_id: tenant.id,
+                  limit: 20
+                });
+                const updatedExt = exts.find(e => (e as any).midtrans_order_id === orderId) || exts[0];
+                startModuleRefresh('tenants');
+                startModuleRefresh('payments');
+                startModuleRefresh('transactions');
+                await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+
+                if (updatedExt) {
+                  setSelectedExtensionProof(updatedExt as ContractExtension);
                   setShowExtensionProofModal(true);
-                  showToast('Perpanjangan kontrak berhasil dikonfirmasi!');
-                } else if (attempts >= maxAttempts) {
-                  clearInterval(pollInterval);
-                  showToast('Pembayaran diterima, tapi konfirmasi server memerlukan waktu lebih lama. Cek kembali di daftar Perpanjangan Kontrak dalam beberapa saat.', 'error');
-                  startModuleRefresh('tenants');
-                  await refetchContractExtensions();
                 }
-              }, 2000);
+                showToast('Perpanjangan kontrak berhasil dikonfirmasi!');
+              } else {
+                showToast('Pembayaran diterima, tapi konfirmasi server memerlukan waktu lebih lama. Cek kembali di daftar Perpanjangan Kontrak dalam beberapa saat.', 'error');
+                startModuleRefresh('tenants');
+                await refetchContractExtensions();
+              }
             },
             onPending: async (result: any) => {
               showToast('Transaksi perpanjangan menunggu pembayaran Midtrans.', 'error');
@@ -1873,31 +1920,19 @@ export default function Admin({}: AdminProps) {
   const handleNoShowSurvey = async (s: Survey) => {
     customConfirm(
       'Tandai sebagai No-Show',
-      'Tandai sebagai No-Show? Jaminan komitmen DP Rp 500rb akan dipindahkan langsung sebagai pendapatan hangus korporasi (transparansi PBJT).',
+      'Tandai sebagai No-Show? Jaminan komitmen DP Rp 500rb akan direklasifikasi dari Liabilitas DP Survey (1300) ke Pendapatan DP Survey Hangus (4200).',
       async () => {
         startItemProcessing(s.id);
         try {
-          const updated = { ...s, status: 'no_show' as const };
-          await database.saveSurvey(updated);
-          
-          // Seed an income transaction for lost DP
-          await database.postFinancialTransaction({
-            category: "Penerimaan Sewa",
-            description: `DP Survey Hangus - ${s.tenant_name} (Unit ${s.room_number})`,
-            amount: 500000,
-            type: "income",
-            reference_type: "survey",
-            reference_id: String(s.id),
-            created_by: "Admin",
-            debit_account_id: 1010, // Kas dan Bank Mandiri
-            credit_account_id: 4200 // Pendapatan DP Survey Hangus
+          await database.forfeitOrRefundSurvey(s.id, 'no_show', {
+            notes: `DP Survey Hangus (No-Show) - ${s.tenant_name} (Unit ${s.room_number})`
           });
-          
+
           database.logActivity("System", "SURVEY_NOSHOW", `Survey client ${s.tenant_name} No Show (DP Hangus)`);
-          
+
           startModuleRefresh('surveys');
           startModuleRefresh('transactions');
-          await Promise.all([refetchSurveys(), refetchTransactions()]);
+          await Promise.all([refetchSurveys(), refetchTransactions(), refetchAccounts(), refetchJournalEntries()]);
           showToast('Survey berhasil ditandai No-Show!');
         } catch (err: any) {
           console.error('[Admin] Error marking survey No-Show:', err);
@@ -1920,18 +1955,34 @@ export default function Admin({}: AdminProps) {
         try {
           const updated = { ...s, status: 'survey_confirmed' as const };
           await database.saveSurvey(updated);
+          if (Number(s.dp_amount || 0) > 0) {
+            await database.postFinancialTransaction({
+              category: 'DP Survey',
+              description: `Penerimaan DP Survey Manual Unit ${s.room_number} - ${s.tenant_name}`,
+              amount: Number(s.dp_amount),
+              type: 'dp_booking',
+              reference_type: 'survey_dp',
+              reference_id: String(s.id),
+              created_by: 'Admin',
+              debit_account_id: 1010,
+              credit_account_id: 1300,
+              property_id: s.property_id || null
+            });
+          }
           database.logActivity("System", "SURVEY_PAYMENT_APPROVAL", `Pembayaran DP Survey kamar ${s.room_number} disetujui`);
 
           // Send confirmation email to end user
           if (s.email) {
             const ownerSigUrl = settingsData?.[0]?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
             const userSigUrl = s.signature_url || '';
+            const authHeaders = await getAuthHeaders();
 
             fetch('/api/email/send', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: authHeaders,
               body: JSON.stringify({
                 to: s.email,
+                reservation_number: s.reservation_number,
                 subject: `[Samara Stay] Bukti Pembayaran DP Survey - Unit ${s.room_number}`,
                 html: `
                   <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
@@ -2116,12 +2167,12 @@ export default function Admin({}: AdminProps) {
         duration_months: pelunasanDurationMonths,
         payment_status: 'paid' as const,
         nik: s.nik,
-        created_at: new Date().toISOString().split('T')[0]
+        created_at: todayJakarta()
       };
       const { error: tenantErr } = await safeSupabaseUpsert('tenants', tenantPayload);
       if (tenantErr) throw tenantErr;
 
-      const bookingOrderId = `BOOK-PLN-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const bookingOrderId = `BOOK-PLN-${todayJakarta().slice(2).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
       const bookingPayload = {
         property_id: s.property_id,
         room_id: roomData.id,
@@ -2130,7 +2181,7 @@ export default function Admin({}: AdminProps) {
         phone: s.phone,
         email: s.email,
         nik: s.nik,
-        booking_date: new Date().toISOString().split('T')[0],
+        booking_date: todayJakarta(),
         check_in_date: pelunasanCheckInDate,
         duration_months: pelunasanDurationMonths,
         booking_type: 'monthly' as const,
@@ -2153,7 +2204,7 @@ export default function Admin({}: AdminProps) {
         amount: remainingBalance,
         method: 'Manual Pelunasan (Admin)',
         status: 'paid' as const,
-        payment_date: new Date().toISOString().split('T')[0],
+        payment_date: todayJakarta(),
         midtrans_order_id: bookingOrderId
       };
       const { error: paymentErr } = await safeSupabaseUpsert('payments', paymentPayload);
@@ -2163,21 +2214,47 @@ export default function Admin({}: AdminProps) {
       await database.saveSurvey(updatedSurvey);
 
       if (!isFreeSurvey) {
-        await database.recordFinancialRevenue(pelunasanInvoiceId, 1300, 500000, `Reklasifikasi Kompensasi DP Survey ke Pendapatan Sewa Unit ${s.room_number} - ${s.tenant_name}`);
+        await database.postFinancialTransaction({
+          category: 'Penerimaan Sewa',
+          description: `Reklasifikasi Kompensasi DP Survey ke Pendapatan Sewa Unit ${s.room_number} - ${s.tenant_name}`,
+          amount: 500000,
+          type: 'reclassification',
+          reference_type: 'survey_pelunasan',
+          reference_id: String(s.id),
+          created_by: 'Admin',
+          debit_account_id: 1300,
+          credit_account_id: 4000,
+          property_id: s.property_id || null
+        });
       }
-      await database.recordFinancialRevenue(pelunasanInvoiceId, 1010, remainingBalance, `Pelunasan Sewa Unit ${s.room_number} (${pelunasanDurationMonths} Bulan) - ${s.tenant_name}`);
+      if (remainingBalance > 0) {
+        await database.postFinancialTransaction({
+          category: 'Penerimaan Sewa',
+          description: `Pelunasan Sewa Unit ${s.room_number} (${pelunasanDurationMonths} Bulan) - ${s.tenant_name}`,
+          amount: remainingBalance,
+          type: 'income',
+          reference_type: 'payment',
+          reference_id: String(pelunasanInvoiceId),
+          created_by: 'Admin',
+          debit_account_id: 1010,
+          credit_account_id: 4000,
+          property_id: s.property_id || null
+        });
+      }
 
       database.logActivity("System", "SURVEY_PELUNASAN", `Pelunasan sewa unit ${s.room_number} selesai untuk tenant ${s.tenant_name}`);
 
       if (s.email) {
         const ownerSigUrl = settingsData?.[0]?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
         const userSigUrl = s.signature_url || '';
+        const authHeaders = await getAuthHeaders();
 
         fetch('/api/email/send', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify({
             to: s.email,
+            order_id: bookingOrderId,
             subject: `[Samara Stay] Konfirmasi Pelunasan & Bukti Kontrak Sewa - Unit ${s.room_number}`,
             html: `
               <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
@@ -2308,9 +2385,6 @@ export default function Admin({}: AdminProps) {
 
     setCancelSurveyIsSaving(true);
     try {
-      const updatedSurvey = { ...s, status: 'expired' as const };
-      await database.saveSurvey(updatedSurvey);
-
       const { data: roomData } = await supabase
         .from('rooms')
         .select('*')
@@ -2325,52 +2399,31 @@ export default function Admin({}: AdminProps) {
       const hasDp = Number(s.dp_amount) > 0;
 
       if (hasDp && cancelSurveyActionType === 'forfeit') {
-        try {
-          await database.postFinancialTransaction({
-            category: "Penerimaan Sewa",
-            description: `DP Survey Hangus - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
-            amount: Number(s.dp_amount) || 500000,
-            type: "income",
-            reference_type: "survey",
-            reference_id: String(s.id),
-            created_by: "Admin",
-            debit_account_id: 1300,
-            credit_account_id: 4200,
-            property_id: s.property_id || null
-          });
-        } catch (finErr) {
-          console.warn('[Admin] Warning posting forfeit financial transaction:', finErr);
-        }
+        await database.forfeitOrRefundSurvey(s.id, 'forfeit', {
+          notes: `DP Survey Hangus - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`
+        });
         database.logActivity("System", "SURVEY_CANCEL_FORFEIT", `DP Survey Hangus (Forfeit) untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
       } else if (hasDp && cancelSurveyActionType === 'refund') {
-        try {
-          await database.postFinancialTransaction({
-            category: "Biaya Operasional",
-            description: `Pengembalian (Refund) DP Survey - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`,
-            amount: Number(s.dp_amount) || 500000,
-            type: "expense",
-            reference_type: "survey",
-            reference_id: String(s.id),
-            created_by: "Admin",
-            debit_account_id: 1300,
-            credit_account_id: 1010,
-            property_id: s.property_id || null
-          });
-        } catch (finErr) {
-          console.warn('[Admin] Warning posting refund financial transaction:', finErr);
-        }
+        await database.forfeitOrRefundSurvey(s.id, 'refund', {
+          bank_account_id: 1010,
+          notes: `Pengembalian (Refund) DP Survey - Batal Sewa - ${s.tenant_name} (Unit ${s.room_number})`
+        });
         database.logActivity("System", "SURVEY_CANCEL_REFUND", `DP Survey dikembalikan (Refund) untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
       } else {
+        const updatedSurvey = { ...s, status: 'expired' as const };
+        await database.saveSurvey(updatedSurvey);
         database.logActivity("System", "SURVEY_CANCEL_FREE", `Survey Kunjungan Tanpa DP dibatalkan untuk unit ${s.room_number} - Calon tenant ${s.tenant_name}`);
       }
 
       if (s.email) {
         const isFree = Number(s.dp_amount) === 0;
+        const authHeaders = await getAuthHeaders();
         fetch('/api/email/send', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify({
             to: s.email,
+            reservation_number: s.reservation_number,
             subject: `[Samara Stay] Pemberitahuan Pembatalan Reservasi - Unit ${s.room_number}`,
             html: `
               <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
@@ -2786,7 +2839,7 @@ export default function Admin({}: AdminProps) {
       avatar_color: "bg-teal-600",
       property_id: Number(tenantForm.property_id) || properties[0]?.id || 1,
       room_number: tenantForm.room_number,
-      start_date: tenantForm.start_date || new Date().toISOString().split('T')[0],
+      start_date: tenantForm.start_date || todayJakarta(),
       duration_months: Number(tenantForm.duration_months) || 1,
       payment_status: tenantForm.payment_status,
       status: 'active',
@@ -2826,7 +2879,7 @@ export default function Admin({}: AdminProps) {
         vehicle_plate_number: '',
         property_id: properties[0]?.id || 1,
         room_number: '',
-        start_date: new Date().toISOString().split('T')[0],
+        start_date: todayJakarta(),
         duration_months: 1,
         payment_status: 'paid',
         is_married: false,
@@ -2915,19 +2968,33 @@ export default function Admin({}: AdminProps) {
     );
   };
 
-  // Aggregated pricing math
+  // G9: Server-side dashboard summary RPC integration (falls back to client-side parity calculation)
+  const [serverDashboardSummary, setServerDashboardSummary] = useState<any | null>(null);
+  useEffect(() => {
+    let active = true;
+    database.fetchDashboardSummary({ property_id: 'all' }).then((res) => {
+      if (active && res?.summary) {
+        setServerDashboardSummary(res.summary);
+      }
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [transactions.length, payments.length, bookings.length, rooms.length]);
+
+  // Aggregated pricing math (prefers server RPC summary when available)
   const occupancyMath = calculateOccupancy(rooms);
-  const totalOccupied = occupancyMath.occupiedRooms;
-  const occupancyRate = occupancyMath.ratePercentage;
+  const totalOccupied = serverDashboardSummary?.occupancy?.occupiedRooms ?? occupancyMath.occupiedRooms;
+  const occupancyRate = serverDashboardSummary?.occupancy?.occupancyRate ?? occupancyMath.ratePercentage;
   
   // Real time direct calculated PBJT values
-  const rawRevenue = calculateGrossPipeline(bookings.filter(b=>b.status === 'approved'));
+  const rawRevenue = serverDashboardSummary?.grossPipeline ?? calculateGrossPipeline(bookings.filter(b=>b.status === 'approved'));
   const totalPBJT = Math.round(rawRevenue * 0.10); // 10% Local tax
 
   // Double-entry finance aggregations
-  const totalInflow = calculateTotalInflow(transactions, payments);
-  const totalOutflow = calculateTotalExpenses(transactions);
-  const netEarnings = calculateNOI(totalInflow, totalOutflow);
+  const totalInflow = serverDashboardSummary?.totalInflow ?? calculateTotalInflow(transactions, payments);
+  const totalOutflow = serverDashboardSummary?.totalExpenses ?? calculateTotalExpenses(transactions);
+  const netEarnings = serverDashboardSummary?.noi ?? calculateNOI(totalInflow, totalOutflow);
 
   const filteredPayments = payments.filter(p => {
     const matchesSearch = p.tenant_name.toLowerCase().includes(paymentSearch.toLowerCase()) || p.id.toLowerCase().includes(paymentSearch.toLowerCase());
@@ -3644,8 +3711,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <button 
                         onClick={() => {
                           setSelectedSurveyForPelunasan(s);
-                          setPelunasanCheckInDate(new Date().toISOString().split('T')[0]);
-                          setPelunasanCheckInDate(new Date().toISOString().split('T')[0]);
+                          setPelunasanCheckInDate(todayJakarta());
                           setPelunasanDurationMonths(1);
                           setShowPelunasanModal(true);
                         }}
@@ -4485,7 +4551,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 const parsed = lines.map(line => {
                                   const parts = line.split(',');
                                   return {
-                                    date: parts[0]?.trim() || new Date().toISOString().split('T')[0],
+                                    date: parts[0]?.trim() || todayJakarta(),
                                     desc: parts[1]?.trim() || 'Mutasi Masuk Rekening Bank',
                                     amount: Number(parts[2]?.trim() || 0),
                                     type: parts[3]?.trim()?.toLowerCase() || 'credit'
@@ -5041,7 +5107,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                      items: expenseForm.description,
                                      amount: expenseForm.amount,
                                      status: 'pending_approval' as const,
-                                     date: new Date().toISOString().split('T')[0]
+                                     date: todayJakarta()
                                    };
                                    const savedPo = await database.savePurchaseOrder(newPo);
                                    setPurchaseOrders([savedPo, ...purchaseOrders]);
@@ -6294,7 +6360,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                   const encodedUri = encodeURI(csvContent);
                   const link = document.createElement("a");
                   link.setAttribute("href", encodedUri);
-                  link.setAttribute("download", `riwayat_sewa_samarastay_${new Date().toISOString().split('T')[0]}.csv`);
+                  link.setAttribute("download", `riwayat_sewa_samarastay_${todayJakarta()}.csv`);
                   document.body.appendChild(link);
                   link.click();
                   document.body.removeChild(link);
@@ -6588,7 +6654,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       avatar_color: "bg-amber-600",
                       property_id: matchedRoom ? matchedRoom.property_id : (properties[0]?.id || 1),
                       room_number: roomInput,
-                      start_date: new Date().toISOString().split('T')[0],
+                      start_date: todayJakarta(),
                       duration_months: Number(durationInMonthsInput) || 1,
                       payment_status: 'paid'
                     };
@@ -6732,7 +6798,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                 room_number: t.room_number,
                                 start_date: t.start_date,
                                 duration_months: t.duration_months || 1,
-                                payment_status: (t.payment_status as any) || 'paid',
+                                payment_status: t.payment_status || 'paid',
                                 is_married: !!t.is_married,
                                 marriage_certificate_url: t.marriage_certificate_url || '',
                                 spouse_name: t.spouse_name || '',
@@ -7146,7 +7212,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             <span className="text-[10px] text-slate-400 font-mono font-bold">Role:</span>
                             <select
                               value={u.role}
-                              onChange={(e) => handleQuickRoleChange(u, e.target.value as any)}
+                              onChange={(e) => handleQuickRoleChange(u, e.target.value as UserSystem['role'])}
                               disabled={!canUpdate || processingItems[u.id]}
                               title={!canUpdate ? 'Anda tidak berhak mengubah jabatan pengguna ini' : undefined}
                               className="bg-slate-950 text-slate-200 border border-slate-750 text-[10px] font-bold py-1 px-2 rounded-lg cursor-pointer outline-none focus:border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -8266,7 +8332,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       </div>
                       <div>
                         <h5 className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider font-mono">Aktif Sesi Diagnostik User</h5>
-                        <span className="text-xs font-extrabold text-[#1E293B] font-mono">yogiketilang33@gmail.com</span>
+                        <span className="text-xs font-extrabold text-[#1E293B] font-mono">{user?.email || 'Authenticated Session'}</span>
                       </div>
                     </div>
                     <div className="p-2 px-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-[10px] font-mono text-[#64748B]">
@@ -9051,7 +9117,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Jabatan / Role</label>
               <select
                 value={userForm.role}
-                onChange={(e) => setUserForm({ ...userForm, role: e.target.value as any })}
+                onChange={(e) => setUserForm({ ...userForm, role: e.target.value as UserSystem['role'] })}
                 className="w-full bg-slate-950 border border-slate-805 p-2.5 rounded-xl text-slate-200 cursor-pointer font-bold text-xs"
               >
                 {[
@@ -9885,7 +9951,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <label className="text-[10px] uppercase font-bold text-[#64748B] font-mono">Status Pembayaran</label>
               <select
                 value={tenantForm.payment_status}
-                onChange={(e) => setTenantForm({ ...tenantForm, payment_status: e.target.value as any })}
+                onChange={(e) => setTenantForm({ ...tenantForm, payment_status: e.target.value as PaymentStatus })}
                 className="w-full bg-[#F8FAFC] border border-[#E2E8F0] p-2.5 rounded-xl cursor-pointer text-xs font-bold focus:border-[#0D9488]"
               >
                 <option value="paid">LUNAS (PAID)</option>
@@ -10321,7 +10387,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       room_number: t.room_number,
                       start_date: t.start_date,
                       duration_months: t.duration_months || 1,
-                      payment_status: (t.payment_status as any) || 'paid',
+                      payment_status: t.payment_status || 'paid',
                       is_married: !!t.is_married,
                       marriage_certificate_url: t.marriage_certificate_url || '',
                       spouse_name: t.spouse_name || '',

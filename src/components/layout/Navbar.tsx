@@ -31,10 +31,9 @@ export default function Navbar({ currentView, setView, onRefresh }: NavbarProps)
   }, []);
 
   const rawRole = (user?.raw_role || user?.role || '').trim().toLowerCase();
-  const userEmail = (user?.email || '').toLowerCase();
   const userAccess = ((user as any)?.access || '').toLowerCase();
-  const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin' || userEmail === 'yogiketilang33@gmail.com' || userEmail.includes('superadmin')));
-  const isAnakOwner = Boolean(user && (rawRole === 'anak_owner' || rawRole === 'anak owner' || userEmail.includes('anakowner') || userEmail === 'sabita@samarastay.co' || userAccess.includes('anak owner')));
+  const isSuper = Boolean(user && (rawRole === 'super' || rawRole === 'super_admin'));
+  const isAnakOwner = Boolean(user && (rawRole === 'anak_owner' || rawRole === 'anak owner' || userAccess.includes('anak owner')));
   const isOwner = Boolean(user && rawRole === 'owner');
   const isStaff = Boolean(user && rawRole === 'staff');
 

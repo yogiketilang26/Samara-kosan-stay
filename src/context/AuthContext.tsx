@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { setCacheRoleScope, clearSensitiveLocalCache } from '../lib/queryBudget';
 
 export interface UserProfile {
   id: string;
@@ -64,15 +65,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 refresh_token: data.refresh_token
               }).catch((e) => console.warn('[AUTH] Supabase session sync notice:', e?.message || e));
             }
+            setCacheRoleScope(data.user.role || data.user.id || 'user');
             setUser(data.user);
           } else {
+            setCacheRoleScope('public');
             setUser(null);
           }
         } else {
+          setCacheRoleScope('public');
           setUser(null);
         }
       } catch (err: any) {
         console.warn('[AUTH] Current session check notice:', err?.message || err);
+        setCacheRoleScope('public');
         setUser(null);
       } finally {
         setLoading(false);
@@ -116,6 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             refresh_token: data.refresh_token
           }).catch((e) => console.error('[AUTH] Failed to set client-side supabase session during login:', e));
         }
+        setCacheRoleScope(data.user.role || data.user.id || 'user');
         setUser(data.user);
         return { success: true };
       }
@@ -163,6 +169,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             refresh_token: data.refresh_token
           }).catch((e) => console.error('[AUTH] Failed to set client-side supabase session during signup:', e));
         }
+        setCacheRoleScope(data.user.role || data.user.id || 'user');
         setUser(data.user);
         return { success: true };
       }
@@ -195,6 +202,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('sb-access-token');
       localStorage.removeItem('sb-refresh-token');
     }
+    setCacheRoleScope('public');
+    clearSensitiveLocalCache();
     setUser(null);
   };
 

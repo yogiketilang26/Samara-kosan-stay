@@ -6,6 +6,13 @@ import {
 } from 'lucide-react';
 import { database, isSupabaseConfigured } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
+import {
+  LIST_COLUMNS_BOOKINGS,
+  LIST_COLUMNS_TENANTS,
+  LIST_COLUMNS_FINANCIAL_TRANSACTIONS,
+  LIST_COLUMNS_PAYMENTS,
+  LIST_COLUMNS_MIDTRANS_CLEARING
+} from '../lib/queryBudget';
 import { 
   calculateOccupancy, 
   calculateTotalInflow, 
@@ -37,15 +44,15 @@ export const Owner: React.FC = () => {
   const [selectedPeriod, setSelectedPeriod] = useState<'this_month' | 'last_month' | 'this_quarter' | 'ytd'>('this_month');
   const [activeTab, setActiveTab] = useState<'overview' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops' | 'assets'>('overview');
 
-  // Realtime Data Subscriptions (eliminating static fetch lock-in)
+  // Realtime Data Subscriptions with G10 column projections for list views
   const { data: properties = [], loading: loadingProps } = useRealtimeTable<Property>('properties', () => database.fetchProperties());
   const { data: rooms = [], loading: loadingRooms } = useRealtimeTable<Room>('rooms', () => database.fetchRooms());
-  const { data: tenants = [], loading: loadingTenants } = useRealtimeTable<Tenant>('tenants', () => database.fetchTenants());
-  const { data: bookings = [], loading: loadingBookings } = useRealtimeTable<Booking>('bookings', () => database.fetchBookings());
-  const { data: transactions = [], loading: loadingTx } = useRealtimeTable<FinancialTransaction>('financial_transactions', () => database.fetchFinancialTransactions({ limit: 1000 }));
-  const { data: payments = [], loading: loadingPayments } = useRealtimeTable<PaymentInvoice>('payments', () => database.fetchPayments({ limit: 1000 }));
+  const { data: tenants = [], loading: loadingTenants } = useRealtimeTable<Tenant>('tenants', () => database.fetchTenants({ columns: LIST_COLUMNS_TENANTS }));
+  const { data: bookings = [], loading: loadingBookings } = useRealtimeTable<Booking>('bookings', () => database.fetchBookings({ columns: LIST_COLUMNS_BOOKINGS }));
+  const { data: transactions = [], loading: loadingTx } = useRealtimeTable<FinancialTransaction>('financial_transactions', () => database.fetchFinancialTransactions({ limit: 1000, columns: LIST_COLUMNS_FINANCIAL_TRANSACTIONS }));
+  const { data: payments = [], loading: loadingPayments } = useRealtimeTable<PaymentInvoice>('payments', () => database.fetchPayments({ limit: 1000, columns: LIST_COLUMNS_PAYMENTS }));
   const { data: accounts = [] } = useRealtimeTable<AccountCOA>('accounts', () => database.fetchAccounts());
-  const { data: clearingList = [] } = useRealtimeTable<MidtransClearingTransaction>('midtrans_clearing_transactions', () => database.fetchMidtransClearingTransactions({ limit: 1000 }));
+  const { data: clearingList = [] } = useRealtimeTable<MidtransClearingTransaction>('midtrans_clearing_transactions', () => database.fetchMidtransClearingTransactions({ limit: 1000, columns: LIST_COLUMNS_MIDTRANS_CLEARING }));
   const { data: maintenanceList = [] } = useRealtimeTable<Maintenance>('maintenance', () => database.fetchMaintenance({ limit: 500 }));
   const { data: pettyCashList = [] } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests({ limit: 500 }));
   const { data: purchaseOrders = [] } = useRealtimeTable<PurchaseOrder>('purchase_orders', () => database.fetchPurchaseOrders({ limit: 500 }));
@@ -85,26 +92,40 @@ export const Owner: React.FC = () => {
     return clearingList.filter(c => !c.property_id || String(c.property_id) === String(selectedPropertyId));
   }, [clearingList, selectedPropertyId]);
 
-  // Centralized Financial Engine Math
+  // G9: Server-side dashboard summary RPC integration (falls back to client-side parity calculation)
+  const [serverDashboardSummary, setServerDashboardSummary] = useState<any | null>(null);
+  useEffect(() => {
+    let active = true;
+    database.fetchDashboardSummary({ property_id: selectedPropertyId }).then((res) => {
+      if (active && res?.summary) {
+        setServerDashboardSummary(res.summary);
+      }
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [selectedPropertyId, transactions.length, payments.length, bookings.length, rooms.length]);
+
+  // Centralized Financial Engine Math (prefers server RPC summary when available)
   const occupancyData = calculateOccupancy(filteredRooms);
-  const totalRooms = occupancyData.totalRooms;
-  const occupiedRooms = occupancyData.occupiedRooms;
-  const occupancyRate = occupancyData.ratePercentage;
+  const totalRooms = serverDashboardSummary?.occupancy?.totalRooms ?? occupancyData.totalRooms;
+  const occupiedRooms = serverDashboardSummary?.occupancy?.occupiedRooms ?? occupancyData.occupiedRooms;
+  const occupancyRate = serverDashboardSummary?.occupancy?.occupancyRate ?? occupancyData.ratePercentage;
 
   // 1. Total Inflow (Arus Kas Masuk Transaksi Riil Supabase / Midtrans / Pelunasan)
-  const totalInflow = calculateTotalInflow(filteredTransactions, filteredPayments);
+  const totalInflow = serverDashboardSummary?.totalInflow ?? calculateTotalInflow(filteredTransactions, filteredPayments);
 
   // 2. Estimasi Nilai Kontrak Sewa (Approved Bookings Pipeline)
-  const totalContractRevenue = calculateGrossPipeline(filteredBookings.filter(b => b.status === 'approved'));
+  const totalContractRevenue = serverDashboardSummary?.grossPipeline ?? calculateGrossPipeline(filteredBookings.filter(b => b.status === 'approved'));
 
   // 3. Gross Revenue (Realized Inflow with fallback to Approved Pipeline)
   const grossRevenue = totalInflow > 0 ? totalInflow : totalContractRevenue;
 
   // 4. Biaya Operasional (Outflow Pengeluaran Riil Supabase)
-  const totalExpenses = calculateTotalExpenses(filteredTransactions);
+  const totalExpenses = serverDashboardSummary?.totalExpenses ?? calculateTotalExpenses(filteredTransactions);
 
   // 5. Net Operating Income (NOI / Laba Bersih)
-  const netOperatingIncome = calculateNOI(grossRevenue, totalExpenses);
+  const netOperatingIncome = serverDashboardSummary?.noi ?? calculateNOI(grossRevenue, totalExpenses);
   const distributableDividend = Math.max(0, netOperatingIncome * 0.85); // 85% payout pool
   const avgRevenuePerRoom = totalRooms > 0 ? grossRevenue / totalRooms : 0;
 

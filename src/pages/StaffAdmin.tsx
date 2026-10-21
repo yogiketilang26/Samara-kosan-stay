@@ -9,21 +9,23 @@ import {
 } from 'lucide-react';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { database } from '../lib/supabase';
-import { Room, Tenant, Survey, Maintenance, Property, ContractExtension, PettyCashRequest, ActivityLog, FixedAsset } from '../types';
+import { todayJakarta } from '../lib/dateUtils';
+import { Room, RoomStatus, Tenant, Survey, Maintenance, Property, ContractExtension, PettyCashRequest, ActivityLog, FixedAsset } from '../types';
 import { useAuth } from '../hooks/useAuth';
 import { formatRupiah } from '../utils/formatCurrency';
 import { AssetManagementSection } from '../components/AssetManagementSection';
+import { LIST_COLUMNS_TENANTS, LIST_COLUMNS_CONTRACT_EXTENSIONS } from '../lib/queryBudget';
 
 export default function StaffAdmin() {
   const { user } = useAuth();
 
-  // 1. Live Realtime Data Subscriptions
+  // 1. Live Realtime Data Subscriptions (G10: projected columns for list views)
   const { data: properties = [] } = useRealtimeTable<Property>('properties', () => database.fetchProperties());
   const { data: rooms = [], refetch: refetchRooms } = useRealtimeTable<Room>('rooms', () => database.fetchRooms());
-  const { data: tenants = [], refetch: refetchTenants } = useRealtimeTable<Tenant>('tenants', () => database.fetchTenants());
+  const { data: tenants = [], refetch: refetchTenants } = useRealtimeTable<Tenant>('tenants', () => database.fetchTenants({ columns: LIST_COLUMNS_TENANTS }));
   const { data: surveys = [], refetch: refetchSurveys } = useRealtimeTable<Survey>('surveys', () => database.fetchSurveys());
   const { data: maintenanceList = [], refetch: refetchMaintenance } = useRealtimeTable<Maintenance>('maintenance', () => database.fetchMaintenance());
-  const { data: extensions = [], refetch: refetchExtensions } = useRealtimeTable<ContractExtension>('contract_extensions', () => database.fetchContractExtensions());
+  const { data: extensions = [], refetch: refetchExtensions } = useRealtimeTable<ContractExtension>('contract_extensions', () => database.fetchContractExtensions({ columns: LIST_COLUMNS_CONTRACT_EXTENSIONS }));
   const { data: pettyCashList = [], refetch: refetchPettyCash } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests());
   const { data: activityLogs = [], refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>('activity_logs', () => database.fetchActivityLogs({ limit: 100 }));
   const { data: fixedAssets = [], refetch: refetchFixedAssets } = useRealtimeTable<FixedAsset>('fixed_assets', () => database.fetchFixedAssets());
@@ -39,7 +41,7 @@ export default function StaffAdmin() {
   // 3. Operational Modals State
   // Modal: Change Room Status
   const [selectedRoomForStatus, setSelectedRoomForStatus] = useState<Room | null>(null);
-  const [newRoomStatus, setNewRoomStatus] = useState<string>('available');
+  const [newRoomStatus, setNewRoomStatus] = useState<RoomStatus>('available');
 
   // Modal: Maintenance Ticket
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
@@ -86,6 +88,8 @@ export default function StaffAdmin() {
     room_inspection_done: true,
     notes: 'Kunci fisik & smart card diserahkan saat check-in.'
   });
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
+  const [surveyActionId, setSurveyActionId] = useState<string | number | null>(null);
 
   // Modal: Check-Out Form
   const [showCheckOutModal, setShowCheckOutModal] = useState(false);
@@ -102,7 +106,7 @@ export default function StaffAdmin() {
   const [pettyCashForm, setPettyCashForm] = useState({
     amount: '',
     purpose: '',
-    date: new Date().toISOString().split('T')[0]
+    date: todayJakarta()
   });
   const [isSubmittingPetty, setIsSubmittingPetty] = useState(false);
 
@@ -176,7 +180,7 @@ export default function StaffAdmin() {
     const occupied = scopeRooms.filter(r => r.status === 'occupied').length;
     const available = scopeRooms.filter(r => r.status === 'available').length;
     const maintenance = scopeRooms.filter(r => r.status === 'maintenance').length;
-    const cleaning = scopeRooms.filter(r => (r.status as any) === 'cleaning' || (r.status as any) === 'reserved').length;
+    const cleaning = scopeRooms.filter(r => r.status === 'cleaning' || r.status === 'reserved').length;
     const occupancyRate = total > 0 ? Math.round((occupied / total) * 100) : 0;
 
     return { total, occupied, available, maintenance, cleaning, occupancyRate };
@@ -233,7 +237,7 @@ export default function StaffAdmin() {
   const handleUpdateRoomStatus = async () => {
     if (!selectedRoomForStatus) return;
     try {
-      const updated = { ...selectedRoomForStatus, status: newRoomStatus as any };
+      const updated: Room = { ...selectedRoomForStatus, status: newRoomStatus };
       await database.saveRoom(updated);
       await database.logActivity(
         user?.name || 'Staff Lapangan',
@@ -274,7 +278,7 @@ export default function StaffAdmin() {
         reported_by: maintenanceForm.reported_by.trim() || user?.name || 'Staff Lapangan',
         cost: parsedCost,
         status: 'open',
-        date: new Date().toISOString().split('T')[0],
+        date: todayJakarta(),
         post_to_finance: willPostToFinance,
         debit_account_id: 5100,
         credit_account_id: maintenanceForm.credit_account_id || 1010
@@ -403,14 +407,16 @@ export default function StaffAdmin() {
     }
   };
 
-  // Submit Check-In
+  // Submit Check-In (G5: double-submit guard isCheckingIn & payment_status 'pending' until financial settlement)
   const handleSubmitCheckIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCheckingIn) return;
     if (!selectedRoomForCheckIn || !checkInForm.full_name || !checkInForm.phone) {
       showToast('Nama penghuni dan nomor HP wajib diisi.', 'error');
       return;
     }
 
+    setIsCheckingIn(true);
     try {
       const propId = selectedRoomForCheckIn.property_id;
       const newTenant: Partial<Tenant> = {
@@ -421,9 +427,9 @@ export default function StaffAdmin() {
         email: checkInForm.email.trim() || `${checkInForm.phone.trim()}@samarastay.co.id`,
         nik: checkInForm.nik.trim() || undefined,
         duration_months: Number(checkInForm.duration_months) || 1,
-        start_date: new Date().toISOString().split('T')[0],
+        start_date: todayJakarta(),
         status: 'active',
-        payment_status: 'paid',
+        payment_status: 'pending',
         job: 'Penghuni Kos'
       };
 
@@ -447,6 +453,8 @@ export default function StaffAdmin() {
       await Promise.all([refetchRooms(), refetchTenants(), refetchActivityLogs()]);
     } catch (err: any) {
       showToast(err.message || 'Gagal memproses check-in.', 'error');
+    } finally {
+      setIsCheckingIn(false);
     }
   };
 
@@ -506,7 +514,7 @@ export default function StaffAdmin() {
         amount: amountNum,
         purpose: pettyCashForm.purpose.trim(),
         status: 'pending',
-        date: pettyCashForm.date || new Date().toISOString().split('T')[0]
+        date: pettyCashForm.date || todayJakarta()
       });
 
       await database.logActivity(
@@ -520,7 +528,7 @@ export default function StaffAdmin() {
       setPettyCashForm({
         amount: '',
         purpose: '',
-        date: new Date().toISOString().split('T')[0]
+        date: todayJakarta()
       });
       await Promise.all([refetchPettyCash(), refetchActivityLogs()]);
     } catch (err: any) {
@@ -952,7 +960,7 @@ export default function StaffAdmin() {
                 const isOccupied = room.status === 'occupied';
                 const isAvailable = room.status === 'available';
                 const isMaintenance = room.status === 'maintenance';
-                const isCleaning = (room.status as any) === 'cleaning';
+                const isCleaning = room.status === 'cleaning';
 
                 // Find active tenant in this room
                 const tenantInRoom = tenants.find(
@@ -1107,7 +1115,11 @@ export default function StaffAdmin() {
                             title: `Perbaikan Kamar ${room.room_number}`,
                             priority: 'Normal',
                             desc_field: '',
-                            tech: 'Teknisi In-House'
+                            tech: 'Teknisi In-House',
+                            reported_by: user?.name || 'Staff Lapangan',
+                            cost: '',
+                            post_to_finance: true,
+                            credit_account_id: 1010
                           });
                           setShowMaintenanceModal(true);
                         }}
@@ -1158,9 +1170,14 @@ export default function StaffAdmin() {
                 <tbody className="divide-y divide-slate-800/60">
                   {filteredSurveys.map(s => {
                     const propertyName = properties.find(p => p.id === s.property_id)?.name || 'Samara Stay';
-                    const isPending = s.status === 'pending';
-                    const isConfirmed = s.status === 'confirmed';
-                    const isDone = s.status === 'done' || s.status === 'completed';
+                    const isPending = s.status === 'pending_payment' || (s.status as string) === 'pending';
+                    const isConfirmed = s.status === 'survey_confirmed' || (s.status as string) === 'confirmed';
+                    const isDone =
+                      s.status === 'survey_completed' ||
+                      s.status === 'converted_to_booking' ||
+                      (s.status as string) === 'done' ||
+                      (s.status as string) === 'completed';
+                    const isActionBusy = surveyActionId !== null && String(surveyActionId) === String(s.id);
 
                     return (
                       <tr key={s.id} className="hover:bg-slate-850/50 transition-colors">
@@ -1208,30 +1225,48 @@ export default function StaffAdmin() {
                               <Phone size={13} />
                             </button>
 
-                            {/* Mark Confirmed / Done */}
+                            {/* Mark Confirmed / Done (G5: real survey status & double-submit guard surveyActionId) */}
                             {isPending && (
                               <button
+                                disabled={surveyActionId !== null}
                                 onClick={async () => {
-                                  await database.saveSurvey({ ...s, status: 'confirmed' });
-                                  showToast(`Survey ${s.tenant_name} dikonfirmasi.`);
-                                  await refetchSurveys();
+                                  if (surveyActionId !== null) return;
+                                  setSurveyActionId(s.id);
+                                  try {
+                                    await database.saveSurvey({ ...s, status: 'survey_confirmed' });
+                                    showToast(`Survey ${s.tenant_name} dikonfirmasi.`);
+                                    await refetchSurveys();
+                                  } catch (err: any) {
+                                    showToast(err?.message || 'Gagal mengonfirmasi survey.', 'error');
+                                  } finally {
+                                    setSurveyActionId(null);
+                                  }
                                 }}
-                                className="px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-[11px] transition-colors cursor-pointer"
+                                className="px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-[11px] transition-colors cursor-pointer disabled:opacity-50"
                               >
-                                Konfirmasi
+                                {isActionBusy ? 'Memproses...' : 'Konfirmasi'}
                               </button>
                             )}
 
                             {isConfirmed && (
                               <button
+                                disabled={surveyActionId !== null}
                                 onClick={async () => {
-                                  await database.saveSurvey({ ...s, status: 'completed' as any });
-                                  showToast(`Survey ${s.tenant_name} ditandai selesai.`);
-                                  await refetchSurveys();
+                                  if (surveyActionId !== null) return;
+                                  setSurveyActionId(s.id);
+                                  try {
+                                    await database.saveSurvey({ ...s, status: 'survey_completed' });
+                                    showToast(`Survey ${s.tenant_name} ditandai selesai.`);
+                                    await refetchSurveys();
+                                  } catch (err: any) {
+                                    showToast(err?.message || 'Gagal menyelesaikan survey.', 'error');
+                                  } finally {
+                                    setSurveyActionId(null);
+                                  }
                                 }}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors cursor-pointer"
+                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors cursor-pointer disabled:opacity-50"
                               >
-                                Selesai
+                                {isActionBusy ? 'Memproses...' : 'Selesai'}
                               </button>
                             )}
                           </div>
@@ -2438,9 +2473,10 @@ export default function StaffAdmin() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-md cursor-pointer"
+                  disabled={isCheckingIn}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
                 >
-                  Selesaikan Check-In
+                  {isCheckingIn ? 'Memproses...' : 'Selesaikan Check-In'}
                 </button>
               </div>
             </form>

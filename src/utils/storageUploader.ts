@@ -320,13 +320,33 @@ export async function uploadToSupabaseStorage(
         throw error;
       }
 
-      // Get public CDN URL
-      const { data: publicUrlData } = supabase.storage
-        .from(bucketName)
-        .getPublicUrl(data.path);
+      const privateBuckets = new Set([
+        'tenant-documents',
+        'payment-proof',
+        'contracts',
+        'signatures',
+        'maintenance'
+      ]);
+
+      let resolvedUrl = '';
+      if (privateBuckets.has(bucketName)) {
+        const { data: signedData, error: signErr } = await supabase.storage
+          .from(bucketName)
+          .createSignedUrl(data.path, 315360000);
+        if (!signErr && signedData?.signedUrl) {
+          resolvedUrl = signedData.signedUrl;
+        } else {
+          break; // Proceed to server /api/storage/upload fallback to mint signed URL via service_role
+        }
+      } else {
+        const { data: publicUrlData } = supabase.storage
+          .from(bucketName)
+          .getPublicUrl(data.path);
+        resolvedUrl = publicUrlData.publicUrl;
+      }
 
       return {
-        publicUrl: publicUrlData.publicUrl,
+        publicUrl: resolvedUrl,
         storagePath: data.path,
         bucket: bucketName,
         width,
@@ -338,6 +358,45 @@ export async function uploadToSupabaseStorage(
       lastError = err;
       if (attempts >= maxAttempts) break;
     }
+  }
+
+  // Server-side Supabase Storage proxy fallback (handles private bucket RLS & signed URL generation)
+  try {
+    const base64Data = await blobToBase64(processedBlob);
+    if (base64Data) {
+      const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+      const token = sessionData?.session?.access_token;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const srvRes = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          bucket: bucketName,
+          fileName,
+          base64Data,
+          mimeType
+        })
+      });
+      if (srvRes.ok) {
+        const srvJson = await srvRes.json();
+        if (srvJson.success && srvJson.publicUrl) {
+          return {
+            publicUrl: srvJson.publicUrl,
+            storagePath: srvJson.storagePath || fileName,
+            bucket: bucketName,
+            width,
+            height,
+            mimeType,
+            size: processedBlob.size
+          };
+        }
+      }
+    }
+  } catch (srvUploadErr) {
+    console.warn('[StorageUploader] Server storage upload proxy notice:', srvUploadErr);
   }
 
   // Resilient Fallback: If Supabase Storage bucket does not exist or upload permanently fails,
