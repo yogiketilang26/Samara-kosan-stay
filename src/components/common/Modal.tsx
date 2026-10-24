@@ -18,7 +18,7 @@ export const Modal: React.FC<ModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[160] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[160] flex items-center justify-center p-3 sm:p-4">
           {/* Overlay backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -34,13 +34,14 @@ export const Modal: React.FC<ModalProps> = ({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-            className="relative bg-white border border-slate-200 text-slate-800 rounded-3xl w-full max-w-lg p-6 shadow-2xl z-10 space-y-4 max-h-[90vh] overflow-y-auto no-scrollbar text-left"
+            className="relative bg-white border border-slate-200 text-slate-800 rounded-2xl sm:rounded-3xl w-full max-w-lg p-4 sm:p-6 shadow-2xl z-10 space-y-4 max-h-[90vh] overflow-y-auto no-scrollbar text-left"
           >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-extrabold font-display uppercase tracking-tight text-slate-800">{title}</h3>
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3 sticky top-0 bg-white z-10">
+              <h3 className="text-sm sm:text-base font-extrabold font-display uppercase tracking-tight text-slate-800 leading-snug">{title}</h3>
               <button 
                 onClick={onClose} 
-                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-full hover:bg-slate-50 transition-colors"
+                className="text-slate-400 hover:text-slate-700 p-2 rounded-full hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
+                aria-label="Tutup Modal"
               >
                 <X size={18} />
               </button>

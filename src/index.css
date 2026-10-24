@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
@@ -34,16 +34,36 @@
   --color-emerald-500: #2E6F40;
   --color-emerald-600: #235531;
 
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", sans-serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", "Plus Jakarta Sans", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 }
 
-/* Base modifications for the application design */
+/* Base modifications for precision across Desktop, Tablet, and Mobile/HP */
+html,
 body {
   font-family: var(--font-sans);
   background-color: #F8F9FA;
   color: #3A444D;
+  overflow-x: hidden;
+  max-width: 100vw;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Enforce tabular numerals for financial & operational precision */
+.font-mono,
+table,
+td,
+th,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Smooth touch horizontal scrolling for wide tables on mobile & tablet */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Prevent Chrome / Safari / Edge autofill blue or light background overriding dark input elements */
@@ -81,14 +101,16 @@ input:-webkit-autofill:active {
   backface-visibility: hidden;
 }
 
-/* 3D tilt effect for cards with dynamic depth */
+/* 3D tilt effect for cards with dynamic depth (Desktop hover only) */
 .tilt-card-3d {
   transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
   transform-style: preserve-3d;
 }
-.tilt-card-3d:hover {
-  transform: translateY(-10px) rotateX(4deg) rotateY(-4deg);
-  box-shadow: 0 30px 60px -15px rgba(45, 58, 68, 0.22);
+@media (hover: hover) and (pointer: fine) {
+  .tilt-card-3d:hover {
+    transform: translateY(-10px) rotateX(4deg) rotateY(-4deg);
+    box-shadow: 0 30px 60px -15px rgba(45, 58, 68, 0.22);
+  }
 }
 
 .tilt-inner-depth {
@@ -98,9 +120,11 @@ input:-webkit-autofill:active {
 .premium-card-hover {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.premium-card-hover:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 12px 30px -4px rgba(13, 92, 52, 0.1);
+@media (hover: hover) and (pointer: fine) {
+  .premium-card-hover:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 30px -4px rgba(13, 92, 52, 0.1);
+  }
 }
 
 /* Hide scrollbar utility */
@@ -118,4 +142,5 @@ select.bg-white option {
   color: #0f172a !important; /* text-slate-900 */
   background-color: #ffffff !important;
 }
+
 

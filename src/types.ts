@@ -395,6 +395,7 @@ export interface Coupon {
 
 export interface PettyCashRequest {
   id: number;
+  property_id?: number | null;
   applicant: string;
   amount: number;
   purpose: string;

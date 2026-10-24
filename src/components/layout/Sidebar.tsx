@@ -72,20 +72,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isAna
   ];
 
   // Eksklusi menu untuk role 'anak_owner':
-  // 14. User & Akses (user_roles)
   // 15. Integrasi Email (email_integration)
   // 16. Midtrans Logs (midtrans_logs)
   // 17. Egress Management (egress_management)
   // 18. Health & Observability (observability)
   // 19. Log Aktivitas (activity_logs)
-  // Menu lengkap hanya untuk Super Admin
+  // Menu diagnostik teknis hanya untuk Super Admin
   const forbiddenForAnakOwner = new Set([
     'email_integration',
     'midtrans_logs',
     'egress_management',
     'observability',
-    'activity_logs',
-    'user_roles'
+    'activity_logs'
   ]);
 
   const menuItems = allMenuItems.filter(item => {
@@ -116,29 +114,57 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isAna
 
   return (
     <>
-      {/* MOBILE TRIGGER BAR (Visible only on mobile <768px) */}
-      <div className="md:hidden flex items-center justify-between bg-white border border-[#E2E8F0] rounded-[24px] p-4 shadow-sm w-full mb-2">
-        <div className="flex items-center gap-2.5 text-left">
-          <div className="p-2 bg-[#0D9488]/10 text-[#0D9488] rounded-xl">
-            {React.createElement(activeItem.icon, { size: 16 })}
+      {/* MOBILE TRIGGER BAR + QUICK SCROLLABLE MODULE STRIP (Visible only on mobile <768px) */}
+      <div className="md:hidden bg-white border border-[#E2E8F0] rounded-[22px] p-3.5 shadow-sm w-full space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 text-left min-w-0">
+            <div className="p-2 bg-[#0D9488]/10 text-[#0D9488] rounded-xl shrink-0">
+              {React.createElement(activeItem.icon, { size: 16 })}
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider truncate">
+                {isAnakOwner ? 'Panel Anak Owner' : 'Navigasi Panel Admin'}
+              </h4>
+              <span className="text-xs font-extrabold text-[#3A444D] uppercase font-display block truncate">
+                {activeItem.name}
+              </span>
+            </div>
           </div>
-          <div>
-            <h4 className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">Navigasi Panel</h4>
-            <span className="text-xs font-extrabold text-[#3A444D] uppercase font-display">{activeItem.name}</span>
-          </div>
+          <button 
+            onClick={() => setIsMobileOpen(true)}
+            className="min-h-[40px] px-3.5 py-2 bg-[#0D9488] hover:bg-[#0F766E] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition shrink-0"
+          >
+            <Menu size={15} />
+            <span>Semua Menu</span>
+          </button>
         </div>
-        <button 
-          onClick={() => setIsMobileOpen(true)}
-          className="p-2 px-3.5 bg-[#0D9488] hover:bg-[#0F766E] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition"
-        >
-          <Menu size={14} />
-          <span>Menu</span>
-        </button>
+
+        {/* Horizontal Quick Module Switcher for fast thumb navigation on HP */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1 border-t border-[#F1F5F9]">
+          {menuItems.map(item => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-all ${
+                  isActive
+                    ? 'bg-[#0D9488] text-white shadow-xs'
+                    : 'bg-[#F8FAFC] text-[#64748B] hover:text-[#0D9488] border border-[#E2E8F0]/60'
+                }`}
+              >
+                <Icon size={12} className="shrink-0" />
+                <span>{item.name}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* TABLET & DESKTOP SIDEBAR (Visible on md:block, collapsible) */}
+      {/* TABLET & DESKTOP SIDEBAR (Visible on md:flex, collapsible & sticky) */}
       <aside 
-        className={`hidden md:flex flex-col bg-white border border-[#E2E8F0] rounded-[24px] p-4 shrink-0 shadow-sm transition-all duration-300 h-fit ${
+        className={`hidden md:flex flex-col bg-white border border-[#E2E8F0] rounded-[24px] p-4 shrink-0 shadow-sm transition-all duration-300 h-fit md:sticky md:top-20 ${
           isCollapsed ? 'w-20' : 'w-64'
         }`}
       >

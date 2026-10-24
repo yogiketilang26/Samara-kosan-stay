@@ -53,8 +53,8 @@ export const Owner: React.FC = () => {
   const { data: payments = [], loading: loadingPayments } = useRealtimeTable<PaymentInvoice>('payments', () => database.fetchPayments({ limit: 1000, columns: LIST_COLUMNS_PAYMENTS }));
   const { data: accounts = [] } = useRealtimeTable<AccountCOA>('accounts', () => database.fetchAccounts());
   const { data: clearingList = [] } = useRealtimeTable<MidtransClearingTransaction>('midtrans_clearing_transactions', () => database.fetchMidtransClearingTransactions({ limit: 1000, columns: LIST_COLUMNS_MIDTRANS_CLEARING }));
-  const { data: maintenanceList = [] } = useRealtimeTable<Maintenance>('maintenance', () => database.fetchMaintenance({ limit: 500 }));
-  const { data: pettyCashList = [] } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests({ limit: 500 }));
+  const { data: maintenanceList = [], refetch: refetchMaintenance } = useRealtimeTable<Maintenance>('maintenance', () => database.fetchMaintenance({ limit: 500 }));
+  const { data: pettyCashList = [], refetch: refetchPettyCash } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests({ limit: 500 }));
   const { data: purchaseOrders = [] } = useRealtimeTable<PurchaseOrder>('purchase_orders', () => database.fetchPurchaseOrders({ limit: 500 }));
   const { data: activityLogs = [], refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>('activity_logs', () => database.fetchActivityLogs({ limit: 100 }));
   const { data: fixedAssets = [], refetch: refetchFixedAssets } = useRealtimeTable<FixedAsset>('fixed_assets', () => database.fetchFixedAssets());
@@ -283,102 +283,102 @@ export const Owner: React.FC = () => {
         />
 
         {/* 3. Owner Navigation Tabs */}
-        <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-1">
+        <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto no-scrollbar pb-2">
           <button
             onClick={() => setActiveTab('overview')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'overview'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Building2 size={14} />
-            Ringkasan & Komparasi Cabang
+            <Building2 size={14} className="shrink-0" />
+            <span>Ringkasan & Komparasi Cabang</span>
           </button>
 
           <button
             onClick={() => setActiveTab('signature')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'signature'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <PenTool size={14} className={activeTab === 'signature' ? 'text-emerald-400' : ''} />
+            <PenTool size={14} className={`shrink-0 ${activeTab === 'signature' ? 'text-emerald-400' : ''}`} />
             <span>Master TTD & Stempel Resmi</span>
           </button>
 
           <button
             onClick={() => setActiveTab('midtrans')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'midtrans'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <CreditCard size={14} />
-            Arus Kas Midtrans & Kliring
+            <CreditCard size={14} className="shrink-0" />
+            <span>Arus Kas Midtrans & Kliring</span>
           </button>
 
           <button
             onClick={() => setActiveTab('pnl')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'pnl'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Scale size={14} />
-            Laba Rugi & Dividen
+            <Scale size={14} className="shrink-0" />
+            <span>Laba Rugi & Dividen</span>
           </button>
 
           <button
             onClick={() => setActiveTab('expenses')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'expenses'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <ShieldAlert size={14} />
-            Audit Pengeluaran
+            <ShieldAlert size={14} className="shrink-0" />
+            <span>Audit Pengeluaran</span>
           </button>
 
           <button
             onClick={() => setActiveTab('leases')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'leases'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Clock size={14} />
-            Monitoring Sewa
+            <Clock size={14} className="shrink-0" />
+            <span>Monitoring Sewa</span>
           </button>
 
           <button
             onClick={() => setActiveTab('staff_ops')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'staff_ops'
                 ? 'bg-teal-700 text-white shadow-sm'
                 : 'text-teal-700 hover:text-teal-900 hover:bg-teal-50'
             }`}
           >
-            <Users size={14} className={activeTab === 'staff_ops' ? 'text-teal-200' : 'text-teal-600'} />
+            <Users size={14} className={`shrink-0 ${activeTab === 'staff_ops' ? 'text-teal-200' : 'text-teal-600'}`} />
             <span>Operasional & Log Staf</span>
           </button>
 
           <button
             onClick={() => setActiveTab('assets')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'assets'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Box size={14} className={activeTab === 'assets' ? 'text-teal-400' : 'text-teal-600'} />
+            <Box size={14} className={`shrink-0 ${activeTab === 'assets' ? 'text-teal-400' : 'text-teal-600'}`} />
             <span>Aset & Pemeliharaan</span>
-            <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-200 text-slate-800 font-black">
+            <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-200 text-slate-800 font-black tabular-nums">
               {fixedAssets.length}
             </span>
           </button>
@@ -466,6 +466,8 @@ export const Owner: React.FC = () => {
             selectedPropertyId={selectedPropertyId}
             onRefresh={() => {
               refetchActivityLogs();
+              refetchMaintenance();
+              refetchPettyCash();
             }}
           />
         )}
@@ -475,7 +477,7 @@ export const Owner: React.FC = () => {
             assets={fixedAssets}
             properties={properties}
             selectedPropertyId={selectedPropertyId}
-            readOnly={true}
+            readOnly={false}
             userRole="owner"
             onRefresh={refetchFixedAssets}
           />

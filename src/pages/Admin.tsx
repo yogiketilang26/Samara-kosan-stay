@@ -488,9 +488,9 @@ export default function Admin({}: AdminProps) {
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
-  // Proteksi role Anak Owner: larang akses ke 6 modul teknis/privilege
+  // Proteksi role Anak Owner: larang akses ke 5 modul teknis/privilege (user_roles diizinkan sesuai matriks RBAC)
   useEffect(() => {
-    if (isAnakOwner && ['email_integration', 'midtrans_logs', 'egress_management', 'observability', 'activity_logs', 'user_roles'].includes(activeTab)) {
+    if (isAnakOwner && ['email_integration', 'midtrans_logs', 'egress_management', 'observability', 'activity_logs'].includes(activeTab)) {
       setActiveTab('dashboard');
     }
   }, [activeTab, isAnakOwner]);
@@ -3014,9 +3014,9 @@ export default function Admin({}: AdminProps) {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 flex flex-col md:flex-row gap-6 font-sans relative">
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8 flex flex-col md:flex-row gap-4 lg:gap-6 font-sans relative">
       {/* Toast Notifications */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full">
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full px-4 sm:px-0">
         {toasts.map(t => (
           <div
             key={t.id}
@@ -3040,7 +3040,7 @@ export default function Admin({}: AdminProps) {
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isAnakOwner={isAnakOwner} />
 
       {/* Primary tab views switcher */}
-      <div className="flex-1 bg-white border border-[#E2E8F0] rounded-[24px] p-6 sm:p-8 shadow-sm space-y-6 min-h-[70vh]">
+      <div className="flex-1 min-w-0 bg-white border border-[#E2E8F0] rounded-[24px] p-4 sm:p-6 lg:p-8 shadow-sm space-y-6 min-h-[70vh] overflow-x-hidden">
         {/* Banner Simulasi Anak Owner untuk Super Admin */}
         {isSuper && simulatedRole === 'anak_owner' && (
           <div className="bg-purple-900 text-white rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
@@ -3627,25 +3627,44 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       <h4 className="font-extrabold text-[#3A444D] uppercase mt-2 text-sm">Calon Penghuni: {s.tenant_name || (s as any).client_name} ({s.phone})</h4>
                       <p className="text-[11px] text-[#64748B] font-mono mt-1">Pilihan: Kamar {s.room_number} | Jadwal: {s.survey_date} @ {s.survey_time_slot}</p>
                     </div>
-                    <span className={`text-[9px] font-mono px-3 py-1 rounded-full border font-bold uppercase ${
-                      s.status === 'survey_confirmed' 
-                        ? 'bg-blue-50 text-blue-700 border-blue-200' 
-                        : s.status === 'survey_completed' 
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                          : s.status === 'pending_payment'
-                            ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
-                            : 'bg-rose-50 text-rose-700 border-rose-200'
-                    }`}>
-                      {s.status === 'survey_confirmed' 
-                        ? 'MENUNGGU KEDATANGAN' 
-                        : s.status === 'survey_completed' 
-                          ? 'SUKSES DI-SURVEY' 
-                          : s.status === 'pending_payment'
-                            ? 'MENUNGGU BAYAR DP'
-                            : s.status === 'no_show'
-                              ? 'NO SHOW DP HANGUS'
-                              : 'DIBATALKAN'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[9px] font-mono px-3 py-1 rounded-full border font-bold uppercase ${
+                        s.status === 'survey_confirmed' 
+                          ? 'bg-blue-50 text-blue-700 border-blue-200' 
+                          : s.status === 'survey_completed' 
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                            : s.status === 'pending_payment'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                              : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}>
+                        {s.status === 'survey_confirmed' 
+                          ? 'MENUNGGU KEDATANGAN' 
+                          : s.status === 'survey_completed' 
+                            ? 'SUKSES DI-SURVEY' 
+                            : s.status === 'pending_payment'
+                              ? 'MENUNGGU BAYAR DP'
+                              : s.status === 'no_show'
+                                ? 'NO SHOW DP HANGUS'
+                                : 'DIBATALKAN'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm(`Hapus jadwal survey untuk ${s.tenant_name}?`)) return;
+                          try {
+                            await database.deleteSurvey(s.id);
+                            setSurveys(prev => prev.filter(item => item.id !== s.id));
+                            database.logActivity(user?.name || "Admin", "DELETE_SURVEY", `Menghapus jadwal survey ${s.tenant_name}`);
+                          } catch (err: any) {
+                            alert("Gagal menghapus survey: " + err.message);
+                          }
+                        }}
+                        className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg border border-rose-100 transition-colors cursor-pointer"
+                        title="Hapus Jadwal Survey"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
 
                   {s.status === 'survey_confirmed' && (
@@ -5199,6 +5218,23 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                      Setujui & Post Jurnal
                                    </button>
                                  )}
+                                 <button
+                                   type="button"
+                                   onClick={async () => {
+                                     if (!window.confirm(`Hapus Purchase Order PO-#${po.id} (${po.items})?`)) return;
+                                     try {
+                                       await database.deletePurchaseOrder(po.id);
+                                       setPurchaseOrders(prev => prev.filter(p => p.id !== po.id));
+                                       database.logActivity(user?.name || "Admin", "DELETE_PO", `Menghapus PO #${po.id}`);
+                                     } catch (err: any) {
+                                       alert("Gagal menghapus PO: " + err.message);
+                                     }
+                                   }}
+                                   className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg border border-rose-100 transition-colors cursor-pointer"
+                                   title="Hapus Purchase Order"
+                                 >
+                                   <Trash2 size={12} />
+                                 </button>
                                </div>
                              </div>
                            ))}
@@ -5216,7 +5252,32 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                              <Layers size={13} className="text-blue-600" />
                              Gudang & Inventaris Amenities (FIFO Stock Card)
                            </h4>
-                           <span className="bg-blue-50 text-blue-700 font-mono text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase">QR Coded</span>
+                           <button
+                             type="button"
+                             onClick={async () => {
+                               const name = prompt("Nama barang inventaris baru (contoh: Bohlam LED 12W):");
+                               if (!name || !name.trim()) return;
+                               const category = prompt("Kategori barang:", "Listrik & Fasilitas") || "Amenities";
+                               const stock = Number(prompt("Stok awal:", "10") || 10);
+                               const unit = prompt("Satuan (Pcs / Botol / Set):", "Pcs") || "Pcs";
+                               try {
+                                 const saved = await database.saveInventoryItem({
+                                   name: name.trim(),
+                                   category: category.trim(),
+                                   stock: isNaN(stock) ? 10 : stock,
+                                   minStock: 5,
+                                   unit: unit.trim()
+                                 });
+                                 setInventoryItems(prev => [saved, ...prev]);
+                                 database.logActivity(user?.name || "Admin", "CREATE_INVENTORY", `Menambah item inventaris ${name}`);
+                               } catch (err: any) {
+                                 alert("Gagal menambah inventaris: " + err.message);
+                               }
+                             }}
+                             className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[9px] px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                           >
+                             <Plus size={10} /> Tambah Item
+                           </button>
                          </div>
  
                          <div className="space-y-3">
@@ -5238,42 +5299,55 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                </div>
                                <div className="flex justify-between items-center pt-1 border-t border-slate-200/50">
                                  <span className="text-[9px] text-[#64748B] font-sans">Min: {item.minStock} {item.unit}</span>
-                                 <button
-                                   onClick={async () => {
-                                     const rawAdjustment = prompt(`Stock Opname untuk ${item.name}. Masukkan stock real sekarang:`, item.stock.toString());
-                                     if (rawAdjustment === null) return;
-                                     const val = Number(rawAdjustment);
-                                     if (isNaN(val) || val < 0) {
-                                       alert("Harap masukkan angka stock valid.");
-                                       return;
-                                     }
-                                     
-                                     const diff = val - item.stock;
-                                     if (diff !== 0) {
-                                       const cost = Math.abs(diff) * 25000; // standard item cost
-                                       if (diff < 0) {
-                                         // Stock down: post adjustment expense!
-                                         await database.recordFinancialExpense(5100, 1010, cost, `[STOK OPNAME SELISIH] Pengurangan stock ${item.name} sebanyak ${Math.abs(diff)} unit`, "Kerugian Selisih Persediaan");
-                                       } else {
-                                         // Stock up
-                                         await database.recordFinancialExpense(1010, 4300, cost, `[STOK OPNAME SELISIH] Kelebihan penemuan persediaan ${item.name} sebanyak ${diff} unit`, "Pendapatan Operasional Lainnya");
+                                 <div className="flex items-center gap-1.5">
+                                   <button
+                                     onClick={async () => {
+                                       const rawAdjustment = prompt(`Stock Opname untuk ${item.name}. Masukkan stock real sekarang:`, item.stock.toString());
+                                       if (rawAdjustment === null) return;
+                                       const val = Number(rawAdjustment);
+                                       if (isNaN(val) || val < 0) {
+                                         alert("Harap masukkan angka stock valid.");
+                                         return;
                                        }
                                        
-                                       // Save to database
-                                       await database.saveInventoryItem({ ...item, stock: val });
-
-                                       database.logActivity("System Finance", "STOCK_OPNAME", `Stock opname ${item.name} disesuaikan dari ${item.stock} ke ${val}`);
-                                       alert("Stock Opname tersimpan! Jurnal selisih inventaris ter-posting otomatis.");
-                                       
-                                       const updatedItems = inventoryItems.map(i => i.id === item.id ? { ...i, stock: val } : i);
-                                       setInventoryItems(updatedItems);
-                                       
-                                     }
-                                   }}
-                                   className="text-[9px] text-[#10b981] font-bold border border-emerald-200 bg-emerald-50/50 px-2 py-0.5 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer font-sans"
-                                 >
-                                   Stock Opname
-                                 </button>
+                                       const diff = val - item.stock;
+                                       if (diff !== 0) {
+                                         const cost = Math.abs(diff) * 25000; // standard item cost
+                                         if (diff < 0) {
+                                           await database.recordFinancialExpense(5100, 1010, cost, `[STOK OPNAME SELISIH] Pengurangan stock ${item.name} sebanyak ${Math.abs(diff)} unit`, "Kerugian Selisih Persediaan");
+                                         } else {
+                                           await database.recordFinancialExpense(1010, 4300, cost, `[STOK OPNAME SELISIH] Kelebihan penemuan persediaan ${item.name} sebanyak ${diff} unit`, "Pendapatan Operasional Lainnya");
+                                         }
+                                         
+                                         await database.saveInventoryItem({ ...item, stock: val });
+                                         database.logActivity("System Finance", "STOCK_OPNAME", `Stock opname ${item.name} disesuaikan dari ${item.stock} ke ${val}`);
+                                         alert("Stock Opname tersimpan! Jurnal selisih inventaris ter-posting otomatis.");
+                                         
+                                         const updatedItems = inventoryItems.map(i => i.id === item.id ? { ...i, stock: val } : i);
+                                         setInventoryItems(updatedItems);
+                                       }
+                                     }}
+                                     className="text-[9px] text-[#10b981] font-bold border border-emerald-200 bg-emerald-50/50 px-2 py-0.5 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer font-sans"
+                                   >
+                                     Stock Opname
+                                   </button>
+                                   <button
+                                     type="button"
+                                     onClick={async () => {
+                                       if (!window.confirm(`Hapus barang inventaris "${item.name}"?`)) return;
+                                       try {
+                                         await database.deleteInventoryItem(item.id);
+                                         setInventoryItems(prev => prev.filter(i => i.id !== item.id));
+                                       } catch (err: any) {
+                                         alert("Gagal menghapus item inventaris: " + err.message);
+                                       }
+                                     }}
+                                     className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg border border-rose-100 transition-colors cursor-pointer"
+                                     title="Hapus Barang Inventaris"
+                                   >
+                                     <Trash2 size={11} />
+                                   </button>
+                                 </div>
                                </div>
                              </div>
                            ))}
@@ -5282,7 +5356,32 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
  
                        {/* Vendor directory */}
                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
-                         <h4 className="text-xs font-bold text-slate-800 font-display">Daftar Rekanan Vendor Utama</h4>
+                         <div className="flex justify-between items-center">
+                           <h4 className="text-xs font-bold text-slate-800 font-display">Daftar Rekanan Vendor Utama</h4>
+                           <button
+                             type="button"
+                             onClick={async () => {
+                               const name = prompt("Nama vendor / rekanan baru:");
+                               if (!name || !name.trim()) return;
+                               const category = prompt("Kategori layanan vendor:", "Maintenance & AC") || "Umum";
+                               const phone = prompt("Nomor telepon / WhatsApp vendor:", "081200000000") || "-";
+                               try {
+                                 const saved = await database.saveVendor({
+                                   name: name.trim(),
+                                   category: category.trim(),
+                                   phone: phone.trim()
+                                 });
+                                 setVendors(prev => [saved, ...prev]);
+                                 database.logActivity(user?.name || "Admin", "CREATE_VENDOR", `Menambah vendor ${name}`);
+                               } catch (err: any) {
+                                 alert("Gagal menambah vendor: " + err.message);
+                               }
+                             }}
+                             className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[9px] px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                           >
+                             <Plus size={10} /> Tambah Vendor
+                           </button>
+                         </div>
                          <div className="space-y-2">
                            {vendors.map(v => (
                              <div key={v.id} className="p-2 px-3 bg-slate-50 border border-slate-100 rounded-xl flex justify-between items-center text-xs">
@@ -5290,7 +5389,25 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                  <strong className="text-slate-800 block">{v.name}</strong>
                                  <span className="text-[9px] text-[#64748B] font-mono">Tipe: {v.category}</span>
                                </div>
-                               <span className="text-[10px] text-slate-500 font-mono">{v.phone}</span>
+                               <div className="flex items-center gap-2">
+                                 <span className="text-[10px] text-slate-500 font-mono">{v.phone}</span>
+                                 <button
+                                   type="button"
+                                   onClick={async () => {
+                                     if (!window.confirm(`Hapus vendor "${v.name}"?`)) return;
+                                     try {
+                                       await database.deleteVendor(v.id);
+                                       setVendors(prev => prev.filter(item => item.id !== v.id));
+                                     } catch (err: any) {
+                                       alert("Gagal menghapus vendor: " + err.message);
+                                     }
+                                   }}
+                                   className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg border border-rose-100 transition-colors cursor-pointer"
+                                   title="Hapus Vendor"
+                                 >
+                                   <Trash2 size={11} />
+                                 </button>
+                               </div>
                              </div>
                            ))}
                          </div>
@@ -5647,33 +5764,51 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                        {formatRupiah(req.amount)}
                                      </span>
 
-                                     {/* Workflow Buttons for Pending Requests */}
-                                     {req.status === "pending" && (
-                                       <div className="flex items-center gap-1.5">
-                                         <button
-                                           disabled={isProcessingPetty}
-                                           onClick={() => handleApprovePettyCash(req)}
-                                           className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-xl transition-all shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                                           title="Setujui dan otomatis terbitkan entri financial_transaction"
-                                         >
-                                           <CheckCircle size={11} />
-                                           <span>Approve</span>
-                                         </button>
+                                     {/* Workflow & CRUD Buttons */}
+                                     <div className="flex items-center gap-1.5">
+                                       {req.status === "pending" && (
+                                         <>
+                                           <button
+                                             disabled={isProcessingPetty}
+                                             onClick={() => handleApprovePettyCash(req)}
+                                             className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-xl transition-all shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                             title="Setujui dan otomatis terbitkan entri financial_transaction"
+                                           >
+                                             <CheckCircle size={11} />
+                                             <span>Approve</span>
+                                           </button>
 
-                                         <button
-                                           disabled={isProcessingPetty}
-                                           onClick={() => {
-                                             setShowRejectPettyModal(req);
-                                             setPettyCashRejectReason("");
-                                           }}
-                                           className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[10px] px-2 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1"
-                                           title="Tolak pengajuan kas kecil"
-                                         >
-                                           <XCircle size={11} />
-                                           <span>Reject</span>
-                                         </button>
-                                       </div>
-                                     )}
+                                           <button
+                                             disabled={isProcessingPetty}
+                                             onClick={() => {
+                                               setShowRejectPettyModal(req);
+                                               setPettyCashRejectReason("");
+                                             }}
+                                             className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[10px] px-2 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                                             title="Tolak pengajuan kas kecil"
+                                           >
+                                             <XCircle size={11} />
+                                             <span>Reject</span>
+                                           </button>
+                                         </>
+                                       )}
+                                       <button
+                                         type="button"
+                                         onClick={async () => {
+                                           if (!window.confirm(`Hapus pengajuan kas kecil #REQ-${req.id} (${req.purpose})?`)) return;
+                                           try {
+                                             await database.deletePettyCashRequest(req.id);
+                                             setPettyCashRequests(prev => prev.filter(item => item.id !== req.id));
+                                           } catch (err: any) {
+                                             alert("Gagal menghapus pengajuan kas kecil: " + err.message);
+                                           }
+                                         }}
+                                         className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-xl border border-rose-200 transition-colors cursor-pointer"
+                                         title="Hapus Pengajuan Kas Kecil"
+                                       >
+                                         <Trash2 size={12} />
+                                       </button>
+                                     </div>
                                    </div>
                                  </div>
                                </div>
@@ -6598,6 +6733,25 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                             </button>
                           </>
                         )}
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!window.confirm(`Hapus permanen data pemesanan sewa "${b.tenant_name}" (Kamar ${b.room_number})?`)) return;
+                            try {
+                              await database.deleteBooking(b.id);
+                              setBookings(prev => prev.filter(item => item.id !== b.id));
+                              database.logActivity(user?.name || "Admin", "DELETE_BOOKING", `Menghapus data booking ${b.tenant_name} (Kamar ${b.room_number})`);
+                            } catch (err: any) {
+                              alert("Gagal menghapus booking: " + err.message);
+                            }
+                          }}
+                          className="p-2 px-3 bg-rose-50 hover:bg-rose-500 text-rose-600 hover:text-white rounded-xl transition font-bold cursor-pointer text-xs flex items-center gap-1.5 border border-rose-100 hover:border-rose-500 shadow-xs ml-auto"
+                          title="Hapus Data Pemesanan"
+                        >
+                          <Trash2 size={11} />
+                          Hapus
+                        </button>
                       </div>
                     </div>
                   );
@@ -6638,38 +6792,45 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                 </button>
                 <button
                   type="button"
-                  onClick={async () => {
-                    const phoneNum = prompt("Ketik nomor WhatsApp penghuni baru (misal: 081293840293):");
-                  const nameInput = prompt("Ketik nama penghuni baru:");
-                  const roomInput = prompt("Ketik nomor kamar penghuni (misal: R201 atau 202):");
-                  const durationInMonthsInput = prompt("Ketik jangka waktu sewa (dalam bulan):", "3");
-
-                  if (nameInput && roomInput && durationInMonthsInput) {
-                    const matchedRoom = rooms.find(r => r.room_number.toLowerCase() === roomInput.toLowerCase());
-                    const payload: Partial<Tenant> = {
-                      full_name: nameInput,
-                      phone: phoneNum || '081293840293',
-                      email: 'manual.tenant@samarastay.com',
-                      avatar_initials: nameInput.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(),
-                      avatar_color: "bg-amber-600",
-                      property_id: matchedRoom ? matchedRoom.property_id : (properties[0]?.id || 1),
-                      room_number: roomInput,
+                  onClick={() => {
+                    setActiveTenantEdit(null);
+                    setTenantForm({
+                      full_name: '',
+                      phone: '',
+                      email: '',
+                      nik: '',
+                      identity_type: 'KTP',
+                      identity_number: '',
+                      ktp_image: '',
+                      birth_place: '',
+                      birth_date: '',
+                      religion: 'Islam',
+                      religion_other: '',
+                      origin_city: '',
+                      job: '',
+                      work_or_study_place: '',
+                      parent_guardian_name: '',
+                      parent_guardian_phone: '',
+                      vehicle_plate_number: '',
+                      property_id: properties[0]?.id || 1,
+                      room_number: rooms[0]?.room_number || '101',
                       start_date: todayJakarta(),
-                      duration_months: Number(durationInMonthsInput) || 1,
-                      payment_status: 'paid'
-                    };
-                    await database.saveTenant(payload);
-                    if (matchedRoom) {
-                      database.saveRoom({ ...matchedRoom, status: 'occupied', current_tenant_name: nameInput });
-                    }
-                    database.logActivity("System", "MANUAL_TENANT_ADD", `Menambah penghuni manual: ${nameInput} di kamar ${roomInput}`);
-                  }
-                }}
-                className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all shadow-sm focus:outline-none cursor-pointer"
-              >
-                <Plus size={11} />
-                Pendaftaran Manual
-              </button>
+                      duration_months: 1,
+                      payment_status: 'paid',
+                      is_married: false,
+                      marriage_certificate_url: '',
+                      spouse_name: '',
+                      spouse_nik: '',
+                      spouse_phone: '',
+                      spouse_relation: 'istri'
+                    });
+                    setShowTenantModal(true);
+                  }}
+                  className="bg-[#0D9488] hover:bg-[#115E59] text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all shadow-sm focus:outline-none cursor-pointer"
+                >
+                  <Plus size={11} />
+                  Pendaftaran Manual
+                </button>
               </div>
             </div>
 
@@ -7121,7 +7282,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
 
-        {!isAnakOwner && activeTab === 'user_roles' && (
+        {activeTab === 'user_roles' && (
           <div className="space-y-4">
             {refreshingModule['users'] && (
               <div className="flex items-center gap-1.5 text-[10px] text-teal-600 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg animate-pulse font-medium w-fit">

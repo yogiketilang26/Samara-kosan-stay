@@ -34,14 +34,16 @@ export default function App() {
   const updateView = useCallback((newView: 'user' | 'admin' | 'owner' | 'staff', pushHistory = true) => {
     setViewState(newView);
     if (pushHistory) {
+      const isAnakOwnerSim = typeof window !== 'undefined' && localStorage.getItem('samara_simulated_role') === 'anak_owner';
       const targetPath = newView === 'admin' 
-        ? '/admin' 
+        ? (isAnakOwnerSim ? '/admin?role=anak_owner' : '/admin')
         : newView === 'staff' 
         ? '/staff' 
         : newView === 'owner' 
         ? '/owner' 
         : '/';
-      if (window.location.pathname !== targetPath) {
+      const currentFull = window.location.pathname + window.location.search;
+      if (currentFull !== targetPath) {
         window.history.pushState({ view: newView }, '', targetPath);
       }
     }

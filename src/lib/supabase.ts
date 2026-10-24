@@ -1086,6 +1086,20 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
     }
   }
 
+  // Route admin/operational tables through secure server-side CRUD endpoint first so RLS never silently drops updates
+  const SERVER_CRUD_TABLES = [
+    'tenants', 'maintenance', 'petty_cash_requests', 'fixed_assets', 'coupons',
+    'facilities', 'budgets', 'vendors', 'purchase_orders', 'inventory_items',
+    'bank_statement_items', 'activity_logs', 'payments', 'accounts'
+  ];
+
+  if (SERVER_CRUD_TABLES.includes(table)) {
+    const srvRes = await serverCrudSave(table, activePayload, id);
+    if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+      return srvRes;
+    }
+  }
+
   try {
     let result: any;
     if (id !== undefined && id !== null) {
@@ -1121,7 +1135,7 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
         }
       }
       // If RLS blocked client-side anon update on admin tables, proxy through secure server admin endpoint
-      if (result.error && (result.error.code === '42501' || result.error.message?.includes('row-level security'))) {
+      if (result.error && (result.error.code === '42501' || result.error.message?.includes('row-level security') || result.error.code === '23505')) {
         if (table === 'rooms') {
           try {
             const headers = await getAuthHeaders();
@@ -1218,6 +1232,9 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
           } catch (serverErr) {
             console.warn(`[safeSupabaseUpsert] Server fallback notice for ${table} update:`, serverErr);
           }
+        } else {
+          const srvRes = await serverCrudSave(table, activePayload, id);
+          if (!srvRes.error && srvRes.data) return srvRes;
         }
       }
       if (result && !result.error && result.data && result.data.length > 0) {
@@ -1345,6 +1362,9 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
           } catch (serverErr) {
             console.warn(`[safeSupabaseUpsert] Server fallback notice for ${table} insert:`, serverErr);
           }
+        } else {
+          const srvRes = await serverCrudSave(table, activePayload, id);
+          if (!srvRes.error && srvRes.data) return srvRes;
         }
       }
       if (result && !result.error && result.data && result.data.length > 0) {
@@ -1356,6 +1376,54 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
     console.error(`safeSupabaseUpsert exception in ${table}:`, err);
     return { error: err };
   }
+}
+
+export async function serverCrudSave(table: string, payload: any, id?: any): Promise<{ data: any[] | null; error: any }> {
+  try {
+    const headers = await getAuthHeaders();
+    const bodyObj = id !== undefined && id !== null ? { ...payload, id } : { ...payload };
+    const apiRes = await fetch(`/api/admin/crud/${table}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(bodyObj)
+    });
+    if (apiRes.ok) {
+      const json = await apiRes.json();
+      if (json.success && json.data) {
+        const rows = Array.isArray(json.data) ? json.data : [json.data];
+        notifyRealtimeMutation(table, id ? 'UPDATE' : 'INSERT', rows[0]);
+        return { data: rows, error: null };
+      }
+    }
+  } catch (err) {
+    // Fallback to client
+  }
+  return { data: null, error: new Error('Server CRUD fallback') };
+}
+
+export async function serverCrudDelete(table: string, id: string | number): Promise<boolean> {
+  try {
+    const headers = await getAuthHeaders();
+    const apiRes = await fetch(`/api/admin/crud/${table}/${encodeURIComponent(String(id))}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include'
+    });
+    if (apiRes.ok) {
+      const json = await apiRes.json();
+      if (json.success) {
+        notifyRealtimeMutation(table, 'DELETE', { id });
+        return true;
+      }
+    } else if (apiRes.status === 403) {
+      const errJson = await apiRes.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Akses ditolak untuk menghapus data ini.');
+    }
+  } catch (err: any) {
+    if (err?.message?.includes('Akses ditolak')) throw err;
+  }
+  return false;
 }
 
 export function logSupabaseError(context: string, error: any, isException = false) {
@@ -2738,6 +2806,8 @@ export const database = {
   async deleteCoupon(id: number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      const srvDel = await serverCrudDelete('coupons', id);
+      if (srvDel) return true;
       const { error } = await supabase.from('coupons').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteCoupon', error);
@@ -3305,6 +3375,12 @@ export const database = {
         category: category || 'general',
         description: description ? description.trim() : ''
       };
+      const srvRes = await serverCrudSave('facilities', payload);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        const created = srvRes.data[0];
+        await this.logActivity("System", "CREATE_FACILITY", `Membuat fasilitas ID ${created?.id}: ${name}`);
+        return created as Facility;
+      }
       const { data, error } = await supabase
         .from('facilities')
         .insert(payload)
@@ -3331,6 +3407,13 @@ export const database = {
       if (data.category !== undefined) payload.category = data.category;
       if (data.description !== undefined) payload.description = data.description.trim();
 
+      const srvRes = await serverCrudSave('facilities', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        const updated = srvRes.data[0];
+        await this.logActivity("System", "UPDATE_FACILITY", `Memperbarui fasilitas ID ${id}: ${updated?.name || ''}`);
+        return updated as Facility;
+      }
+
       const { data: updatedData, error } = await supabase
         .from('facilities')
         .update(payload)
@@ -3352,6 +3435,11 @@ export const database = {
   async deleteFacility(id: number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      const srvDel = await serverCrudDelete('facilities', id);
+      if (srvDel) {
+        await this.logActivity("System", "DELETE_FACILITY", `Menghapus fasilitas ID: ${id}`);
+        return true;
+      }
       const { error } = await supabase.from('facilities').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteFacility', error);
@@ -3556,6 +3644,8 @@ export const database = {
   async clearActivityLogs(): Promise<boolean> {
     if (!isSupabaseConfigured) return true;
     try {
+      const srvDel = await serverCrudDelete('activity_logs', 'all');
+      if (srvDel) return true;
       const { error } = await supabase.from('activity_logs').delete().neq('id', 0);
       if (error) {
         logSupabaseError('clearActivityLogs', error);
@@ -3564,6 +3654,24 @@ export const database = {
       return true;
     } catch (err) {
       console.error('Failed to clear activity logs:', err);
+      return false;
+    }
+  },
+
+  async deleteActivityLog(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) return true;
+    try {
+      const srvDel = await serverCrudDelete('activity_logs', id);
+      if (srvDel) return true;
+      const { error } = await supabase.from('activity_logs').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteActivityLog', error);
+        throw error;
+      }
+      notifyRealtimeMutation('activity_logs', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      console.error('Failed to delete activity log:', err);
       return false;
     }
   },
@@ -3620,6 +3728,11 @@ export const database = {
   async deleteTenant(id: string | number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      const srvDel = await serverCrudDelete('tenants', id);
+      if (srvDel) {
+        await this.logActivity("System", "DELETE_TENANT", `Menghapus data tenant ID: ${id}`);
+        return true;
+      }
       const { error } = await supabase.from('tenants').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteTenant', error);
@@ -3869,6 +3982,11 @@ export const database = {
   async deleteSurvey(id: number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      const srvDel = await serverCrudDelete('surveys', id);
+      if (srvDel) {
+        await this.logActivity("System", "DELETE_SURVEY", `Menghapus data survey ID: ${id}`);
+        return true;
+      }
       const { error } = await supabase.from('surveys').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteSurvey', error);
@@ -3886,6 +4004,11 @@ export const database = {
   async deleteBooking(id: number): Promise<boolean> {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
+      const srvDel = await serverCrudDelete('bookings', id);
+      if (srvDel) {
+        await this.logActivity("System", "DELETE_BOOKING", `Menghapus data booking ID: ${id}`);
+        return true;
+      }
       const { error } = await supabase.from('bookings').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteBooking', error);
@@ -4203,31 +4326,41 @@ export const database = {
         payload.reported_by = maint.reported_by;
       }
 
-      let { data, error } = id
-        ? await supabase.from('maintenance').update(payload).eq('id', id).select().single()
-        : await supabase.from('maintenance').insert(payload).select().single();
+      let data: any = null;
+      let error: any = null;
 
-      // If remote table lacks reported_by column, strip it and retry safely
-      if (error && error.message?.includes('reported_by')) {
-        delete payload.reported_by;
-        const retryRes = id
+      // Primary: Secure server-side CRUD
+      const srvRes = await serverCrudSave('maintenance', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        data = srvRes.data[0];
+      } else {
+        const clientRes = id
           ? await supabase.from('maintenance').update(payload).eq('id', id).select().single()
           : await supabase.from('maintenance').insert(payload).select().single();
-        data = retryRes.data;
-        error = retryRes.error;
-      }
+        data = clientRes.data;
+        error = clientRes.error;
 
-      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
-        const fallbackRes = id
-          ? await supabase.from('maintenances').update(payload).eq('id', id).select().single()
-          : await supabase.from('maintenances').insert(payload).select().single();
-        data = fallbackRes.data;
-        error = fallbackRes.error;
-      }
+        if (error && error.message?.includes('reported_by')) {
+          delete payload.reported_by;
+          const retryRes = id
+            ? await supabase.from('maintenance').update(payload).eq('id', id).select().single()
+            : await supabase.from('maintenance').insert(payload).select().single();
+          data = retryRes.data;
+          error = retryRes.error;
+        }
 
-      if (error) {
-        logSupabaseError('saveMaintenance', error);
-        throw error;
+        if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+          const fallbackRes = id
+            ? await supabase.from('maintenances').update(payload).eq('id', id).select().single()
+            : await supabase.from('maintenances').insert(payload).select().single();
+          data = fallbackRes.data;
+          error = fallbackRes.error;
+        }
+
+        if (error) {
+          logSupabaseError('saveMaintenance', error);
+          throw error;
+        }
       }
 
       const finalRecord = {
@@ -4271,6 +4404,28 @@ export const database = {
     }
   },
 
+  async deleteMaintenance(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const srvDel = await serverCrudDelete('maintenance', id);
+      if (srvDel) {
+        await this.logActivity("System", "DELETE_MAINTENANCE", `Menghapus tiket maintenance ID: ${id}`);
+        return true;
+      }
+      const { error } = await supabase.from('maintenance').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deleteMaintenance', error);
+        throw error;
+      }
+      notifyRealtimeMutation('maintenance', 'DELETE', { id });
+      await this.logActivity("System", "DELETE_MAINTENANCE", `Menghapus tiket maintenance ID: ${id}`);
+      return true;
+    } catch (err) {
+      logSupabaseError('deleteMaintenance', err, true);
+      throw err;
+    }
+  },
+
   // --- PETTY CASH REQUESTS ---
   async fetchPettyCashRequests(options?: { limit?: number; offset?: number }): Promise<PettyCashRequest[]> {
     if (!isSupabaseConfigured) return [];
@@ -4300,13 +4455,20 @@ export const database = {
     if (!isSupabaseConfigured) throw new Error('Supabase not configured');
     try {
       const id = request.id;
-      const payload = {
+      const payload: any = {
         applicant: request.applicant,
         amount: request.amount,
         purpose: request.purpose,
         status: request.status,
         date: request.date
       };
+      if (request.property_id !== undefined) payload.property_id = request.property_id;
+
+      const srvRes = await serverCrudSave('petty_cash_requests', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        return srvRes.data[0] as PettyCashRequest;
+      }
+
       const { data, error } = id
         ? await supabase.from('petty_cash_requests').update(payload).eq('id', id).select().single()
         : await supabase.from('petty_cash_requests').insert(payload).select().single();
@@ -4314,9 +4476,31 @@ export const database = {
         logSupabaseError('savePettyCashRequest', error);
         throw error;
       }
+      notifyRealtimeMutation('petty_cash_requests', id ? 'UPDATE' : 'INSERT', data);
       return data as PettyCashRequest;
     } catch (err) {
       logSupabaseError('savePettyCashRequest', err, true);
+      throw err;
+    }
+  },
+
+  async deletePettyCashRequest(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const srvDel = await serverCrudDelete('petty_cash_requests', id);
+      if (srvDel) {
+        await this.logActivity("System", "DELETE_PETTY_CASH", `Menghapus pengajuan kas kecil ID: ${id}`);
+        return true;
+      }
+      const { error } = await supabase.from('petty_cash_requests').delete().eq('id', id);
+      if (error) {
+        logSupabaseError('deletePettyCashRequest', error);
+        throw error;
+      }
+      notifyRealtimeMutation('petty_cash_requests', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deletePettyCashRequest', err, true);
       throw err;
     }
   },
@@ -4419,6 +4603,16 @@ export const database = {
       if (asset.condition !== undefined) payload.condition = asset.condition;
       if (asset.last_repair_cost !== undefined) payload.last_repair_cost = Number(asset.last_repair_cost);
 
+      // Primary: Secure server-side CRUD
+      const srvRes = await serverCrudSave('fixed_assets', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        const srvRow = srvRes.data[0];
+        finalRecord.id = srvRow.id;
+        finalRecord.created_at = srvRow.created_at || finalRecord.created_at;
+        notifyRealtimeMutation('fixed_assets', id ? 'UPDATE' : 'INSERT', finalRecord);
+        return finalRecord;
+      }
+
       let { data, error } = id
         ? await supabase.from('fixed_assets').update(payload).eq('id', id).select().single()
         : await supabase.from('fixed_assets').insert(payload).select().single();
@@ -4474,6 +4668,8 @@ export const database = {
     }
 
     try {
+      const srvDel = await serverCrudDelete('fixed_assets', id);
+      if (srvDel) return true;
       const { error } = await supabase.from('fixed_assets').delete().eq('id', id);
       if (error) {
         logSupabaseError('deleteFixedAsset', error);
@@ -4527,6 +4723,17 @@ export const database = {
         limit_amount: budget.limit,
         spent: budget.spent
       };
+      const srvRes = await serverCrudSave('budgets', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        const d = srvRes.data[0];
+        return {
+          id: d.id,
+          category: d.category,
+          limit: Number(d.limit_amount || 0),
+          spent: Number(d.spent || 0),
+          created_at: d.created_at
+        };
+      }
       const { data, error } = id
         ? await supabase.from('budgets').update(payload).eq('id', id).select().single()
         : await supabase.from('budgets').insert(payload).select().single();
@@ -4534,6 +4741,7 @@ export const database = {
         logSupabaseError('saveBudget', error);
         throw error;
       }
+      notifyRealtimeMutation('budgets', id ? 'UPDATE' : 'INSERT', data);
       return {
         id: data.id,
         category: data.category,
@@ -4543,6 +4751,21 @@ export const database = {
       };
     } catch (err) {
       logSupabaseError('saveBudget', err, true);
+      throw err;
+    }
+  },
+
+  async deleteBudget(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const srvDel = await serverCrudDelete('budgets', id);
+      if (srvDel) return true;
+      const { error } = await supabase.from('budgets').delete().eq('id', id);
+      if (error) throw error;
+      notifyRealtimeMutation('budgets', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deleteBudget', err, true);
       throw err;
     }
   },
@@ -4581,6 +4804,10 @@ export const database = {
         phone: vendor.phone,
         category: vendor.category
       };
+      const srvRes = await serverCrudSave('vendors', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        return srvRes.data[0] as Vendor;
+      }
       const { data, error } = id
         ? await supabase.from('vendors').update(payload).eq('id', id).select().single()
         : await supabase.from('vendors').insert(payload).select().single();
@@ -4588,9 +4815,25 @@ export const database = {
         logSupabaseError('saveVendor', error);
         throw error;
       }
+      notifyRealtimeMutation('vendors', id ? 'UPDATE' : 'INSERT', data);
       return data as Vendor;
     } catch (err) {
       logSupabaseError('saveVendor', err, true);
+      throw err;
+    }
+  },
+
+  async deleteVendor(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const srvDel = await serverCrudDelete('vendors', id);
+      if (srvDel) return true;
+      const { error } = await supabase.from('vendors').delete().eq('id', id);
+      if (error) throw error;
+      notifyRealtimeMutation('vendors', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deleteVendor', err, true);
       throw err;
     }
   },
@@ -4631,6 +4874,10 @@ export const database = {
         status: po.status,
         date: po.date
       };
+      const srvRes = await serverCrudSave('purchase_orders', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        return srvRes.data[0] as PurchaseOrder;
+      }
       const { data, error } = id
         ? await supabase.from('purchase_orders').update(payload).eq('id', id).select().single()
         : await supabase.from('purchase_orders').insert(payload).select().single();
@@ -4638,9 +4885,25 @@ export const database = {
         logSupabaseError('savePurchaseOrder', error);
         throw error;
       }
+      notifyRealtimeMutation('purchase_orders', id ? 'UPDATE' : 'INSERT', data);
       return data as PurchaseOrder;
     } catch (err) {
       logSupabaseError('savePurchaseOrder', err, true);
+      throw err;
+    }
+  },
+
+  async deletePurchaseOrder(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const srvDel = await serverCrudDelete('purchase_orders', id);
+      if (srvDel) return true;
+      const { error } = await supabase.from('purchase_orders').delete().eq('id', id);
+      if (error) throw error;
+      notifyRealtimeMutation('purchase_orders', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deletePurchaseOrder', err, true);
       throw err;
     }
   },
@@ -4689,6 +4952,19 @@ export const database = {
         min_stock: item.minStock,
         category: item.category
       };
+      const srvRes = await serverCrudSave('inventory_items', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        const d = srvRes.data[0];
+        return {
+          id: d.id,
+          name: d.name,
+          stock: Number(d.stock),
+          unit: d.unit,
+          minStock: Number(d.min_stock),
+          category: d.category,
+          created_at: d.created_at
+        };
+      }
       const { data, error } = id
         ? await supabase.from('inventory_items').update(payload).eq('id', id).select().single()
         : await supabase.from('inventory_items').insert(payload).select().single();
@@ -4696,6 +4972,7 @@ export const database = {
         logSupabaseError('saveInventoryItem', error);
         throw error;
       }
+      notifyRealtimeMutation('inventory_items', id ? 'UPDATE' : 'INSERT', data);
       return {
         id: data.id,
         name: data.name,
@@ -4707,6 +4984,21 @@ export const database = {
       };
     } catch (err) {
       logSupabaseError('saveInventoryItem', err, true);
+      throw err;
+    }
+  },
+
+  async deleteInventoryItem(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const srvDel = await serverCrudDelete('inventory_items', id);
+      if (srvDel) return true;
+      const { error } = await supabase.from('inventory_items').delete().eq('id', id);
+      if (error) throw error;
+      notifyRealtimeMutation('inventory_items', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deleteInventoryItem', err, true);
       throw err;
     }
   },
@@ -4757,6 +5049,20 @@ export const database = {
         matched: stmt.matched,
         matched_ref: stmt.matchedRef
       };
+      const srvRes = await serverCrudSave('bank_statement_items', payload, id);
+      if (!srvRes.error && srvRes.data && srvRes.data.length > 0) {
+        const d = srvRes.data[0];
+        return {
+          id: d.id,
+          date: d.date,
+          desc: d.desc,
+          amount: Number(d.amount),
+          type: d.type,
+          matched: d.matched,
+          matchedRef: d.matched_ref,
+          created_at: d.created_at
+        };
+      }
       const { data, error } = id
         ? await supabase.from('bank_statement_items').update(payload).eq('id', id).select().single()
         : await supabase.from('bank_statement_items').insert(payload).select().single();
@@ -4764,6 +5070,7 @@ export const database = {
         logSupabaseError('saveBankStatementItem', error);
         throw error;
       }
+      notifyRealtimeMutation('bank_statement_items', id ? 'UPDATE' : 'INSERT', data);
       return {
         id: data.id,
         date: data.date,
@@ -4776,6 +5083,21 @@ export const database = {
       };
     } catch (err) {
       logSupabaseError('saveBankStatementItem', err, true);
+      throw err;
+    }
+  },
+
+  async deleteBankStatementItem(id: number): Promise<boolean> {
+    if (!isSupabaseConfigured) throw new Error('Supabase not configured');
+    try {
+      const srvDel = await serverCrudDelete('bank_statement_items', id);
+      if (srvDel) return true;
+      const { error } = await supabase.from('bank_statement_items').delete().eq('id', id);
+      if (error) throw error;
+      notifyRealtimeMutation('bank_statement_items', 'DELETE', { id });
+      return true;
+    } catch (err) {
+      logSupabaseError('deleteBankStatementItem', err, true);
       throw err;
     }
   },

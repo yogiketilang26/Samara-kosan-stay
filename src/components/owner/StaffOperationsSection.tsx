@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Users, Wrench, Wallet, AlertTriangle, CheckCircle2, Clock, 
   MessageSquare, ShieldCheck, BedDouble, Calendar, ArrowUpRight,
-  Filter, Search, RefreshCw, Send, Check, X, Sparkles, Plus, DollarSign
+  Filter, Search, RefreshCw, Send, Check, X, Sparkles, Plus, DollarSign, Edit, Trash2
 } from 'lucide-react';
 import { Maintenance, PettyCashRequest, ActivityLog, Property, Room } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
@@ -31,6 +31,7 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isUpdatingStatusId, setIsUpdatingStatusId] = useState<number | null>(null);
   const [showCreateMaintenanceModal, setShowCreateMaintenanceModal] = useState(false);
+  const [editingMaintenanceId, setEditingMaintenanceId] = useState<number | null>(null);
   const [isSubmittingMaintenance, setIsSubmittingMaintenance] = useState(false);
   const [maintenanceForm, setMaintenanceForm] = useState({
     property_id: properties[0]?.id || 1,
@@ -43,6 +44,27 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
     cost: '' as string | number,
     post_to_finance: true,
     credit_account_id: 1010
+  });
+
+  // Shift Note / Operational Instruction CRUD State
+  const [showShiftNoteModal, setShowShiftNoteModal] = useState(false);
+  const [shiftNoteForm, setShiftNoteForm] = useState({
+    sender: 'Owner / Manajemen',
+    type: 'STAFF_SHIFT_HANDOVER' as 'STAFF_SHIFT_HANDOVER' | 'STAFF_MEMO_URGENT',
+    detail: ''
+  });
+  const [isSubmittingNote, setIsSubmittingNote] = useState(false);
+
+  // Petty Cash CRUD State
+  const [showPettyCashModal, setShowPettyCashModal] = useState(false);
+  const [editingPettyCashId, setEditingPettyCashId] = useState<number | null>(null);
+  const [isSubmittingPettyCash, setIsSubmittingPettyCash] = useState(false);
+  const [pettyCashForm, setPettyCashForm] = useState({
+    applicant: 'Staf Operasional',
+    purpose: '',
+    amount: '' as string | number,
+    date: new Date().toISOString().split('T')[0],
+    status: 'pending' as 'pending' | 'approved' | 'rejected'
   });
 
   // Modal: Input / Update Biaya Perbaikan & Laporan Keuangan
@@ -94,6 +116,7 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
         debit_account_id?: number;
         credit_account_id?: number;
       } = {
+        ...(editingMaintenanceId ? { id: editingMaintenanceId } : {}),
         property_id: Number(maintenanceForm.property_id),
         room: maintenanceForm.room.trim(),
         title: maintenanceForm.title.trim(),
@@ -102,7 +125,7 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
         tech: maintenanceForm.tech.trim() || 'Teknisi In-House',
         reported_by: maintenanceForm.reported_by.trim() || 'Staf Lapangan',
         cost: parsedCost,
-        status: 'open',
+        status: editingMaintenanceId ? (maintenanceList.find(m => m.id === editingMaintenanceId)?.status || 'open') : 'open',
         date: new Date().toISOString().split('T')[0],
         post_to_finance: willPostToFinance,
         debit_account_id: 5100,
@@ -111,10 +134,11 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
       await database.saveMaintenance(newTicket);
       await database.logActivity(
         'Staff Ops',
-        'CREATE_MAINTENANCE',
+        editingMaintenanceId ? 'UPDATE_MAINTENANCE' : 'CREATE_MAINTENANCE',
         `Tiket Perbaikan Kamar ${newTicket.room}: ${newTicket.title} (Pelapor: ${newTicket.reported_by}, Teknisi: ${newTicket.tech}${parsedCost > 0 ? `, Biaya: Rp ${parsedCost.toLocaleString('id-ID')}` : ''}${willPostToFinance ? ' [Masuk Laporan Keuangan]' : ''})`
       );
       setShowCreateMaintenanceModal(false);
+      setEditingMaintenanceId(null);
       setMaintenanceForm({
         property_id: properties[0]?.id || 1,
         room: '',
@@ -129,9 +153,136 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
       });
       if (onRefresh) onRefresh();
     } catch (err: any) {
-      console.error('Failed to create maintenance ticket:', err);
+      console.error('Failed to create/update maintenance ticket:', err);
     } finally {
       setIsSubmittingMaintenance(false);
+    }
+  };
+
+  const handleEditMaintenance = (ticket: Maintenance) => {
+    setEditingMaintenanceId(ticket.id);
+    setMaintenanceForm({
+      property_id: ticket.property_id || properties[0]?.id || 1,
+      room: ticket.room || '',
+      title: ticket.title || '',
+      priority: (ticket.priority as any) || 'Normal',
+      desc_field: ticket.desc_field || '',
+      tech: ticket.tech || 'Teknisi In-House',
+      reported_by: ticket.reported_by || 'Staf Operasional',
+      cost: ticket.cost || '',
+      post_to_finance: false,
+      credit_account_id: 1010
+    });
+    setShowCreateMaintenanceModal(true);
+  };
+
+  const handleDeleteMaintenance = async (ticket: Maintenance) => {
+    try {
+      await database.deleteMaintenance(ticket.id);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to delete maintenance ticket:', err);
+    }
+  };
+
+  const handleSaveShiftNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shiftNoteForm.detail.trim()) return;
+    try {
+      setIsSubmittingNote(true);
+      await database.logActivity(
+        shiftNoteForm.sender.trim() || 'Manajemen',
+        shiftNoteForm.type,
+        shiftNoteForm.detail.trim()
+      );
+      setShiftNoteForm({
+        sender: 'Owner / Manajemen',
+        type: 'STAFF_SHIFT_HANDOVER',
+        detail: ''
+      });
+      setShowShiftNoteModal(false);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to save shift note:', err);
+    } finally {
+      setIsSubmittingNote(false);
+    }
+  };
+
+  const handleDeleteLog = async (logId: number) => {
+    try {
+      await database.deleteActivityLog(logId);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to delete activity log:', err);
+    }
+  };
+
+  const handleSavePettyCash = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pettyCashForm.purpose.trim() || !Number(pettyCashForm.amount)) return;
+    try {
+      setIsSubmittingPettyCash(true);
+      await database.savePettyCashRequest({
+        ...(editingPettyCashId ? { id: editingPettyCashId } : {}),
+        applicant: pettyCashForm.applicant.trim() || 'Staf Operasional',
+        purpose: pettyCashForm.purpose.trim(),
+        amount: Number(pettyCashForm.amount),
+        date: pettyCashForm.date || new Date().toISOString().split('T')[0],
+        status: pettyCashForm.status
+      });
+      setShowPettyCashModal(false);
+      setEditingPettyCashId(null);
+      setPettyCashForm({
+        applicant: 'Staf Operasional',
+        purpose: '',
+        amount: '',
+        date: new Date().toISOString().split('T')[0],
+        status: 'pending'
+      });
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to save petty cash:', err);
+    } finally {
+      setIsSubmittingPettyCash(false);
+    }
+  };
+
+  const handleUpdatePettyCashStatus = async (item: PettyCashRequest, newStatus: 'approved' | 'rejected') => {
+    try {
+      await database.savePettyCashRequest({
+        ...item,
+        status: newStatus
+      });
+      if (newStatus === 'approved' && Number(item.amount) > 0) {
+        try {
+          await database.recordFinancialExpense(
+            5100,
+            1010,
+            Number(item.amount),
+            `[KAS KECIL OPERASIONAL] ${item.purpose} (Pemohon: ${item.applicant})`,
+            'Kas Kecil Operasional',
+            item.property_id || null,
+            'petty_cash',
+            String(item.id),
+            'Owner / Admin Approval'
+          );
+        } catch (finErr) {
+          console.warn('Optional petty cash ledger post warning:', finErr);
+        }
+      }
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to update petty cash status:', err);
+    }
+  };
+
+  const handleDeletePettyCash = async (id: number) => {
+    try {
+      await database.deletePettyCashRequest(id);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to delete petty cash request:', err);
     }
   };
 
@@ -333,8 +484,15 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
               </p>
             </div>
 
-            {/* Filter Pills */}
-            <div className="flex items-center gap-1 overflow-x-auto pb-1">
+            {/* Filter Pills + Tambah Catatan */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              <button
+                onClick={() => setShowShiftNoteModal(true)}
+                className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100 flex items-center gap-1 cursor-pointer whitespace-nowrap"
+              >
+                <Plus size={12} />
+                <span>Catatan Baru</span>
+              </button>
               {[
                 { id: 'all', label: 'Semua' },
                 { id: 'shift', label: 'Shift Handover' },
@@ -405,9 +563,18 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
                           {log.action}
                         </span>
                       </div>
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {log.created_at ? new Date(log.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : (log.time || 'Baru Saja')}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {log.created_at ? new Date(log.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : (log.time || 'Baru Saja')}
+                        </span>
+                        <button
+                          onClick={() => handleDeleteLog(log.id)}
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Hapus catatan ini"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </div>
 
                     <p className="text-xs text-slate-700 leading-relaxed font-sans">
@@ -434,7 +601,22 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowCreateMaintenanceModal(true)}
+                onClick={() => {
+                  setEditingMaintenanceId(null);
+                  setMaintenanceForm({
+                    property_id: properties[0]?.id || 1,
+                    room: '',
+                    title: '',
+                    priority: 'Normal',
+                    desc_field: '',
+                    tech: 'Teknisi In-House',
+                    reported_by: 'Staf Operasional',
+                    cost: '',
+                    post_to_finance: true,
+                    credit_account_id: 1010
+                  });
+                  setShowCreateMaintenanceModal(true);
+                }}
                 className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-bold rounded-lg border border-teal-200 flex items-center gap-1 transition-colors cursor-pointer"
                 title="Tambah tiket perbaikan baru"
               >
@@ -455,7 +637,7 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
                 <p className="text-[10px] text-slate-400 mt-0.5">Seluruh unit kamar beroperasi normal.</p>
               </div>
             ) : (
-              filteredMaintenance.slice(0, 10).map(ticket => (
+              filteredMaintenance.slice(0, 15).map(ticket => (
                 <div key={ticket.id} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -521,7 +703,7 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
                     )}
                   </div>
 
-                  {/* Action Buttons: Button Proses, Biaya, dan Selesai */}
+                  {/* Action Buttons: Button Proses, Biaya, Selesai, Edit, dan Hapus */}
                   <div className="flex items-center justify-between pt-1.5 border-t border-slate-200/60 gap-2">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {/* Button Proses */}
@@ -566,13 +748,26 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
                         title="Klik jika perbaikan telah rampung"
                       >
                         <CheckCircle2 size={11} />
-                        <span>{ticket.status === 'completed' ? 'Selesai' : 'Selesai'}</span>
+                        <span>Selesai</span>
                       </button>
                     </div>
 
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      {ticket.date}
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleEditMaintenance(ticket)}
+                        className="p-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 transition-colors cursor-pointer"
+                        title="Edit Tiket"
+                      >
+                        <Edit size={11} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteMaintenance(ticket)}
+                        className="p-1.5 rounded-lg bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 transition-colors cursor-pointer"
+                        title="Hapus Tiket"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))
@@ -591,12 +786,31 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
               Transparansi Pengajuan Kas Kecil & Belanja Operasional Staf
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Permohonan belanja darurat / operasional (bohlam, perlengkapan kebersihan, pulsa listrik) yang diajukan staf ke Super Admin.
+              Permohonan belanja darurat / operasional (bohlam, perlengkapan kebersihan, pulsa listrik) yang diajukan staf ke Super Admin / Owner.
             </p>
           </div>
-          <span className="text-xs text-slate-500 font-mono">
-            {filteredPettyCash.length} permohonan tercatat
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setEditingPettyCashId(null);
+                setPettyCashForm({
+                  applicant: 'Staf Operasional',
+                  purpose: '',
+                  amount: '',
+                  date: new Date().toISOString().split('T')[0],
+                  status: 'pending'
+                });
+                setShowPettyCashModal(true);
+              }}
+              className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl border border-blue-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Plus size={13} />
+              <span>Ajukan Kas Kecil</span>
+            </button>
+            <span className="text-xs text-slate-500 font-mono">
+              {filteredPettyCash.length} permohonan
+            </span>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -607,18 +821,19 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
                 <th className="py-2.5 px-3">Pemohon (Staf)</th>
                 <th className="py-2.5 px-3">Keperluan / Kebutuhan</th>
                 <th className="py-2.5 px-3 text-right">Nominal</th>
-                <th className="py-2.5 px-3 text-center">Status Otorisasi Super Admin</th>
+                <th className="py-2.5 px-3 text-center">Status Otorisasi</th>
+                <th className="py-2.5 px-3 text-right">Tindakan CRUD</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredPettyCash.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                  <td colSpan={6} className="py-8 text-center text-slate-400 text-xs">
                     Belum ada pengajuan kas kecil dari staf lapangan.
                   </td>
                 </tr>
               ) : (
-                filteredPettyCash.slice(0, 10).map(p => (
+                filteredPettyCash.slice(0, 15).map(p => (
                   <tr key={p.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="py-3 px-3 text-slate-500 font-mono text-[11px]">
                       {p.date || 'Hari ini'}
@@ -643,8 +858,56 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
                         {p.status === 'approved' && <Check size={11} />}
                         {p.status === 'rejected' && <X size={11} />}
                         {p.status === 'pending' && <Clock size={11} />}
-                        {p.status === 'approved' ? 'Disetujui Admin' : p.status === 'rejected' ? 'Ditolak Admin' : 'Menunggu Approval'}
+                        {p.status === 'approved' ? 'Disetujui' : p.status === 'rejected' ? 'Ditolak' : 'Menunggu Approval'}
                       </span>
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        {p.status === 'pending' && (
+                          <>
+                            <button
+                              onClick={() => handleUpdatePettyCashStatus(p, 'approved')}
+                              className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                              title="Setujui & Cairkan Kas Kecil"
+                            >
+                              <Check size={11} />
+                              <span>Setujui</span>
+                            </button>
+                            <button
+                              onClick={() => handleUpdatePettyCashStatus(p, 'rejected')}
+                              className="px-2 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                              title="Tolak Pengajuan"
+                            >
+                              <X size={11} />
+                              <span>Tolak</span>
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => {
+                            setEditingPettyCashId(p.id);
+                            setPettyCashForm({
+                              applicant: p.applicant || 'Staf Operasional',
+                              purpose: p.purpose || '',
+                              amount: p.amount || '',
+                              date: p.date || new Date().toISOString().split('T')[0],
+                              status: p.status || 'pending'
+                            });
+                            setShowPettyCashModal(true);
+                          }}
+                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                          title="Edit Pengajuan"
+                        >
+                          <Edit size={12} />
+                        </button>
+                        <button
+                          onClick={() => handleDeletePettyCash(p.id)}
+                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 cursor-pointer"
+                          title="Hapus Pengajuan"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -958,6 +1221,215 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
                   className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
                 >
                   {isSubmittingCost ? 'Menyimpan...' : 'Simpan & Sinkron Keuangan'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: TAMBAH CATATAN SHIFT / INSTRUKSI OPERASIONAL */}
+      {showShiftNoteModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-150 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 font-display flex items-center gap-2">
+                  <MessageSquare size={18} className="text-teal-600" />
+                  Tambah Catatan Shift / Instruksi Staf
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Kirim instruksi operasional atau catatan serah terima shift.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowShiftNoteModal(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveShiftNote} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                  Nama Pengirim / Jabatan
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={shiftNoteForm.sender}
+                  onChange={(e) => setShiftNoteForm({ ...shiftNoteForm, sender: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                  Kategori Catatan
+                </label>
+                <select
+                  value={shiftNoteForm.type}
+                  onChange={(e) => setShiftNoteForm({ ...shiftNoteForm, type: e.target.value as any })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 outline-none focus:border-teal-500"
+                >
+                  <option value="STAFF_SHIFT_HANDOVER">Serah Terima Shift Reguler</option>
+                  <option value="STAFF_MEMO_URGENT">Instruksi / Memo Penting (Urgent)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                  Isi Catatan / Instruksi Lapangan
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  placeholder="Tulis catatan serah terima kunci, instruksi kebersihan, atau pengingat operasional..."
+                  value={shiftNoteForm.detail}
+                  onChange={(e) => setShiftNoteForm({ ...shiftNoteForm, detail: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 outline-none focus:border-teal-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowShiftNoteModal(false)}
+                  className="px-4 py-2 rounded-xl text-slate-500 hover:text-slate-800 font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingNote}
+                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingNote ? 'Menyimpan...' : 'Simpan Catatan'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AJUKAN / EDIT KAS KECIL */}
+      {showPettyCashModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-150 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 font-display flex items-center gap-2">
+                  <Wallet size={18} className="text-blue-600" />
+                  {editingPettyCashId ? 'Edit Pengajuan Kas Kecil' : 'Ajukan Kas Kecil Operasional'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Pencatatan belanja operasional harian kos.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPettyCashModal(false);
+                  setEditingPettyCashId(null);
+                }}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSavePettyCash} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                  Nama Pemohon (Staf)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={pettyCashForm.applicant}
+                  onChange={(e) => setPettyCashForm({ ...pettyCashForm, applicant: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                  Keperluan / Rincian Belanja
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: Pembelian lampu LED lorong & cairan pel"
+                  value={pettyCashForm.purpose}
+                  onChange={(e) => setPettyCashForm({ ...pettyCashForm, purpose: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                    Nominal (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1000"
+                    step="1000"
+                    placeholder="150000"
+                    value={pettyCashForm.amount}
+                    onChange={(e) => setPettyCashForm({ ...pettyCashForm, amount: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 font-mono outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                    Tanggal
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={pettyCashForm.date}
+                    onChange={(e) => setPettyCashForm({ ...pettyCashForm, date: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              {editingPettyCashId && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                    Status Otorisasi
+                  </label>
+                  <select
+                    value={pettyCashForm.status}
+                    onChange={(e) => setPettyCashForm({ ...pettyCashForm, status: e.target.value as any })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800 outline-none focus:border-blue-500"
+                  >
+                    <option value="pending">Menunggu Approval</option>
+                    <option value="approved">Disetujui</option>
+                    <option value="rejected">Ditolak</option>
+                  </select>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPettyCashModal(false);
+                    setEditingPettyCashId(null);
+                  }}
+                  className="px-4 py-2 rounded-xl text-slate-500 hover:text-slate-800 font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingPettyCash}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingPettyCash ? 'Menyimpan...' : 'Simpan Kas Kecil'}
                 </button>
               </div>
             </form>

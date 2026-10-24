@@ -1869,14 +1869,14 @@ export default function Home({}: HomeProps) {
     <div className="bg-[#F8F9FA] min-h-screen text-brand-primary font-sans pb-16">
       
       {/* Dynamic Sub-header Navigation Bar */}
-      <div className="bg-brand-primary border-b border-brand-steel/30 sticky top-[65px] z-40 px-4 md:px-8 py-3.5 shadow-sm flex flex-wrap justify-between items-center gap-2 text-xs text-[#F8F9FA]">
-        <div className="flex items-center gap-1.5 md:gap-3">
+      <div className="bg-brand-primary border-b border-brand-steel/30 relative lg:sticky lg:top-[61px] z-30 px-4 sm:px-6 lg:px-8 py-2.5 sm:py-3 shadow-sm flex items-center justify-between gap-3 text-xs text-[#F8F9FA] overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <button 
             onClick={() => {
               setUserPage('home');
               setActiveProperty(null);
             }} 
-            className={`font-semibold px-3 py-1.5 rounded-lg transition-all ${userPage === 'home' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-350 hover:text-white'}`}
+            className={`font-semibold px-3 py-1.5 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${userPage === 'home' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-200 hover:text-white'}`}
           >
             {lang === 'id' ? 'Beranda' : 'Home'}
           </button>
@@ -1885,7 +1885,7 @@ export default function Home({}: HomeProps) {
               setUserPage('search');
               setActiveProperty(null);
             }} 
-            className={`font-semibold px-3 py-1.5 rounded-lg transition-all ${userPage === 'search' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-350 hover:text-white'}`}
+            className={`font-semibold px-3 py-1.5 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${userPage === 'search' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-200 hover:text-white'}`}
           >
             {lang === 'id' ? 'Cari dan Sewa Kos' : 'Search & Rent Rooms'}
           </button>
@@ -1893,51 +1893,51 @@ export default function Home({}: HomeProps) {
             onClick={() => {
               setUserPage('map');
             }} 
-            className={`font-semibold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${userPage === 'map' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-350 hover:text-white'}`}
+            className={`font-semibold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${userPage === 'map' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-200 hover:text-white'}`}
           >
             <MapPin size={12} className={userPage === 'map' ? 'text-brand-primary' : 'text-emerald-400'} />
             <span>{lang === 'id' ? 'Peta & Sekitar' : 'Map & Amenities'}</span>
           </button>
           {activeProperty && (
-            <div className="flex items-center gap-2 text-[#64748B]">
+            <div className="hidden sm:flex items-center gap-2 text-[#64748B] whitespace-nowrap shrink-0">
               <ChevronRight size={12} />
-              <span className="text-brand-beige font-bold bg-brand-steel/20 px-2.5 py-1 rounded-md border border-brand-steel/30">{activeProperty.name}</span>
+              <span className="text-brand-beige font-bold bg-brand-steel/20 px-2.5 py-1 rounded-md border border-brand-steel/30 truncate max-w-[180px]">{activeProperty.name}</span>
             </div>
           )}
         </div>
 
-        <div className="flex items-center gap-3 md:gap-4">
-          <div className="hidden sm:flex items-center gap-2 text-brand-beige/85 font-mono text-[10px]">
+        <div className="flex items-center gap-2.5 md:gap-4 shrink-0">
+          <div className="hidden md:flex items-center gap-2 text-brand-beige/85 font-mono text-[10px] whitespace-nowrap">
             <Sparkles size={12} className="text-brand-beige animate-pulse" />
             <span>{lang === 'id' ? 'GARANSI HARGA ALL-IN ' : 'HONEST ALL-IN PRICE GUARANTEE'}</span>
           </div>
 
           {/* Translation Toggle Switcher (Indonesia / English) */}
-          <div className="flex items-center bg-black/30 p-1 rounded-xl border border-white/20 shadow-inner">
+          <div className="flex items-center bg-black/30 p-1 rounded-xl border border-white/20 shadow-inner shrink-0">
             <button
               type="button"
               onClick={() => setLang('id')}
-              className={`px-2.5 py-1 rounded-lg font-extrabold text-[11px] flex items-center gap-1.5 transition-all cursor-pointer ${
+              className={`px-2 sm:px-2.5 py-1 rounded-lg font-extrabold text-[11px] flex items-center gap-1 transition-all cursor-pointer whitespace-nowrap ${
                 lang === 'id'
-                  ? 'bg-brand-beige text-brand-primary shadow-md scale-105'
+                  ? 'bg-brand-beige text-brand-primary shadow-md'
                   : 'text-slate-300 hover:text-white hover:bg-white/10'
               }`}
               title="Bahasa Indonesia"
             >
-              <span className="text-sm">🇮🇩</span>
+              <span className="text-xs sm:text-sm">🇮🇩</span>
               <span>ID</span>
             </button>
             <button
               type="button"
               onClick={() => setLang('en')}
-              className={`px-2.5 py-1 rounded-lg font-extrabold text-[11px] flex items-center gap-1.5 transition-all cursor-pointer ${
+              className={`px-2 sm:px-2.5 py-1 rounded-lg font-extrabold text-[11px] flex items-center gap-1 transition-all cursor-pointer whitespace-nowrap ${
                 lang === 'en'
-                  ? 'bg-brand-beige text-brand-primary shadow-md scale-105'
+                  ? 'bg-brand-beige text-brand-primary shadow-md'
                   : 'text-slate-300 hover:text-white hover:bg-white/10'
               }`}
               title="English"
             >
-              <span className="text-sm">🇬🇧</span>
+              <span className="text-xs sm:text-sm">🇬🇧</span>
               <span>EN</span>
             </button>
           </div>
@@ -1948,7 +1948,7 @@ export default function Home({}: HomeProps) {
       {/* VIEW 1: HOME PAGE / LANDING PAGE */}
       {/* ========================================================== */}
       {userPage === 'home' && (
-        <div className="space-y-16 animate-fade-in">
+        <div className="space-y-12 sm:space-y-16 animate-fade-in">
           
           {/* Hero Section & Large Search Bar with Real-time 3D Mouse Parallax */}
           <div 
@@ -1961,7 +1961,7 @@ export default function Home({}: HomeProps) {
             onMouseLeave={() => {
               setHeroMouse({ x: 0, y: 0 });
             }}
-            className="relative py-28 px-4 md:px-8 bg-gradient-to-br from-brand-primary via-brand-darker to-brand-primary border-b border-brand-steel/30 overflow-hidden text-[#F8F9FA] perspective-1000 preserve-3d"
+            className="relative py-14 sm:py-20 lg:py-28 px-4 sm:px-6 md:px-8 bg-gradient-to-br from-brand-primary via-brand-darker to-brand-primary border-b border-brand-steel/30 overflow-hidden text-[#F8F9FA] perspective-1000 preserve-3d"
           >
             {/* Background Image Layer - slow opposite movement for classic parallax */}
             <div 
@@ -2006,22 +2006,22 @@ export default function Home({}: HomeProps) {
 
             {/* Content Box with intermediate parallax value */}
             <div 
-              className="max-w-6xl mx-auto relative z-10 text-center space-y-6 transition-transform duration-300 ease-out preserve-3d"
+              className="max-w-6xl mx-auto relative z-10 text-center space-y-5 sm:space-y-6 transition-transform duration-300 ease-out preserve-3d"
               style={{
                 transform: `translate3d(${heroMouse.x * 12}px, ${heroMouse.y * 12}px, 20px)`
               }}
             >
               
-              <div className="inline-flex items-center gap-2 bg-brand-beige/10 border border-brand-beige/25 px-3.5 py-1.5 rounded-full text-xs font-semibold tracking-wider text-brand-beige animate-pulse">
+              <div className="inline-flex items-center gap-2 bg-brand-beige/10 border border-brand-beige/25 px-3.5 py-1.5 rounded-full text-[11px] sm:text-xs font-semibold tracking-wider text-brand-beige animate-pulse">
                 <Sparkle size={13} className="fill-brand-beige" />
                 SAMARA STAY EXCLUSIVE
               </div>
 
-              <h1 className="text-4xl md:text-6xl font-black font-display tracking-tight leading-tight max-w-4xl mx-auto text-white">
+              <h1 className="text-3xl sm:text-4xl md:text-6xl font-black font-display tracking-tight leading-tight max-w-4xl mx-auto text-white">
                 {lang === 'id' ? 'Standar Baru Hunian Modern yang Praktis.' : 'The New Standard for Modern & Practical Living.'}
               </h1>
               
-              <p className="text-slate-200 text-sm md:text-base max-w-2xl mx-auto font-light leading-relaxed">
+              <p className="text-slate-200 text-xs sm:text-sm md:text-base max-w-2xl mx-auto font-light leading-relaxed px-2">
                 {lang === 'id' 
                   ? 'Di mana pun cabangnya, nikmati kenyamanan kos eksklusif dengan sistem all-inclusive. Lengkap dengan Wi-Fi, token listrik, dan laundry tanpa biaya tambahan.'
                   : 'Wherever the branch, enjoy exclusive boarding comfort with an all-inclusive system. Complete with Wi-Fi, electricity, and laundry with no hidden costs.'}
@@ -2030,7 +2030,7 @@ export default function Home({}: HomeProps) {
               {/* Large Interactive Search Bar with full 3D interactive tilt */}
               <form 
                 onSubmit={handleSearchTrigger} 
-                className="bg-white/95 backdrop-blur-md rounded-3xl p-5 md:p-6 border border-brand-beige/65 w-full max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4 text-left shadow-2xl mt-12 text-brand-primary transition-all duration-300 ease-out"
+                className="bg-white/95 backdrop-blur-md rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-brand-beige/65 w-full max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-3.5 sm:gap-4 text-left shadow-2xl mt-8 sm:mt-12 text-brand-primary transition-all duration-300 ease-out"
                 style={{
                   transform: `perspective(1000px) rotateX(${heroMouse.y * -8}deg) rotateY(${heroMouse.x * 8}deg) translate3d(${heroMouse.x * 15}px, ${heroMouse.y * 15}px, 35px)`,
                   transformStyle: 'preserve-3d'

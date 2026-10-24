@@ -5,7 +5,7 @@ import {
   FileText, RefreshCw, MessageSquare, Send, Check, X, 
   ExternalLink, Sparkles, UserX, AlertCircle, ArrowUpRight,
   ChevronRight, ArrowRightLeft, Brush, DoorOpen, Shield,
-  Wallet, ShieldCheck, Megaphone, Radio, Box, DollarSign
+  Wallet, ShieldCheck, Megaphone, Radio, Box, DollarSign, Edit, Trash2
 } from 'lucide-react';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { database } from '../lib/supabase';
@@ -43,8 +43,9 @@ export default function StaffAdmin() {
   const [selectedRoomForStatus, setSelectedRoomForStatus] = useState<Room | null>(null);
   const [newRoomStatus, setNewRoomStatus] = useState<RoomStatus>('available');
 
-  // Modal: Maintenance Ticket
+  // Modal: Maintenance Ticket (Create & Edit)
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
+  const [editingMaintenanceId, setEditingMaintenanceId] = useState<number | null>(null);
   const [maintenanceForm, setMaintenanceForm] = useState({
     property_id: properties[0]?.id || 1,
     room: '',
@@ -56,6 +57,39 @@ export default function StaffAdmin() {
     cost: '' as string | number,
     post_to_finance: true,
     credit_account_id: 1010
+  });
+
+  // Modal: Survey (Create & Edit)
+  const [showSurveyModal, setShowSurveyModal] = useState(false);
+  const [editingSurveyId, setEditingSurveyId] = useState<string | number | null>(null);
+  const [surveyForm, setSurveyForm] = useState({
+    property_id: properties[0]?.id || 1,
+    tenant_name: '',
+    phone: '',
+    email: '',
+    room_number: '',
+    survey_date: todayJakarta(),
+    survey_time_slot: '10:00 - 12:00 WIB',
+    dp_amount: '0',
+    payment_method: 'Tanpa DP',
+    status: 'survey_confirmed' as Survey['status']
+  });
+
+  // Modal: Tenant (Create & Edit)
+  const [showTenantModal, setShowTenantModal] = useState(false);
+  const [editingTenantId, setEditingTenantId] = useState<number | null>(null);
+  const [tenantForm, setTenantForm] = useState({
+    property_id: properties[0]?.id || 1,
+    full_name: '',
+    phone: '',
+    email: '',
+    nik: '',
+    job: 'Karyawan Swasta',
+    room_number: '',
+    start_date: todayJakarta(),
+    duration_months: 1,
+    status: 'active' as Tenant['status'],
+    payment_status: 'paid' as Tenant['payment_status']
   });
 
   // Modal: Input / Update Biaya Perbaikan & Sinkron Laporan Keuangan
@@ -101,8 +135,9 @@ export default function StaffAdmin() {
     notes: 'Penghuni telah mengembalikan kunci unit.'
   });
 
-  // Modal: Petty Cash Request
+  // Modal: Petty Cash Request (Create & Edit)
   const [showPettyCashModal, setShowPettyCashModal] = useState(false);
+  const [editingPettyCashId, setEditingPettyCashId] = useState<number | null>(null);
   const [pettyCashForm, setPettyCashForm] = useState({
     amount: '',
     purpose: '',
@@ -252,7 +287,7 @@ export default function StaffAdmin() {
     }
   };
 
-  // Submit New Maintenance Ticket
+  // Submit New or Edited Maintenance Ticket
   const handleCreateMaintenanceTicket = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!maintenanceForm.room || !maintenanceForm.title) {
@@ -263,12 +298,14 @@ export default function StaffAdmin() {
     try {
       const parsedCost = Number(maintenanceForm.cost) || 0;
       const willPostToFinance = Boolean(maintenanceForm.post_to_finance && parsedCost > 0);
+      const existingTicket = editingMaintenanceId ? maintenanceList.find(m => m.id === editingMaintenanceId) : null;
 
-      const newTicket: Partial<Maintenance> & {
+      const ticketPayload: Partial<Maintenance> & {
         post_to_finance?: boolean;
         debit_account_id?: number;
         credit_account_id?: number;
       } = {
+        ...(existingTicket ? { id: existingTicket.id, status: existingTicket.status, date: existingTicket.date } : { status: 'open', date: todayJakarta() }),
         property_id: Number(maintenanceForm.property_id),
         room: maintenanceForm.room.trim(),
         title: maintenanceForm.title.trim(),
@@ -277,21 +314,23 @@ export default function StaffAdmin() {
         tech: maintenanceForm.tech.trim() || 'Teknisi In-House',
         reported_by: maintenanceForm.reported_by.trim() || user?.name || 'Staff Lapangan',
         cost: parsedCost,
-        status: 'open',
-        date: todayJakarta(),
         post_to_finance: willPostToFinance,
         debit_account_id: 5100,
         credit_account_id: maintenanceForm.credit_account_id || 1010
       };
 
-      await database.saveMaintenance(newTicket);
+      await database.saveMaintenance(ticketPayload);
       await database.logActivity(
         user?.name || 'Staff Lapangan',
-        'CREATE_MAINTENANCE',
-        `Tiket Perbaikan Kamar ${maintenanceForm.room}: ${maintenanceForm.title} (Pelapor: ${newTicket.reported_by}, Teknisi: ${newTicket.tech}${parsedCost > 0 ? `, Biaya: Rp ${parsedCost.toLocaleString('id-ID')}` : ''}${willPostToFinance ? ' [Masuk Laporan Keuangan]' : ''})`
+        editingMaintenanceId ? 'UPDATE_MAINTENANCE' : 'CREATE_MAINTENANCE',
+        `Tiket Perbaikan Kamar ${maintenanceForm.room}: ${maintenanceForm.title} (Pelapor: ${ticketPayload.reported_by}, Teknisi: ${ticketPayload.tech}${parsedCost > 0 ? `, Biaya: Rp ${parsedCost.toLocaleString('id-ID')}` : ''}${willPostToFinance ? ' [Masuk Laporan Keuangan]' : ''})`
       );
-      showToast(`Tiket perbaikan untuk Kamar ${maintenanceForm.room} berhasil dicatat${willPostToFinance ? ' dan biaya otomatis masuk laporan keuangan!' : '.'}`);
+      showToast(editingMaintenanceId
+        ? `Tiket perbaikan Kamar ${maintenanceForm.room} berhasil diperbarui.`
+        : `Tiket perbaikan untuk Kamar ${maintenanceForm.room} berhasil dicatat${willPostToFinance ? ' dan biaya otomatis masuk laporan keuangan!' : '.'}`
+      );
       setShowMaintenanceModal(false);
+      setEditingMaintenanceId(null);
       setMaintenanceForm({
         property_id: properties[0]?.id || 1,
         room: '',
@@ -306,7 +345,130 @@ export default function StaffAdmin() {
       });
       await Promise.all([refetchMaintenance(), refetchActivityLogs()]);
     } catch (err: any) {
-      showToast(err.message || 'Gagal membuat tiket perbaikan.', 'error');
+      showToast(err.message || 'Gagal menyimpan tiket perbaikan.', 'error');
+    }
+  };
+
+  const handleDeleteMaintenanceTicket = async (ticket: Maintenance) => {
+    if (!window.confirm(`Hapus tiket perbaikan "${ticket.title}" (Kamar ${ticket.room})?`)) return;
+    try {
+      await database.deleteMaintenance(ticket.id);
+      await database.logActivity(
+        user?.name || 'Staff Lapangan',
+        'DELETE_MAINTENANCE',
+        `Menghapus tiket perbaikan Kamar ${ticket.room}: ${ticket.title}`
+      );
+      showToast('Tiket perbaikan berhasil dihapus.');
+      await Promise.all([refetchMaintenance(), refetchActivityLogs()]);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menghapus tiket perbaikan.', 'error');
+    }
+  };
+
+  // Save Survey (Create / Update)
+  const handleSaveSurvey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!surveyForm.tenant_name.trim() || !surveyForm.phone.trim()) {
+      showToast('Nama calon penyewa dan nomor WhatsApp wajib diisi.', 'error');
+      return;
+    }
+    try {
+      const existing = editingSurveyId ? surveys.find(s => String(s.id) === String(editingSurveyId)) : null;
+      await database.saveSurvey({
+        ...(existing || {}),
+        ...(editingSurveyId ? { id: editingSurveyId as any } : { invoice_id: `SRV-${Date.now()}` }),
+        property_id: Number(surveyForm.property_id) || properties[0]?.id || 1,
+        tenant_name: surveyForm.tenant_name.trim(),
+        phone: surveyForm.phone.trim(),
+        email: surveyForm.email.trim() || `${surveyForm.phone.trim()}@samarastay.co.id`,
+        room_number: surveyForm.room_number.trim() || '101',
+        survey_date: surveyForm.survey_date || todayJakarta(),
+        survey_time_slot: surveyForm.survey_time_slot || '10:00 - 12:00 WIB',
+        dp_amount: Number(surveyForm.dp_amount) || 0,
+        payment_method: surveyForm.payment_method || 'Tanpa DP',
+        status: surveyForm.status
+      });
+      await database.logActivity(
+        user?.name || 'Staff Lapangan',
+        editingSurveyId ? 'UPDATE_SURVEY' : 'CREATE_SURVEY',
+        `${editingSurveyId ? 'Memperbarui' : 'Menjadwalkan'} survey: ${surveyForm.tenant_name} (Kamar ${surveyForm.room_number || 'Sembarang'})`
+      );
+      showToast(editingSurveyId ? 'Jadwal survey berhasil diperbarui.' : 'Jadwal survey baru berhasil ditambahkan.');
+      setShowSurveyModal(false);
+      setEditingSurveyId(null);
+      await Promise.all([refetchSurveys(), refetchActivityLogs()]);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menyimpan jadwal survey.', 'error');
+    }
+  };
+
+  const handleDeleteSurvey = async (survey: Survey) => {
+    if (!window.confirm(`Hapus jadwal survey atas nama "${survey.tenant_name}"?`)) return;
+    try {
+      await database.deleteSurvey(survey.id);
+      await database.logActivity(
+        user?.name || 'Staff Lapangan',
+        'DELETE_SURVEY',
+        `Menghapus jadwal survey: ${survey.tenant_name}`
+      );
+      showToast('Jadwal survey berhasil dihapus.');
+      await Promise.all([refetchSurveys(), refetchActivityLogs()]);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menghapus jadwal survey.', 'error');
+    }
+  };
+
+  // Save Tenant (Create / Update)
+  const handleSaveTenant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tenantForm.full_name.trim() || !tenantForm.phone.trim() || !tenantForm.room_number.trim()) {
+      showToast('Nama penghuni, No. HP, dan nomor kamar wajib diisi.', 'error');
+      return;
+    }
+    try {
+      const existing = editingTenantId ? tenants.find(t => t.id === editingTenantId) : null;
+      await database.saveTenant({
+        ...(existing || {}),
+        ...(editingTenantId ? { id: editingTenantId } : {}),
+        property_id: Number(tenantForm.property_id) || properties[0]?.id || 1,
+        full_name: tenantForm.full_name.trim(),
+        phone: tenantForm.phone.trim(),
+        email: tenantForm.email.trim() || `${tenantForm.phone.trim()}@samarastay.co.id`,
+        nik: tenantForm.nik.trim() || undefined,
+        job: tenantForm.job.trim() || 'Penghuni Kos',
+        room_number: tenantForm.room_number.trim(),
+        start_date: tenantForm.start_date || todayJakarta(),
+        duration_months: Number(tenantForm.duration_months) || 1,
+        status: tenantForm.status,
+        payment_status: tenantForm.payment_status
+      });
+      await database.logActivity(
+        user?.name || 'Staff Lapangan',
+        editingTenantId ? 'UPDATE_TENANT' : 'CREATE_TENANT',
+        `${editingTenantId ? 'Memperbarui' : 'Menambahkan'} data penghuni: ${tenantForm.full_name} (Kamar ${tenantForm.room_number})`
+      );
+      showToast(editingTenantId ? 'Data penghuni berhasil diperbarui.' : 'Penghuni baru berhasil ditambahkan.');
+      setShowTenantModal(false);
+      setEditingTenantId(null);
+      await Promise.all([refetchTenants(), refetchRooms(), refetchActivityLogs()]);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menyimpan data penghuni.', 'error');
+    }
+  };
+
+  const handleDeleteTenant = async (tenant: Tenant) => {
+    if (!window.confirm(`Hapus data penghuni "${tenant.full_name}" (Kamar ${tenant.room_number})?`)) return;
+    try {
+      await database.deleteTenant(tenant.id);
+      await database.logActivity(
+        user?.name || 'Staff Lapangan',
+        'DELETE_TENANT',
+        `Menghapus penghuni: ${tenant.full_name} (Kamar ${tenant.room_number})`
+      );
+      showToast('Data penghuni berhasil dihapus.');
+      await Promise.all([refetchTenants(), refetchRooms(), refetchActivityLogs()]);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menghapus data penghuni.', 'error');
     }
   };
 
@@ -497,7 +659,7 @@ export default function StaffAdmin() {
     }
   };
 
-  // Submit Petty Cash Request to Super Admin
+  // Submit Petty Cash Request to Super Admin (Create / Update)
   const handleSubmitPettyCash = async (e: React.FormEvent) => {
     e.preventDefault();
     const amountNum = Number(pettyCashForm.amount);
@@ -509,22 +671,24 @@ export default function StaffAdmin() {
     setIsSubmittingPetty(true);
     try {
       const applicantName = user?.name || user?.email?.split('@')[0] || 'Staff Lapangan';
+      const existingReq = editingPettyCashId ? pettyCashList.find(p => p.id === editingPettyCashId) : null;
       await database.savePettyCashRequest({
-        applicant: applicantName,
+        ...(existingReq ? { id: existingReq.id, status: existingReq.status } : { status: 'pending' }),
+        applicant: existingReq?.applicant || applicantName,
         amount: amountNum,
         purpose: pettyCashForm.purpose.trim(),
-        status: 'pending',
         date: pettyCashForm.date || todayJakarta()
       });
 
       await database.logActivity(
         applicantName,
-        'PETTY_CASH_REQUEST',
-        `Pengajuan Kas Kecil Rp ${amountNum.toLocaleString('id-ID')} untuk ${pettyCashForm.purpose.trim()}`
+        editingPettyCashId ? 'PETTY_CASH_UPDATE' : 'PETTY_CASH_REQUEST',
+        `${editingPettyCashId ? 'Perubahan' : 'Pengajuan'} Kas Kecil Rp ${amountNum.toLocaleString('id-ID')} untuk ${pettyCashForm.purpose.trim()}`
       );
 
-      showToast('Pengajuan kas kecil berhasil terkirim ke Super Admin!');
+      showToast(editingPettyCashId ? 'Pengajuan kas kecil berhasil diperbarui!' : 'Pengajuan kas kecil berhasil terkirim ke Super Admin!');
       setShowPettyCashModal(false);
+      setEditingPettyCashId(null);
       setPettyCashForm({
         amount: '',
         purpose: '',
@@ -535,6 +699,17 @@ export default function StaffAdmin() {
       showToast(err.message || 'Gagal mengirim pengajuan kas kecil.', 'error');
     } finally {
       setIsSubmittingPetty(false);
+    }
+  };
+
+  const handleDeletePettyCash = async (req: PettyCashRequest) => {
+    if (!window.confirm(`Hapus pengajuan kas kecil "${req.purpose}"?`)) return;
+    try {
+      await database.deletePettyCashRequest(req.id);
+      showToast('Pengajuan kas kecil berhasil dihapus.');
+      await Promise.all([refetchPettyCash(), refetchActivityLogs()]);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menghapus pengajuan kas kecil.', 'error');
     }
   };
 
@@ -636,34 +811,34 @@ export default function StaffAdmin() {
       )}
 
       {/* Top Header Banner */}
-      <header className="bg-slate-900/90 border-b border-slate-800 sticky top-[57px] z-40 backdrop-blur-md px-4 lg:px-8 py-3.5 shadow-md">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <header className="bg-slate-900/95 border-b border-slate-800 relative lg:sticky lg:top-[61px] z-30 backdrop-blur-md px-4 sm:px-6 lg:px-8 py-3.5 shadow-md">
+        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
           
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400 shadow-sm">
+          <div className="flex items-start sm:items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400 shadow-sm shrink-0">
               <Shield size={20} />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-extrabold text-white text-base tracking-tight font-display">PORTAL OPERASIONAL STAFF ADMIN</h1>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-teal-500/20 text-teal-300 border border-teal-500/30">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="font-extrabold text-white text-sm sm:text-base tracking-tight font-display">PORTAL OPERASIONAL STAFF ADMIN</h1>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-teal-500/20 text-teal-300 border border-teal-500/30 whitespace-nowrap">
                   Front Office
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-400 leading-relaxed mt-0.5">
                 Pusat manajemen operasional unit kamar, resepsionis survey, check-in/out, dan tiket perbaikan harian
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
             {/* Property Filter Dropdown */}
-            <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300">
-              <Building2 size={14} className="text-teal-400" />
+            <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 w-full sm:w-auto">
+              <Building2 size={14} className="text-teal-400 shrink-0" />
               <select
                 value={selectedPropertyId}
                 onChange={(e) => setSelectedPropertyId(e.target.value)}
-                className="bg-transparent border-none text-xs text-white font-medium focus:outline-none cursor-pointer pr-2"
+                className="bg-transparent border-none text-xs text-white font-medium focus:outline-none cursor-pointer pr-2 w-full sm:w-auto"
               >
                 <option value="all" className="bg-slate-900 text-white">Semua Gedung Kos</option>
                 {properties.map(p => (
@@ -675,7 +850,7 @@ export default function StaffAdmin() {
             </div>
 
             {/* Live Sync Status with Super Admin & Owner */}
-            <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-teal-950/60 border border-teal-800/40 text-[11px] font-semibold text-teal-300">
+            <div className="hidden 2xl:flex items-center gap-2 px-3 py-2 rounded-xl bg-teal-950/60 border border-teal-800/40 text-[11px] font-semibold text-teal-300 whitespace-nowrap shrink-0">
               <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse"></span>
               <span>Terhubung ke Super Admin & Owner</span>
             </div>
@@ -683,7 +858,7 @@ export default function StaffAdmin() {
             {/* Quick Action: Urgent Memo */}
             <button
               onClick={() => setShowUrgentMemoModal(true)}
-              className="px-3 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+              className="px-3 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm whitespace-nowrap shrink-0"
               title="Kirim peringatan darurat ke Super Admin & Owner"
             >
               <Megaphone size={13} />
@@ -693,7 +868,7 @@ export default function StaffAdmin() {
             {/* Quick Action: Petty Cash */}
             <button
               onClick={() => setShowPettyCashModal(true)}
-              className="px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+              className="px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm whitespace-nowrap shrink-0"
               title="Ajukan kas kecil belanja operasional"
             >
               <Wallet size={13} />
@@ -704,7 +879,7 @@ export default function StaffAdmin() {
             <button
               onClick={handleRefreshAll}
               disabled={isRefreshing}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold"
+              className="p-2 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0"
               title="Perbarui seluruh data secara realtime"
             >
               <RefreshCw size={13} className={isRefreshing ? 'animate-spin text-teal-400' : ''} />
@@ -714,7 +889,7 @@ export default function StaffAdmin() {
             {/* Quick Action: New Maintenance */}
             <button
               onClick={() => setShowMaintenanceModal(true)}
-              className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+              className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm whitespace-nowrap shrink-0"
             >
               <Wrench size={13} />
               <span>Tiket Kerusakan</span>
@@ -724,27 +899,27 @@ export default function StaffAdmin() {
       </header>
 
       {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6 space-y-6">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-5 sm:pt-6 space-y-6">
 
         {/* Operational Metrics Cards */}
         <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* Total Rooms */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Total Kamar</span>
-            <div className="mt-2 flex items-baseline justify-between">
-              <span className="text-2xl font-black text-white font-display">{roomMetrics.total}</span>
-              <span className="text-xs font-bold text-teal-400">{roomMetrics.occupancyRate}% Terisi</span>
+            <div className="mt-2 flex items-baseline justify-between gap-1">
+              <span className="text-2xl font-black text-white font-display tabular-nums">{roomMetrics.total}</span>
+              <span className="text-xs font-bold text-teal-400 tabular-nums">{roomMetrics.occupancyRate}% Terisi</span>
             </div>
           </div>
 
           {/* Occupied */}
           <div className="bg-slate-900 border border-sky-900/40 rounded-2xl p-4 flex flex-col justify-between">
             <span className="text-[11px] font-bold text-sky-400 uppercase tracking-wider font-mono flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
-              Terisi (Occupied)
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0"></span>
+              <span className="truncate">Terisi (Occupied)</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between">
-              <span className="text-2xl font-black text-sky-200 font-display">{roomMetrics.occupied}</span>
+            <div className="mt-2 flex items-baseline justify-between gap-1">
+              <span className="text-2xl font-black text-sky-200 font-display tabular-nums">{roomMetrics.occupied}</span>
               <span className="text-[11px] text-slate-400">Penghuni Aktif</span>
             </div>
           </div>
@@ -752,11 +927,11 @@ export default function StaffAdmin() {
           {/* Available */}
           <div className="bg-slate-900 border border-emerald-900/40 rounded-2xl p-4 flex flex-col justify-between">
             <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider font-mono flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              Siap Huni
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+              <span>Siap Huni</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between">
-              <span className="text-2xl font-black text-emerald-200 font-display">{roomMetrics.available}</span>
+            <div className="mt-2 flex items-baseline justify-between gap-1">
+              <span className="text-2xl font-black text-emerald-200 font-display tabular-nums">{roomMetrics.available}</span>
               <span className="text-[11px] text-emerald-400 font-semibold">Tersedia</span>
             </div>
           </div>
@@ -764,11 +939,11 @@ export default function StaffAdmin() {
           {/* Maintenance */}
           <div className="bg-slate-900 border border-amber-900/40 rounded-2xl p-4 flex flex-col justify-between">
             <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-              Perbaikan / Rusak
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
+              <span className="truncate">Perbaikan / Rusak</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between">
-              <span className="text-2xl font-black text-amber-200 font-display">{roomMetrics.maintenance}</span>
+            <div className="mt-2 flex items-baseline justify-between gap-1">
+              <span className="text-2xl font-black text-amber-200 font-display tabular-nums">{roomMetrics.maintenance}</span>
               <span className="text-[11px] text-amber-400">Maintenance</span>
             </div>
           </div>
@@ -776,11 +951,11 @@ export default function StaffAdmin() {
           {/* Cleaning / Reserved */}
           <div className="bg-slate-900 border border-purple-900/40 rounded-2xl p-4 flex flex-col justify-between">
             <span className="text-[11px] font-bold text-purple-400 uppercase tracking-wider font-mono flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
-              Dibersihkan
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0"></span>
+              <span>Dibersihkan</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between">
-              <span className="text-2xl font-black text-purple-200 font-display">{roomMetrics.cleaning}</span>
+            <div className="mt-2 flex items-baseline justify-between gap-1">
+              <span className="text-2xl font-black text-purple-200 font-display tabular-nums">{roomMetrics.cleaning}</span>
               <span className="text-[11px] text-purple-300">Siap Inspeksi</span>
             </div>
           </div>
@@ -788,135 +963,135 @@ export default function StaffAdmin() {
           {/* Survey Today */}
           <div className="bg-slate-900 border border-teal-900/40 rounded-2xl p-4 flex flex-col justify-between">
             <span className="text-[11px] font-bold text-teal-400 uppercase tracking-wider font-mono flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-400"></span>
-              Jadwal Survey
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-400 shrink-0"></span>
+              <span>Jadwal Survey</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between">
-              <span className="text-2xl font-black text-teal-200 font-display">{surveys.length}</span>
+            <div className="mt-2 flex items-baseline justify-between gap-1">
+              <span className="text-2xl font-black text-teal-200 font-display tabular-nums">{surveys.length}</span>
               <span className="text-[11px] text-slate-400">Calon Penyewa</span>
             </div>
           </div>
         </section>
 
         {/* Operational Navigation Tabs & Search Toolbar */}
-        <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-2xl p-2">
-          {/* Sub Tabs */}
-          <div className="flex flex-wrap items-center gap-1">
+        <section className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-2.5">
+          {/* Sub Tabs — Horizontally Scrollable Strip on Mobile/Tablet */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 xl:pb-0 min-w-0">
             <button
               onClick={() => setActiveTab('rooms')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'rooms'
                   ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
-              <Bed size={15} />
+              <Bed size={15} className="shrink-0" />
               <span>Status & Kontrol Kamar</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black tabular-nums">
                 {filteredRooms.length}
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('surveys')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'surveys'
                   ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
-              <Calendar size={15} />
+              <Calendar size={15} className="shrink-0" />
               <span>Buku Tamu Survey</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black tabular-nums">
                 {filteredSurveys.length}
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('tenants')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'tenants'
                   ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
-              <UserCheck size={15} />
+              <UserCheck size={15} className="shrink-0" />
               <span>Penghuni & Serah Kunci</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black tabular-nums">
                 {filteredTenants.length}
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('maintenance')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'maintenance'
                   ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
-              <Wrench size={15} />
+              <Wrench size={15} className="shrink-0" />
               <span>Laporan Kerusakan</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black tabular-nums">
                 {filteredMaintenance.length}
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('assets')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'assets'
                   ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
-              <Box size={15} />
+              <Box size={15} className="shrink-0" />
               <span>Aset & Pemeliharaan</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black tabular-nums">
                 {fixedAssets.length}
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('petty_cash')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'petty_cash'
                   ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
-              <Wallet size={15} />
+              <Wallet size={15} className="shrink-0" />
               <span>Kas Kecil & Belanja Staf</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black tabular-nums">
                 {pettyCashList.length}
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('shift_log')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'shift_log'
                   ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
-              <FileText size={15} />
+              <FileText size={15} className="shrink-0" />
               <span>Catatan Serah Terima Shift</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black">
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/40 text-current font-black tabular-nums">
                 {shiftLogs.length}
               </span>
             </button>
           </div>
 
           {/* Search Input */}
-          <div className="relative w-full md:w-64">
+          <div className="relative w-full xl:w-64 shrink-0">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Cari kamar / nama penghuni..."
-              className="w-full h-9 bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-teal-500 font-medium"
+              className="w-full h-10 xl:h-9 bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-teal-500 font-medium"
             />
           </div>
         </section>
@@ -1150,9 +1325,33 @@ export default function StaffAdmin() {
                 </p>
               </div>
 
-              <span className="text-xs text-slate-400">
-                Total: <strong className="text-white">{filteredSurveys.length}</strong> Reservasi Survey
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-400">
+                  Total: <strong className="text-white">{filteredSurveys.length}</strong> Reservasi Survey
+                </span>
+                <button
+                  onClick={() => {
+                    setEditingSurveyId(null);
+                    setSurveyForm({
+                      property_id: properties[0]?.id || 1,
+                      tenant_name: '',
+                      phone: '',
+                      email: '',
+                      room_number: '',
+                      survey_date: todayJakarta(),
+                      survey_time_slot: '10:00 - 12:00 WIB',
+                      dp_amount: '0',
+                      payment_method: 'Tanpa DP',
+                      status: 'survey_confirmed'
+                    });
+                    setShowSurveyModal(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-md"
+                >
+                  <Plus size={14} />
+                  <span>Jadwalkan Survey</span>
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1269,6 +1468,39 @@ export default function StaffAdmin() {
                                 {isActionBusy ? 'Memproses...' : 'Selesai'}
                               </button>
                             )}
+
+                            {/* Edit Survey Button */}
+                            <button
+                              onClick={() => {
+                                setEditingSurveyId(s.id);
+                                setSurveyForm({
+                                  property_id: s.property_id || properties[0]?.id || 1,
+                                  tenant_name: s.tenant_name || '',
+                                  phone: s.phone || '',
+                                  email: s.email || '',
+                                  room_number: s.room_number || '',
+                                  survey_date: s.survey_date || todayJakarta(),
+                                  survey_time_slot: s.survey_time_slot || '10:00 - 12:00 WIB',
+                                  dp_amount: String(s.dp_amount || 0),
+                                  payment_method: s.payment_method || 'Tanpa DP',
+                                  status: s.status || 'survey_confirmed'
+                                });
+                                setShowSurveyModal(true);
+                              }}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors cursor-pointer"
+                              title="Edit jadwal survey"
+                            >
+                              <Edit size={13} />
+                            </button>
+
+                            {/* Delete Survey Button */}
+                            <button
+                              onClick={() => handleDeleteSurvey(s)}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400 border border-slate-700 transition-colors cursor-pointer"
+                              title="Hapus jadwal survey"
+                            >
+                              <Trash2 size={13} />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -1302,9 +1534,34 @@ export default function StaffAdmin() {
                 </p>
               </div>
 
-              <span className="text-xs text-slate-400">
-                Total: <strong className="text-white">{filteredTenants.length}</strong> Penghuni
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-400">
+                  Total: <strong className="text-white">{filteredTenants.length}</strong> Penghuni
+                </span>
+                <button
+                  onClick={() => {
+                    setEditingTenantId(null);
+                    setTenantForm({
+                      property_id: properties[0]?.id || 1,
+                      full_name: '',
+                      phone: '',
+                      email: '',
+                      nik: '',
+                      job: 'Karyawan Swasta',
+                      room_number: '',
+                      start_date: todayJakarta(),
+                      duration_months: 1,
+                      status: 'active',
+                      payment_status: 'paid'
+                    });
+                    setShowTenantModal(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-md"
+                >
+                  <Plus size={14} />
+                  <span>Tambah Penghuni</span>
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1390,6 +1647,40 @@ export default function StaffAdmin() {
                                 Check-Out
                               </button>
                             )}
+
+                            {/* Edit Tenant Button */}
+                            <button
+                              onClick={() => {
+                                setEditingTenantId(t.id);
+                                setTenantForm({
+                                  property_id: t.property_id || properties[0]?.id || 1,
+                                  full_name: t.full_name || '',
+                                  phone: t.phone || '',
+                                  email: t.email || '',
+                                  nik: t.nik || '',
+                                  job: t.job || 'Karyawan Swasta',
+                                  room_number: t.room_number || '',
+                                  start_date: t.start_date || todayJakarta(),
+                                  duration_months: t.duration_months || 1,
+                                  status: t.status || 'active',
+                                  payment_status: t.payment_status || 'paid'
+                                });
+                                setShowTenantModal(true);
+                              }}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors cursor-pointer"
+                              title="Edit data penghuni"
+                            >
+                              <Edit size={13} />
+                            </button>
+
+                            {/* Delete Tenant Button */}
+                            <button
+                              onClick={() => handleDeleteTenant(t)}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400 border border-slate-700 transition-colors cursor-pointer"
+                              title="Hapus data penghuni"
+                            >
+                              <Trash2 size={13} />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -1424,7 +1715,22 @@ export default function StaffAdmin() {
               </div>
 
               <button
-                onClick={() => setShowMaintenanceModal(true)}
+                onClick={() => {
+                  setEditingMaintenanceId(null);
+                  setMaintenanceForm({
+                    property_id: properties[0]?.id || 1,
+                    room: '',
+                    title: '',
+                    priority: 'Normal',
+                    desc_field: '',
+                    tech: 'Teknisi In-House',
+                    reported_by: '',
+                    cost: '',
+                    post_to_finance: true,
+                    credit_account_id: 1010
+                  });
+                  setShowMaintenanceModal(true);
+                }}
                 className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-md"
               >
                 <Plus size={14} />
@@ -1564,15 +1870,46 @@ export default function StaffAdmin() {
                         </button>
                       </div>
 
-                      {isCompleted && (
+                      <div className="flex items-center gap-1.5">
+                        {isCompleted && (
+                          <button
+                            onClick={() => handleUpdateMaintenanceStatus(item, 'open')}
+                            className="text-[10px] text-slate-500 hover:text-slate-300 underline cursor-pointer mr-1"
+                            title="Buka kembali jika masih bermasalah"
+                          >
+                            Buka Kembali
+                          </button>
+                        )}
                         <button
-                          onClick={() => handleUpdateMaintenanceStatus(item, 'open')}
-                          className="text-[10px] text-slate-500 hover:text-slate-300 underline cursor-pointer"
-                          title="Buka kembali jika masih bermasalah"
+                          onClick={() => {
+                            setEditingMaintenanceId(item.id);
+                            setMaintenanceForm({
+                              property_id: item.property_id || properties[0]?.id || 1,
+                              room: item.room || '',
+                              title: item.title || '',
+                              priority: item.priority || 'Normal',
+                              desc_field: item.desc_field || '',
+                              tech: item.tech || 'Teknisi In-House',
+                              reported_by: item.reported_by || '',
+                              cost: item.cost || '',
+                              post_to_finance: false,
+                              credit_account_id: 1010
+                            });
+                            setShowMaintenanceModal(true);
+                          }}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors cursor-pointer"
+                          title="Edit tiket perbaikan"
                         >
-                          Buka Kembali
+                          <Edit size={12} />
                         </button>
-                      )}
+                        <button
+                          onClick={() => handleDeleteMaintenanceTicket(item)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400 border border-slate-700 transition-colors cursor-pointer"
+                          title="Hapus tiket perbaikan"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1690,9 +2027,27 @@ export default function StaffAdmin() {
                               {isUrgent ? 'URGENT MEMO' : 'LIVE SYNC'}
                             </span>
                           </div>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {new Date(log.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {new Date(log.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
+                            </span>
+                            <button
+                              onClick={async () => {
+                                if (!window.confirm('Hapus catatan log ini?')) return;
+                                try {
+                                  await database.deleteActivityLog(log.id);
+                                  await refetchActivityLogs();
+                                  showToast('Catatan log dihapus.');
+                                } catch (err: any) {
+                                  showToast(err.message || 'Gagal menghapus catatan.', 'error');
+                                }
+                              }}
+                              className="p-1 rounded-lg bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 transition-colors cursor-pointer"
+                              title="Hapus catatan"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
                         </div>
                         <p className="text-xs mt-2 leading-relaxed text-slate-200 font-medium">
                           {log.details}
@@ -1719,7 +2074,24 @@ export default function StaffAdmin() {
                           </span>
                         )}
                       </div>
-                      <span className="text-[10px] text-slate-500 font-mono">{log.time}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-500 font-mono">{log.time}</span>
+                        <button
+                          onClick={() => {
+                            if (!window.confirm('Hapus catatan shift lokal ini?')) return;
+                            setShiftLogs(prev => {
+                              const updated = prev.filter(item => item.id !== log.id);
+                              try { localStorage.setItem('samara_staff_shift_logs', JSON.stringify(updated)); } catch {}
+                              return updated;
+                            });
+                            showToast('Catatan shift dihapus.');
+                          }}
+                          className="p-1 rounded-lg bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 transition-colors cursor-pointer"
+                          title="Hapus catatan"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
                     </div>
 
                     <p className="text-xs mt-2 leading-relaxed text-slate-200 font-medium">
@@ -1761,7 +2133,15 @@ export default function StaffAdmin() {
               </div>
 
               <button
-                onClick={() => setShowPettyCashModal(true)}
+                onClick={() => {
+                  setEditingPettyCashId(null);
+                  setPettyCashForm({
+                    amount: '',
+                    purpose: '',
+                    date: todayJakarta()
+                  });
+                  setShowPettyCashModal(true);
+                }}
                 className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-md cursor-pointer shrink-0"
               >
                 <Plus size={14} />
@@ -1820,6 +2200,7 @@ export default function StaffAdmin() {
                       <th className="py-3 px-4 font-bold">Keperluan Pengeluaran</th>
                       <th className="py-3 px-4 font-bold text-right">Nominal (Rp)</th>
                       <th className="py-3 px-4 font-bold text-center">Status Super Admin</th>
+                      <th className="py-3 px-4 font-bold text-right">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-medium">
@@ -1863,13 +2244,39 @@ export default function StaffAdmin() {
                               </span>
                             )}
                           </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setEditingPettyCashId(req.id);
+                                  setPettyCashForm({
+                                    amount: String(req.amount || ''),
+                                    purpose: req.purpose || '',
+                                    date: req.date || todayJakarta()
+                                  });
+                                  setShowPettyCashModal(true);
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors cursor-pointer"
+                                title="Edit pengajuan kas kecil"
+                              >
+                                <Edit size={12} />
+                              </button>
+                              <button
+                                onClick={() => handleDeletePettyCash(req)}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400 border border-slate-700 transition-colors cursor-pointer"
+                                title="Hapus pengajuan kas kecil"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       );
                     })}
 
                     {pettyCashList.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="py-8 text-center text-slate-500">
+                        <td colSpan={6} className="py-8 text-center text-slate-500">
                           Belum ada pengajuan kas kecil saat ini. Klik "Buat Pengajuan Kas Kecil" untuk menambahkan.
                         </td>
                       </tr>
@@ -2743,6 +3150,318 @@ export default function StaffAdmin() {
                 >
                   <Send size={13} />
                   <span>{isSendingMemo ? 'Menyiarkan...' : 'Siarkan Sekarang'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: SURVEY CREATE / EDIT                                               */}
+      {/* ========================================================================= */}
+      {showSurveyModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white font-display flex items-center gap-2">
+                <Calendar size={18} className="text-teal-400" />
+                <span>{editingSurveyId ? 'Edit Jadwal Survey' : 'Jadwalkan Survey Baru'}</span>
+              </h3>
+              <button
+                onClick={() => setShowSurveyModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSurvey} className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Nama Calon Penyewa
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={surveyForm.tenant_name}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, tenant_name: e.target.value })}
+                    placeholder="Nama lengkap"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    No. WhatsApp
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={surveyForm.phone}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, phone: e.target.value })}
+                    placeholder="08xxxxxxxxxx"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Gedung Kos
+                  </label>
+                  <select
+                    value={surveyForm.property_id}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, property_id: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  >
+                    {properties.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Nomor Kamar Pilihan
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={surveyForm.room_number}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, room_number: e.target.value })}
+                    placeholder="contoh: 101"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Tanggal Survey
+                  </label>
+                  <input
+                    type="date"
+                    value={surveyForm.survey_date}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, survey_date: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Jam Kunjungan
+                  </label>
+                  <input
+                    type="text"
+                    value={surveyForm.survey_time_slot}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, survey_time_slot: e.target.value })}
+                    placeholder="10:00 - 12:00 WIB"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    DP Survey (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={50000}
+                    value={surveyForm.dp_amount}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, dp_amount: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Status Survey
+                  </label>
+                  <select
+                    value={surveyForm.status}
+                    onChange={(e) => setSurveyForm({ ...surveyForm, status: e.target.value as any })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  >
+                    <option value="pending_payment">Menunggu DP</option>
+                    <option value="survey_confirmed">Terkonfirmasi</option>
+                    <option value="survey_completed">Selesai Survey</option>
+                    <option value="cancelled">Dibatalkan</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSurveyModal(false)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold shadow-md cursor-pointer"
+                >
+                  Simpan Survey
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: TENANT CREATE / EDIT                                               */}
+      {/* ========================================================================= */}
+      {showTenantModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white font-display flex items-center gap-2">
+                <UserCheck size={18} className="text-teal-400" />
+                <span>{editingTenantId ? 'Edit Data Penghuni' : 'Tambah Penghuni Baru'}</span>
+              </h3>
+              <button
+                onClick={() => setShowTenantModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTenant} className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Nama Lengkap
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={tenantForm.full_name}
+                    onChange={(e) => setTenantForm({ ...tenantForm, full_name: e.target.value })}
+                    placeholder="Nama sesuai KTP"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    No. WhatsApp
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={tenantForm.phone}
+                    onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
+                    placeholder="08xxxxxxxxxx"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Gedung Kos
+                  </label>
+                  <select
+                    value={tenantForm.property_id}
+                    onChange={(e) => setTenantForm({ ...tenantForm, property_id: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  >
+                    {properties.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Nomor Kamar
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={tenantForm.room_number}
+                    onChange={(e) => setTenantForm({ ...tenantForm, room_number: e.target.value })}
+                    placeholder="contoh: 101"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Tanggal Mulai Sewa
+                  </label>
+                  <input
+                    type="date"
+                    value={tenantForm.start_date}
+                    onChange={(e) => setTenantForm({ ...tenantForm, start_date: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Durasi Sewa (Bulan)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={tenantForm.duration_months}
+                    onChange={(e) => setTenantForm({ ...tenantForm, duration_months: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Status Pembayaran
+                  </label>
+                  <select
+                    value={tenantForm.payment_status}
+                    onChange={(e) => setTenantForm({ ...tenantForm, payment_status: e.target.value as any })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  >
+                    <option value="paid">Lunas (Paid)</option>
+                    <option value="pending">Tertunda (Pending)</option>
+                    <option value="overdue">Tunggakan (Overdue)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1">
+                    Status Hunian
+                  </label>
+                  <select
+                    value={tenantForm.status}
+                    onChange={(e) => setTenantForm({ ...tenantForm, status: e.target.value as any })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none focus:border-teal-500"
+                  >
+                    <option value="active">Aktif</option>
+                    <option value="checkout">Sudah Check-Out</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowTenantModal(false)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold shadow-md cursor-pointer"
+                >
+                  Simpan Penghuni
                 </button>
               </div>
             </form>

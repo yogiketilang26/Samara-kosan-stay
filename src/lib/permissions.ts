@@ -92,12 +92,12 @@ export const PERMISSION_RULES: PermissionRule[] = [
   },
   {
     resource: 'finance',
-    allowedRoles: ['super', 'super_admin', 'owner', 'finance'],
+    allowedRoles: ['super', 'super_admin', 'owner', 'anak_owner', 'admin', 'finance'],
     allowedActions: ['read', 'create', 'update', 'delete', 'manage']
   },
   {
     resource: 'system_settings',
-    allowedRoles: ['super', 'super_admin', 'owner'],
+    allowedRoles: ['super', 'super_admin', 'owner', 'anak_owner', 'admin'],
     allowedActions: ['read', 'create', 'update', 'delete', 'repair']
   }
 ];
@@ -256,20 +256,15 @@ export function canAccessProperty(
     return true;
   }
 
-  // Global un-scoped admin or finance (property_id === null or undefined)
-  if (['admin', 'finance'].includes(role) && (userProfile.property_id === null || userProfile.property_id === undefined)) {
+  // Global un-scoped admin, finance, or staff (property_id === null or undefined)
+  if (['admin', 'finance', 'staff'].includes(role) && (userProfile.property_id === null || userProfile.property_id === undefined || userProfile.property_id === '')) {
     return true;
   }
 
   // Scoped admin, finance, or staff
-  if (userProfile.property_id !== null && userProfile.property_id !== undefined) {
-    if (targetPropertyId === null || targetPropertyId === undefined) return false;
+  if (userProfile.property_id !== null && userProfile.property_id !== undefined && userProfile.property_id !== '') {
+    if (targetPropertyId === null || targetPropertyId === undefined || targetPropertyId === '') return true;
     return String(userProfile.property_id) === String(targetPropertyId);
-  }
-
-  // Staff without assigned property cannot access any property operations
-  if (role === 'staff') {
-    return false;
   }
 
   return false;

@@ -8,6 +8,8 @@ export interface UserProfile {
   role: 'super' | 'super_admin' | 'owner' | 'admin' | 'staff' | 'finance' | 'user' | 'tenant' | 'anak_owner' | 'anak owner';
   raw_role?: string;
   name: string;
+  access?: string;
+  property_id?: number | null;
 }
 
 interface AuthContextType {
@@ -24,16 +26,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Check backend session on mount
+  // Check backend & Supabase session on mount
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const savedToken = typeof window !== 'undefined'
+        let savedToken = typeof window !== 'undefined'
           ? (localStorage.getItem('samara_access_token') || localStorage.getItem('sb-access-token'))
           : null;
-        const savedRefreshToken = typeof window !== 'undefined'
+        let savedRefreshToken = typeof window !== 'undefined'
           ? (localStorage.getItem('samara_refresh_token') || localStorage.getItem('sb-refresh-token'))
           : null;
+
+        // Fallback to active Supabase SDK session if localStorage keys were not yet populated
+        if (!savedToken) {
+          try {
+            const { data: sbSession } = await supabase.auth.getSession();
+            if (sbSession?.session?.access_token) {
+              savedToken = sbSession.session.access_token;
+              savedRefreshToken = sbSession.session.refresh_token || savedRefreshToken;
+            }
+          } catch (e) {}
+        }
 
         const headers: Record<string, string> = {};
         if (savedToken) {
@@ -121,6 +134,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             refresh_token: data.refresh_token
           }).catch((e) => console.error('[AUTH] Failed to set client-side supabase session during login:', e));
         }
+        // Clear any stale simulated role if the newly logged in user is not super/admin
+        const loggedInRole = String(data.user.raw_role || data.user.role || '').toLowerCase();
+        if (loggedInRole === 'anak_owner' || loggedInRole === 'anak owner') {
+          localStorage.setItem('samara_simulated_role', 'anak_owner');
+          window.dispatchEvent(new CustomEvent('samara-role-simulate', { detail: { role: 'anak_owner' } }));
+        } else if (!['super', 'super_admin', 'admin'].includes(loggedInRole)) {
+          localStorage.removeItem('samara_simulated_role');
+          window.dispatchEvent(new CustomEvent('samara-role-simulate', { detail: { role: null } }));
+        }
         setCacheRoleScope(data.user.role || data.user.id || 'user');
         setUser(data.user);
         return { success: true };
@@ -201,6 +223,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('samara_refresh_token');
       localStorage.removeItem('sb-access-token');
       localStorage.removeItem('sb-refresh-token');
+      localStorage.removeItem('samara_simulated_role');
+      window.dispatchEvent(new CustomEvent('samara-role-simulate', { detail: { role: null } }));
     }
     setCacheRoleScope('public');
     clearSensitiveLocalCache();
