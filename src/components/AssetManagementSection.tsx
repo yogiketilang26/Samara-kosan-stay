@@ -630,65 +630,65 @@ export const AssetManagementSection: React.FC<AssetManagementSectionProps> = ({
 
       {/* 3. QUICK METRIC CARDS (Dihitung 100% Khusus Untuk Gedung yang Sedang Dipilih) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
-        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">
+        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-1.5 text-slate-500 mb-1 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider truncate">
               {activeProperty ? `Aset ${activeProperty.name}` : 'Total Register Aset'}
             </span>
-            <Box size={16} className="text-teal-600" />
+            <Box size={16} className="text-teal-600 shrink-0" />
           </div>
-          <div className="text-2xl font-black text-slate-900 font-mono">
+          <div className="text-xl sm:text-2xl font-black text-slate-900 font-mono tabular-nums break-words">
             {currentMetrics.totalAssets} Unit
           </div>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-slate-400 block truncate">
             {activeProperty ? 'Khusus gedung ini' : 'Seluruh cabang portofolio'}
           </span>
         </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Nilai Pengadaan Aset</span>
-            <Tag size={16} className="text-indigo-600" />
+        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-1.5 text-slate-500 mb-1 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider truncate">Nilai Pengadaan Aset</span>
+            <Tag size={16} className="text-indigo-600 shrink-0" />
           </div>
-          <div className="text-lg font-black text-slate-900 font-mono truncate">
+          <div className="text-base sm:text-lg font-black text-slate-900 font-mono tabular-nums break-words">
             {formatRupiah(currentMetrics.totalCost)}
           </div>
-          <span className="text-[11px] text-slate-400">Total nilai kapitalisasi aset</span>
+          <span className="text-[11px] text-slate-400 block truncate">Total nilai kapitalisasi aset</span>
         </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Biaya Servis Tercatat</span>
-            <Receipt size={16} className="text-emerald-600" />
+        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-1.5 text-slate-500 mb-1 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider truncate">Biaya Servis Tercatat</span>
+            <Receipt size={16} className="text-emerald-600 shrink-0" />
           </div>
-          <div className="text-lg font-black text-emerald-700 font-mono truncate">
+          <div className="text-base sm:text-lg font-black text-emerald-700 font-mono tabular-nums break-words">
             {formatRupiah(currentMetrics.totalRepairCost)}
           </div>
-          <span className="text-[11px] text-slate-400">Otomatis masuk lap. keuangan</span>
+          <span className="text-[11px] text-slate-400 block truncate">Otomatis masuk lap. keuangan</span>
         </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Jatuh Tempo Servis</span>
-            <Clock size={16} className="text-rose-500" />
+        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-1.5 text-slate-500 mb-1 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider truncate">Jatuh Tempo Servis</span>
+            <Clock size={16} className="text-rose-500 shrink-0" />
           </div>
-          <div className={`text-2xl font-black font-mono ${currentMetrics.dueMaintenance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+          <div className={`text-xl sm:text-2xl font-black font-mono tabular-nums ${currentMetrics.dueMaintenance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
             {currentMetrics.dueMaintenance} Unit
           </div>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-slate-400 block truncate">
             {currentMetrics.dueMaintenance > 0 ? 'Perlu tindakan pemeliharaan' : 'Semua servis terjadwal aman'}
           </span>
         </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Kondisi Butuh Perbaikan</span>
-            <AlertTriangle size={16} className="text-amber-500" />
+        <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-1.5 text-slate-500 mb-1 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider truncate">Kondisi Butuh Perbaikan</span>
+            <AlertTriangle size={16} className="text-amber-500 shrink-0" />
           </div>
-          <div className={`text-2xl font-black font-mono ${currentMetrics.needService > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+          <div className={`text-xl sm:text-2xl font-black font-mono tabular-nums ${currentMetrics.needService > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
             {currentMetrics.needService} Unit
           </div>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-slate-400 block truncate">
             {currentMetrics.needService > 0 ? 'Perlu servis/perbaikan teknisi' : 'Kondisi fisik 100% prima'}
           </span>
         </div>
@@ -697,9 +697,9 @@ export const AssetManagementSection: React.FC<AssetManagementSectionProps> = ({
       {/* 4. PER-GEDUNG BENTO SUMMARY (Hanya muncul saat mode "Semua Gedung" aktif) */}
       {activePropertyId === 'all' && properties.length > 1 && (
         <div className="space-y-2.5">
-          <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+          <div className="flex items-center justify-between gap-2 text-xs text-slate-500 px-1">
             <span className="font-bold uppercase tracking-wider">Ringkasan Aset Masing-Masing Gedung Kost</span>
-            <span>Klik tombol untuk masuk ke inventaris spesifik</span>
+            <span className="hidden sm:inline">Klik tombol untuk masuk ke inventaris spesifik</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
@@ -710,31 +710,31 @@ export const AssetManagementSection: React.FC<AssetManagementSectionProps> = ({
               return (
                 <div 
                   key={p.id}
-                  className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs hover:border-teal-500/50 transition-all flex flex-col justify-between"
+                  className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs hover:border-teal-500/50 transition-all flex flex-col justify-between min-w-0 overflow-hidden"
                 >
-                  <div>
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-sm">{p.name}</h4>
-                        <p className="text-[11px] text-slate-400 truncate max-w-[220px]">
+                  <div className="min-w-0">
+                    <div className="flex items-start justify-between gap-2 mb-2 min-w-0">
+                      <div className="min-w-0 flex-1">
+                        <h4 className="font-bold text-slate-900 text-sm truncate">{p.name}</h4>
+                        <p className="text-[11px] text-slate-400 truncate">
                           {p.address || 'Alamat properti'}
                         </p>
                       </div>
-                      <span className="px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 border border-teal-200 text-[11px] font-bold font-mono">
+                      <span className="px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 border border-teal-200 text-[11px] font-bold font-mono tabular-nums shrink-0">
                         {stats.total} Aset
                       </span>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 my-3 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-150">
-                      <div>
-                        <span className="text-[10px] text-slate-400 uppercase font-bold block">Nilai Aset</span>
-                        <span className="font-bold text-slate-800 font-mono text-[11px]">
+                      <div className="min-w-0 overflow-hidden">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block truncate">Nilai Aset</span>
+                        <span className="font-bold text-slate-800 font-mono text-[11px] tabular-nums break-words block">
                           {formatRupiah(stats.totalCost)}
                         </span>
                       </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 uppercase font-bold block">Jatuh Tempo</span>
-                        <span className={`font-bold font-mono text-[11px] ${stats.due > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      <div className="min-w-0 overflow-hidden">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block truncate">Jatuh Tempo</span>
+                        <span className={`font-bold font-mono text-[11px] tabular-nums block ${stats.due > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                           {stats.due} Servis
                         </span>
                       </div>

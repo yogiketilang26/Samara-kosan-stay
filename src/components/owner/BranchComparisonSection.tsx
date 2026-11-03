@@ -58,19 +58,19 @@ export const BranchComparisonSection: React.FC<BranchComparisonSectionProps> = (
         {branchMetrics.map((branch, idx) => (
           <div 
             key={branch.property.id}
-            className="bg-slate-50/70 hover:bg-slate-50 border border-slate-200/80 rounded-2xl p-5 transition-all flex flex-col justify-between"
+            className="bg-slate-50/70 hover:bg-slate-50 border border-slate-200/80 rounded-2xl p-4 sm:p-5 transition-all flex flex-col justify-between min-w-0 overflow-hidden"
           >
-            <div>
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider">
+            <div className="min-w-0">
+              <div className="flex items-start justify-between gap-2 min-w-0">
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider block">
                     Cabang #{idx + 1}
                   </span>
-                  <h3 className="text-sm font-extrabold text-slate-900 font-display line-clamp-1">
+                  <h3 className="text-sm font-extrabold text-slate-900 font-display truncate">
                     {branch.property.name}
                   </h3>
                 </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 tabular-nums ${
                   branch.occupancyRate >= 80 
                     ? 'bg-emerald-100 text-emerald-800' 
                     : branch.occupancyRate >= 50
@@ -81,34 +81,34 @@ export const BranchComparisonSection: React.FC<BranchComparisonSectionProps> = (
                 </span>
               </div>
 
-              <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-1 line-clamp-1">
+              <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-1 truncate">
                 <MapPin size={11} className="text-slate-400 shrink-0" />
-                {branch.property.address}
+                <span className="truncate">{branch.property.address}</span>
               </p>
 
               {/* Stats Grid inside card */}
               <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-slate-200/60">
-                <div>
-                  <span className="text-[10px] text-slate-400 font-medium block">Pendapatan</span>
-                  <span className="text-xs font-bold text-slate-900 font-display">
+                <div className="min-w-0 overflow-hidden">
+                  <span className="text-[10px] text-slate-400 font-medium block truncate">Pendapatan</span>
+                  <span className="text-xs font-bold text-slate-900 font-display tabular-nums break-words block">
                     {formatRupiah(branch.totalRevenue)}
                   </span>
                 </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-medium block">Laba Bersih</span>
-                  <span className="text-xs font-bold text-emerald-600 font-display">
+                <div className="min-w-0 overflow-hidden">
+                  <span className="text-[10px] text-slate-400 font-medium block truncate">Laba Bersih</span>
+                  <span className="text-xs font-bold text-emerald-600 font-display tabular-nums break-words block">
                     {formatRupiah(branch.netIncome)}
                   </span>
                 </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-medium block">Kapasitas Unit</span>
-                  <span className="text-xs font-semibold text-slate-700">
+                <div className="min-w-0 overflow-hidden">
+                  <span className="text-[10px] text-slate-400 font-medium block truncate">Kapasitas Unit</span>
+                  <span className="text-xs font-semibold text-slate-700 tabular-nums block">
                     {branch.occupiedRooms} / {branch.totalRooms} Kamar
                   </span>
                 </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-medium block">RevPAR (Yield)</span>
-                  <span className="text-xs font-semibold text-slate-700">
+                <div className="min-w-0 overflow-hidden">
+                  <span className="text-[10px] text-slate-400 font-medium block truncate">RevPAR (Yield)</span>
+                  <span className="text-xs font-semibold text-slate-700 tabular-nums break-words block">
                     {formatRupiah(branch.revPar)}
                   </span>
                 </div>

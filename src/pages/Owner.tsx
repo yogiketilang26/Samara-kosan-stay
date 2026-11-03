@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Building2, TrendingUp, DollarSign, CreditCard, 
   Scale, ShieldAlert, Clock, RefreshCw, Printer, 
-  BedDouble, CheckCircle2, AlertCircle, MapPin, PenTool, FileCheck, Users, Box, Wrench
+  BedDouble, CheckCircle2, AlertCircle, MapPin, PenTool, FileCheck, Users, Box, Wrench, BarChart3
 } from 'lucide-react';
 import { database, isSupabaseConfigured } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
@@ -35,6 +35,7 @@ import { ExpenseAuditSection } from '../components/owner/ExpenseAuditSection';
 import { LeaseExpiringMonitor } from '../components/owner/LeaseExpiringMonitor';
 import { OwnerSignatureManager } from '../components/owner/OwnerSignatureManager';
 import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
+import { MonthlyCashflowDashboard } from '../components/owner/MonthlyCashflowDashboard';
 import { AssetManagementSection } from '../components/AssetManagementSection';
 import Loader from '../components/common/Loader';
 import { formatRupiah } from '../utils/formatCurrency';
@@ -42,22 +43,40 @@ import { formatRupiah } from '../utils/formatCurrency';
 export const Owner: React.FC = () => {
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
   const [selectedPeriod, setSelectedPeriod] = useState<'this_month' | 'last_month' | 'this_quarter' | 'ytd'>('this_month');
-  const [activeTab, setActiveTab] = useState<'overview' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops' | 'assets'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'cashflow' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops' | 'assets'>('overview');
 
   // Realtime Data Subscriptions with G10 column projections for list views
-  const { data: properties = [], loading: loadingProps } = useRealtimeTable<Property>('properties', () => database.fetchProperties());
-  const { data: rooms = [], loading: loadingRooms } = useRealtimeTable<Room>('rooms', () => database.fetchRooms());
-  const { data: tenants = [], loading: loadingTenants } = useRealtimeTable<Tenant>('tenants', () => database.fetchTenants({ columns: LIST_COLUMNS_TENANTS }));
-  const { data: bookings = [], loading: loadingBookings } = useRealtimeTable<Booking>('bookings', () => database.fetchBookings({ columns: LIST_COLUMNS_BOOKINGS }));
-  const { data: transactions = [], loading: loadingTx } = useRealtimeTable<FinancialTransaction>('financial_transactions', () => database.fetchFinancialTransactions({ limit: 1000, columns: LIST_COLUMNS_FINANCIAL_TRANSACTIONS }));
-  const { data: payments = [], loading: loadingPayments } = useRealtimeTable<PaymentInvoice>('payments', () => database.fetchPayments({ limit: 1000, columns: LIST_COLUMNS_PAYMENTS }));
-  const { data: accounts = [] } = useRealtimeTable<AccountCOA>('accounts', () => database.fetchAccounts());
-  const { data: clearingList = [] } = useRealtimeTable<MidtransClearingTransaction>('midtrans_clearing_transactions', () => database.fetchMidtransClearingTransactions({ limit: 1000, columns: LIST_COLUMNS_MIDTRANS_CLEARING }));
+  const { data: properties = [], loading: loadingProps, refetch: refetchProps } = useRealtimeTable<Property>('properties', () => database.fetchProperties());
+  const { data: rooms = [], loading: loadingRooms, refetch: refetchRooms } = useRealtimeTable<Room>('rooms', () => database.fetchRooms());
+  const { data: tenants = [], loading: loadingTenants, refetch: refetchTenants } = useRealtimeTable<Tenant>('tenants', () => database.fetchTenants({ columns: LIST_COLUMNS_TENANTS }));
+  const { data: bookings = [], loading: loadingBookings, refetch: refetchBookings } = useRealtimeTable<Booking>('bookings', () => database.fetchBookings({ columns: LIST_COLUMNS_BOOKINGS }));
+  const { data: transactions = [], loading: loadingTx, refetch: refetchTransactions } = useRealtimeTable<FinancialTransaction>('financial_transactions', () => database.fetchFinancialTransactions({ limit: 1000, columns: LIST_COLUMNS_FINANCIAL_TRANSACTIONS }));
+  const { data: payments = [], loading: loadingPayments, refetch: refetchPayments } = useRealtimeTable<PaymentInvoice>('payments', () => database.fetchPayments({ limit: 1000, columns: LIST_COLUMNS_PAYMENTS }));
+  const { data: accounts = [], refetch: refetchAccounts } = useRealtimeTable<AccountCOA>('accounts', () => database.fetchAccounts());
+  const { data: clearingList = [], refetch: refetchClearing } = useRealtimeTable<MidtransClearingTransaction>('midtrans_clearing_transactions', () => database.fetchMidtransClearingTransactions({ limit: 1000, columns: LIST_COLUMNS_MIDTRANS_CLEARING }));
   const { data: maintenanceList = [], refetch: refetchMaintenance } = useRealtimeTable<Maintenance>('maintenance', () => database.fetchMaintenance({ limit: 500 }));
   const { data: pettyCashList = [], refetch: refetchPettyCash } = useRealtimeTable<PettyCashRequest>('petty_cash_requests', () => database.fetchPettyCashRequests({ limit: 500 }));
-  const { data: purchaseOrders = [] } = useRealtimeTable<PurchaseOrder>('purchase_orders', () => database.fetchPurchaseOrders({ limit: 500 }));
+  const { data: purchaseOrders = [], refetch: refetchPO } = useRealtimeTable<PurchaseOrder>('purchase_orders', () => database.fetchPurchaseOrders({ limit: 500 }));
   const { data: activityLogs = [], refetch: refetchActivityLogs } = useRealtimeTable<ActivityLog>('activity_logs', () => database.fetchActivityLogs({ limit: 100 }));
   const { data: fixedAssets = [], refetch: refetchFixedAssets } = useRealtimeTable<FixedAsset>('fixed_assets', () => database.fetchFixedAssets());
+
+  const handleRefreshPortfolio = async () => {
+    await Promise.all([
+      refetchProps(),
+      refetchRooms(),
+      refetchTenants(),
+      refetchBookings(),
+      refetchTransactions(),
+      refetchPayments(),
+      refetchAccounts(),
+      refetchClearing(),
+      refetchMaintenance(),
+      refetchPettyCash(),
+      refetchPO(),
+      refetchActivityLogs(),
+      refetchFixedAssets()
+    ]);
+  };
 
   const isLoading = loadingProps || loadingRooms || loadingTenants || loadingBookings || loadingTx || loadingPayments;
 
@@ -149,7 +168,7 @@ export const Owner: React.FC = () => {
     return pendingClearing;
   }, [filteredClearing]);
 
-  // P&L Breakdown from Dynamic Ledger Data with explicit [Estimasi] tagging when synthetic
+  // P&L Breakdown strictly from Real Supabase Ledger Data
   const revenueBreakdown = useMemo(() => {
     const realRent = filteredTransactions
       .filter(t => t.type === 'income')
@@ -158,24 +177,18 @@ export const Owner: React.FC = () => {
       .filter(t => t.type === 'dp_booking')
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-    const isSynthetic = realRent === 0 && realDp === 0 && grossRevenue > 0;
-
     return [
       { 
         code: '4000', 
-        name: isSynthetic 
-          ? 'Pendapatan Sewa Kamar Kos (Inflow Bulanan)' 
-          : 'Pendapatan Sewa Kamar Kos (Inflow Bulanan)', 
-        amount: realRent > 0 ? realRent : (grossRevenue * 0.92),
-        isEstimated: isSynthetic
+        name: 'Pendapatan Sewa Kamar Kos (Inflow Bulanan)', 
+        amount: realRent > 0 ? realRent : (realDp === 0 ? grossRevenue : 0),
+        isEstimated: false
       },
       { 
         code: '4200', 
-        name: isSynthetic 
-          ? 'Pendapatan Jaminan DP Survey & Booking' 
-          : 'Pendapatan Jaminan DP Survey & Booking', 
-        amount: realDp > 0 ? realDp : (grossRevenue * 0.08),
-        isEstimated: isSynthetic
+        name: 'Pendapatan Jaminan DP Survey & Booking', 
+        amount: realDp,
+        isEstimated: false
       },
       { code: '4100', name: 'Pendapatan Denda & Keterlambatan Sewa', amount: 0, isEstimated: false },
       { code: '4300', name: 'Pendapatan Layanan Tambahan (Laundry/Parkir)', amount: 0, isEstimated: false },
@@ -192,14 +205,14 @@ export const Owner: React.FC = () => {
     );
   }, [totalExpenses, totalMdrFee, maintenanceList, filteredTransactions]);
 
-  // Branch Performance Comparison Data (Calculated per Branch from Supabase)
+  // Branch Performance Comparison Data (Calculated per Branch strictly from Supabase)
   const branchMetrics = useMemo(() => {
     return properties.map((prop) => {
       const propRooms = rooms.filter(r => r.property_id === prop.id);
       const propOccupied = propRooms.filter(r => r.status === 'occupied').length;
       const propOccRate = propRooms.length > 0 ? (propOccupied / propRooms.length) * 100 : 0;
       
-      // Calculate revenue per branch from transactions, payments, or bookings
+      // Calculate revenue per branch from transactions, payments, or bookings in Supabase
       const propTxRevenue = transactions
         .filter(t => t.property_id === prop.id && (t.type === 'income' || t.type === 'dp_booking'))
         .reduce((sum, t) => sum + Number(t.amount || 0), 0);
@@ -213,14 +226,14 @@ export const Owner: React.FC = () => {
         .reduce((sum, b) => sum + Number(b.total_price || 0), 0);
 
       const propInflow = propTxRevenue > 0 ? propTxRevenue : propPaymentsRevenue;
-      const propRev = propInflow > 0 ? propInflow : (propBookingRevenue > 0 ? propBookingRevenue : (grossRevenue * (propRooms.length / (rooms.length || 1))));
+      const propRev = propInflow > 0 ? propInflow : propBookingRevenue;
       const propExp = transactions
         .filter(t => t.property_id === prop.id && t.type === 'expense')
         .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
       return {
         property: prop,
-        totalRooms: propRooms.length || prop.total_rooms || 10,
+        totalRooms: propRooms.length || prop.total_rooms || 0,
         occupiedRooms: propOccupied,
         occupancyRate: propOccRate,
         totalRevenue: propRev,
@@ -229,7 +242,7 @@ export const Owner: React.FC = () => {
         revPar: propRooms.length > 0 ? propRev / propRooms.length : 0
       };
     });
-  }, [properties, rooms, transactions, payments, bookings, grossRevenue]);
+  }, [properties, rooms, transactions, payments, bookings]);
 
   const totalMaintenanceCost = maintenanceList.reduce((sum, m) => sum + (Number(m.cost) || 0), 0);
 
@@ -259,7 +272,7 @@ export const Owner: React.FC = () => {
         onSelectProperty={setSelectedPropertyId}
         selectedPeriod={selectedPeriod}
         onSelectPeriod={setSelectedPeriod}
-        onRefresh={() => window.location.reload()}
+        onRefresh={handleRefreshPortfolio}
         isLoading={isLoading}
         onPrint={handlePrint}
         onOpenSignatureTab={() => setActiveTab('signature')}
@@ -294,6 +307,18 @@ export const Owner: React.FC = () => {
           >
             <Building2 size={14} className="shrink-0" />
             <span>Ringkasan & Komparasi Cabang</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('cashflow')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
+              activeTab === 'cashflow'
+                ? 'bg-emerald-700 text-white shadow-sm'
+                : 'text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 border border-emerald-200/70'
+            }`}
+          >
+            <BarChart3 size={14} className={`shrink-0 ${activeTab === 'cashflow' ? 'text-emerald-200' : 'text-emerald-600'}`} />
+            <span>Dashboard Arus Kas Bulanan</span>
           </button>
 
           <button
@@ -399,6 +424,16 @@ export const Owner: React.FC = () => {
         {/* 4. Tab Contents */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
+            <MonthlyCashflowDashboard
+              transactions={filteredTransactions}
+              payments={filteredPayments}
+              bookings={filteredBookings}
+              properties={properties}
+              selectedPropertyId={selectedPropertyId}
+              grossRevenue={grossRevenue}
+              totalExpenses={totalExpenses}
+              theme="light"
+            />
             <BranchComparisonSection 
               branchMetrics={branchMetrics}
               onSelectBranch={setSelectedPropertyId}
@@ -419,6 +454,19 @@ export const Owner: React.FC = () => {
           </div>
         )}
 
+        {activeTab === 'cashflow' && (
+          <MonthlyCashflowDashboard
+            transactions={filteredTransactions}
+            payments={filteredPayments}
+            bookings={filteredBookings}
+            properties={properties}
+            selectedPropertyId={selectedPropertyId}
+            grossRevenue={grossRevenue}
+            totalExpenses={totalExpenses}
+            theme="light"
+          />
+        )}
+
         {activeTab === 'midtrans' && (
           <MidtransCashflowCard 
             transactions={filteredClearing}
@@ -430,14 +478,26 @@ export const Owner: React.FC = () => {
         )}
 
         {activeTab === 'pnl' && (
-          <ProfitLossDividendCard 
-            accounts={accounts}
-            grossRevenue={grossRevenue}
-            totalExpenses={totalExpenses}
-            netOperatingIncome={netOperatingIncome}
-            revenueBreakdown={revenueBreakdown}
-            expenseBreakdown={expenseBreakdown}
-          />
+          <div className="space-y-6">
+            <MonthlyCashflowDashboard
+              transactions={filteredTransactions}
+              payments={filteredPayments}
+              bookings={filteredBookings}
+              properties={properties}
+              selectedPropertyId={selectedPropertyId}
+              grossRevenue={grossRevenue}
+              totalExpenses={totalExpenses}
+              theme="light"
+            />
+            <ProfitLossDividendCard 
+              accounts={accounts}
+              grossRevenue={grossRevenue}
+              totalExpenses={totalExpenses}
+              netOperatingIncome={netOperatingIncome}
+              revenueBreakdown={revenueBreakdown}
+              expenseBreakdown={expenseBreakdown}
+            />
+          </div>
         )}
 
         {activeTab === 'expenses' && (

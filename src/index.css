@@ -54,11 +54,33 @@ body {
 
 /* Enforce tabular numerals for financial & operational precision */
 .font-mono,
+.font-display,
 table,
 td,
 th,
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* Prevent flex and grid child divs from stretching beyond their container bounds */
+.grid > div {
+  min-width: 0;
+}
+
+.flex > div:not(.shrink-0) {
+  min-width: 0;
+}
+
+/* Ensure numbers and text inside divs wrap cleanly without spilling out */
+div,
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  overflow-wrap: break-word;
 }
 
 /* Smooth touch horizontal scrolling for wide tables on mobile & tablet */

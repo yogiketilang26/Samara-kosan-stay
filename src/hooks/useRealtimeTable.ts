@@ -26,8 +26,7 @@ export function attachRealtimeTableSession<T>(params: {
 }) {
   const {
     tableName,
-    hasRelations = DEFAULT_RELATIONAL_TABLES.has(tableName),
-    debounceMs = 2000,
+    debounceMs = 350,
     onPatch,
     onRefetch,
     onVisibilityStale
@@ -47,15 +46,15 @@ export function attachRealtimeTableSession<T>(params: {
 
   const handleRealtimeEvent = (payload: any) => {
     if (onPatch) {
-      if (payload && payload.new && payload.eventType === 'INSERT') {
+      if (payload && payload.new && payload.new.id !== undefined && payload.eventType === 'INSERT') {
         const newItem = { ...payload.new };
         onPatch((currentData) => {
-          if (newItem.id !== undefined && currentData.some((item: any) => String(item?.id) === String(newItem.id))) {
+          if (currentData.some((item: any) => String(item?.id) === String(newItem.id))) {
             return currentData.map((item: any) => String(item?.id) === String(newItem.id) ? { ...item, ...newItem } : item);
           }
           return [newItem, ...currentData];
         });
-      } else if (payload && payload.new && payload.eventType === 'UPDATE') {
+      } else if (payload && payload.new && payload.new.id !== undefined && payload.eventType === 'UPDATE') {
         let updatedItem = { ...payload.new };
         if (tableName === 'properties' && (updatedItem.lat !== undefined || updatedItem.latitude !== undefined)) {
           const norm = normalizeCoordinatePair(
@@ -86,10 +85,8 @@ export function attachRealtimeTableSession<T>(params: {
       }
     }
 
-    // Only refetch if table has complex nested relations (e.g. rooms with facilities)
-    if (hasRelations) {
-      triggerDebounced();
-    }
+    // Always trigger debounced refetch from Supabase so every role view stays 100% synchronized in real time
+    triggerDebounced();
   };
 
   const unsubscribe = realtimeManager.subscribe(tableName, {}, handleRealtimeEvent);
@@ -125,7 +122,7 @@ export function useRealtimeTable<T>(
   const dependencyTrigger = typeof dependencyTriggerOrOptions === 'number' ? dependencyTriggerOrOptions : 0;
   const enabled = options.enabled !== false;
   const hasRelations = options.hasRelations ?? DEFAULT_RELATIONAL_TABLES.has(tableName);
-  const debounceMs = Math.max(2000, options.debounceMs ?? 2000);
+  const debounceMs = Math.max(250, options.debounceMs ?? 350);
   const isCritical = Boolean(options.isCritical);
   
   // Keep the latest fetch function in a ref to avoid stale closure issues in callbacks

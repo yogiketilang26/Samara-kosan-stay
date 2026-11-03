@@ -61,7 +61,7 @@ export interface Room {
   id: number;
   property_id: number;
   room_number: string;
-  room_type: 'Standard' | 'Deluxe' | 'Premium';
+  room_type: 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus';
   price: number;
   size_sqm: number;
   floor: number;

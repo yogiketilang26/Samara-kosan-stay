@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
-import { database, DEFAULT_OWNER_SIGNATURE } from '../lib/supabase';
+import { database, DEFAULT_OWNER_SIGNATURE, normalizeFacilityList, inferFacilityIcon } from '../lib/supabase';
+import { DEFAULT_FACILITIES } from '../data/fallbackData';
 import { todayJakarta, toJakartaDate } from '../lib/dateUtils';
 import { pollWithBackoff } from '../lib/queryBudget';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
@@ -30,6 +31,12 @@ import {
   getGoogleMapsSearchUrl, 
   getGoogleMapsDirectionsUrl 
 } from '../utils/mapTiles';
+import PropertyDetailView, {
+  getPropertySlug,
+  getUrlPropertyParameter,
+  updateUrlPropertyParam,
+  findPropertyByUrlParam
+} from '../components/PropertyDetailView';
 
 interface HomeProps {}
 
@@ -225,6 +232,9 @@ export default function Home({}: HomeProps) {
   const { data: settingsData, loading: settingsLoading } = useRealtimeTable<SystemSettings>(
     'settings',
     () => database.fetchSettings().then(res => [res]));
+  const { data: facilitiesData } = useRealtimeTable(
+    'facilities',
+    () => database.fetchFacilities());
 
   const hooksLoading = propertiesLoading || roomsLoading || settingsLoading;
 
@@ -289,12 +299,12 @@ export default function Home({}: HomeProps) {
 
   // Survey Form states
   const [surveyForm, setSurveyForm] = useState({
-    fullName: 'Yogi Atmaja',
-    nik: '3174092803930005',
-    email: 'yogiatmaja26@gmail.com',
-    phone: '081293840293',
-    address: 'Sleman, D.I. Yogyakarta',
-    job: 'Software Engineer',
+    fullName: '',
+    nik: '',
+    email: '',
+    phone: '',
+    address: '',
+    job: '',
     date: toJakartaDate(new Date(Date.now() + 86400000)), // tomorrow (Asia/Jakarta)
     slot: '13:00 - 15:00',
     moveInDate: '',
@@ -303,10 +313,10 @@ export default function Home({}: HomeProps) {
 
   // Booking Form states
   const [bookingForm, setBookingForm] = useState({
-    fullName: 'Yogi Atmaja',
-    phone: '081293840293',
-    email: 'yogiatmaja26@gmail.com',
-    nik: '3174092803930005',
+    fullName: '',
+    phone: '',
+    email: '',
+    nik: '',
     isForOther: false,
     occupantName: '',
     occupantPhone: '',
@@ -339,9 +349,11 @@ export default function Home({}: HomeProps) {
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
 
-  // Filter state for embedded Room Showcase on Detail page
+  // Filter state for embedded Room Showcase on Detail page & Room Search
   const [detailRoomTab, setDetailRoomTab] = useState<'all' | 'available' | 'occupied'>('all');
   const [detailRoomFloor, setDetailRoomFloor] = useState<number | 'all'>('all');
+  const [detailRoomType, setDetailRoomType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus'>('all');
+  const [searchRoomType, setSearchRoomType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus'>('all');
 
   // Synchronized room availability validator directly connected to Supabase room state
   const isRoomAvailable = (r: Room): boolean => {
@@ -452,7 +464,7 @@ export default function Home({}: HomeProps) {
     if (filteredProps && filteredProps.length > 0) {
       setPriceRange(5000000);
     }
-  }, [propertiesData, roomsData, settingsData]);
+  }, [propertiesData, roomsData, settingsData, facilitiesData]);
 
   useEffect(() => {
     if (!hooksLoading) {
@@ -461,16 +473,19 @@ export default function Home({}: HomeProps) {
     }
   }, [hooksLoading]);
 
-  // Listener for custom navigation events (e.g. from Navbar)
+  // Listener for custom navigation events (e.g. from Navbar) & URL parameter changes
   useEffect(() => {
     const handleCustomNav = (e: any) => {
       if (e?.detail?.page === 'map') {
+        updateUrlPropertyParam(null);
         setUserPage('map');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } else if (e?.detail?.page === 'search') {
+        updateUrlPropertyParam(null);
         setUserPage('search');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } else if (e?.detail?.page === 'home') {
+        updateUrlPropertyParam(null);
         setUserPage('home');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
@@ -478,6 +493,25 @@ export default function Home({}: HomeProps) {
     window.addEventListener('samara-navigate', handleCustomNav);
     return () => window.removeEventListener('samara-navigate', handleCustomNav);
   }, []);
+
+  // Automatically resolve property from URL parameter on load or popstate
+  useEffect(() => {
+    if (properties.length === 0) return;
+    const syncFromUrl = () => {
+      const param = getUrlPropertyParameter();
+      if (param) {
+        const matched = findPropertyByUrlParam(param, properties);
+        if (matched) {
+          setActiveProperty(matched);
+          setSelectedMapProperty(matched);
+          setUserPage('detail');
+        }
+      }
+    };
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, [properties]);
 
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [activeTestimonialIdx, setActiveTestimonialIdx] = useState<number>(0);
@@ -1591,30 +1625,62 @@ export default function Home({}: HomeProps) {
     setShowReceipt(true);
   };
 
+  const getPropertyCategoryLabel = (name: string): string => {
+    const lower = (name || '').toLowerCase();
+    if (lower.includes('tiara')) return 'Compact Kos';
+    if (lower.includes('atika')) return 'Urban hub kos';
+    if (lower.includes('samara')) return 'Companion kos';
+    return name;
+  };
+
+  const findPropertyBySelection = (selection: string): Property | undefined => {
+    if (!selection || properties.length === 0) return undefined;
+    const selLower = selection.trim().toLowerCase();
+    return properties.find(p => {
+      const pNameLower = (p.name || '').toLowerCase();
+      const catLower = getPropertyCategoryLabel(p.name).toLowerCase();
+      return (
+        String(p.id) === selection ||
+        catLower === selLower ||
+        catLower.includes(selLower) ||
+        pNameLower === selLower ||
+        pNameLower.includes(selLower) ||
+        (p.address || '').toLowerCase().includes(selLower) ||
+        (selLower === 'compact kos' && pNameLower.includes('tiara')) ||
+        (selLower === 'urban hub kos' && pNameLower.includes('atika')) ||
+        (selLower === 'companion kos' && pNameLower.includes('samara'))
+      );
+    });
+  };
+
+  const openPropertyDetail = (prop: Property) => {
+    const slug = getPropertySlug(prop);
+    updateUrlPropertyParam(slug);
+    setSelectedMapProperty(prop);
+    setActiveProperty(prop);
+    setUserPage('detail');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleSearchTrigger = (e: React.FormEvent) => {
     e.preventDefault();
     setSelectedType('all');
-    setUserPage('search');
     if (searchLocation && properties.length > 0) {
-      const matched = properties.find(p => 
-        p.name.toLowerCase().includes(searchLocation.toLowerCase()) || 
-        p.address.toLowerCase().includes(searchLocation.toLowerCase()) ||
-        p.id.toString() === searchLocation
-      );
+      const matched = findPropertyBySelection(searchLocation);
       if (matched) {
-        setSelectedMapProperty(matched);
+        openPropertyDetail(matched);
+        return;
       }
     }
+    updateUrlPropertyParam(null);
+    setUserPage('search');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // Sync searchLocation selection directly to selectedMapProperty so the map pans immediately
   useEffect(() => {
     if (searchLocation && properties.length > 0) {
-      const matched = properties.find(p => 
-        p.name.toLowerCase().includes(searchLocation.toLowerCase()) || 
-        p.address.toLowerCase().includes(searchLocation.toLowerCase()) ||
-        p.id.toString() === searchLocation
-      );
+      const matched = findPropertyBySelection(searchLocation);
       if (matched) {
         setSelectedMapProperty(matched);
       }
@@ -1625,7 +1691,8 @@ export default function Home({}: HomeProps) {
   const filteredProperties = properties.filter(p => {
     const matchLocation = !searchLocation.trim() || 
       p.address.toLowerCase().includes(searchLocation.toLowerCase()) || 
-      p.name.toLowerCase().includes(searchLocation.toLowerCase());
+      p.name.toLowerCase().includes(searchLocation.toLowerCase()) ||
+      getPropertyCategoryLabel(p.name).toLowerCase().includes(searchLocation.toLowerCase());
 
     const matchType = selectedType === 'all' || p.type === selectedType;
     const matchPrice = p.price <= priceRange;
@@ -1653,10 +1720,12 @@ export default function Home({}: HomeProps) {
     const matchLocation = !searchLocation.trim() || 
       parentProperty.address.toLowerCase().includes(searchLocation.toLowerCase()) || 
       parentProperty.name.toLowerCase().includes(searchLocation.toLowerCase()) ||
+      getPropertyCategoryLabel(parentProperty.name).toLowerCase().includes(searchLocation.toLowerCase()) ||
       r.room_number.toLowerCase().includes(searchLocation.toLowerCase()) ||
       (r.room_type || '').toLowerCase().includes(searchLocation.toLowerCase());
 
     const matchType = selectedType === 'all' || parentProperty.type === selectedType;
+    const matchRoomCategory = searchRoomType === 'all' || (r.room_type || 'Standard') === searchRoomType;
     const matchPrice = r.price <= priceRange;
     const matchAvailability = !onlyAvailable || isRoomAvailable(r);
 
@@ -1667,7 +1736,7 @@ export default function Home({}: HomeProps) {
         (parentProperty.facilities || []).some((pf: any) => pf.name.toLowerCase().includes(f.toLowerCase()))
       );
 
-    return matchLocation && matchType && matchPrice && matchAvailability && matchFacilities;
+    return matchLocation && matchType && matchRoomCategory && matchPrice && matchAvailability && matchFacilities;
   });
 
   // Leaflet map initialization and updates hook
@@ -1873,6 +1942,7 @@ export default function Home({}: HomeProps) {
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <button 
             onClick={() => {
+              updateUrlPropertyParam(null);
               setUserPage('home');
               setActiveProperty(null);
             }} 
@@ -1882,6 +1952,7 @@ export default function Home({}: HomeProps) {
           </button>
           <button 
             onClick={() => {
+              updateUrlPropertyParam(null);
               setUserPage('search');
               setActiveProperty(null);
             }} 
@@ -1891,6 +1962,7 @@ export default function Home({}: HomeProps) {
           </button>
           <button 
             onClick={() => {
+              updateUrlPropertyParam(null);
               setUserPage('map');
             }} 
             className={`font-semibold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${userPage === 'map' ? 'bg-brand-beige text-brand-primary font-extrabold shadow-sm' : 'text-slate-200 hover:text-white'}`}
@@ -2038,17 +2110,26 @@ export default function Home({}: HomeProps) {
               >
                 
                 <div className="transition-all duration-300 hover:translate-z-6">
-                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">{lang === 'id' ? 'CABANG YANG TERSEDIA' : 'AVAILABLE BRANCHES'}</label>
+                  <label className="block text-[10px] font-bold text-brand-steel uppercase tracking-widest mb-1.5 font-mono">{lang === 'id' ? 'KATEGORI YANG TERSEDIA' : 'AVAILABLE CATEGORIES'}</label>
                   <div className="relative">
                     <MapPin className="absolute left-3 top-3 text-brand-taupe" size={16} />
                     <select
                       value={searchLocation}
-                      onChange={(e) => setSearchLocation(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSearchLocation(val);
+                        if (val) {
+                          const matched = findPropertyBySelection(val);
+                          if (matched) {
+                            openPropertyDetail(matched);
+                          }
+                        }
+                      }}
                       className="w-full bg-[#F8F9FA] border border-brand-beige rounded-xl pl-9 pr-3 py-2.5 text-xs font-medium text-brand-primary focus:outline-none focus:border-brand-primary cursor-pointer"
                     >
-                      <option value="">{lang === 'id' ? 'Semua Cabang' : 'All Branches'}</option>
+                      <option value="">{lang === 'id' ? 'Semua Kategori' : 'All Categories'}</option>
                       {properties.map(p => (
-                        <option key={p.id} value={p.name}>{p.name}</option>
+                        <option key={p.id} value={getPropertyCategoryLabel(p.name)}>{getPropertyCategoryLabel(p.name)}</option>
                       ))}
                     </select>
                   </div>
@@ -2195,14 +2276,14 @@ export default function Home({}: HomeProps) {
                             </span>
                             <span className="w-1.5 h-1.5 rounded-full bg-brand-beige" />
                             <span className="text-[10px] font-extrabold font-mono uppercase bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2.5 py-0.5 rounded-md">
-                              Kos {p.type.toUpperCase()}
+                              {getPropertyCategoryLabel(p.name)}
                             </span>
                           </div>
                           
                           <div className="flex items-baseline gap-1">
                             <span className="text-brand-steel text-[10px] font-medium uppercase font-mono tracking-wider">{lang === 'id' ? 'Mulai Rp' : 'From IDR'}</span>
-                            <span className="text-base font-extrabold text-brand-primary">
-                              {p.price === 1800000 ? "3.200.000" : p.price === 2200000 ? "2.800.000" : formatRupiah(p.price).replace("Rp", "").trim()}
+                            <span className="text-base font-extrabold text-brand-primary tabular-nums">
+                              {formatRupiah(p.price).replace("Rp", "").trim()}
                             </span>
                           </div>
                         </div>
@@ -2211,8 +2292,7 @@ export default function Home({}: HomeProps) {
                           type="button"
                           id={`btn-detail-cabang-${p.id}`}
                           onClick={() => {
-                            setActiveProperty(p);
-                            setUserPage('detail');
+                            openPropertyDetail(p);
                           }}
                           className={`w-fit inline-flex items-center gap-2 px-6 py-2.5 rounded-full font-bold text-xs cursor-pointer transition-all ${themeBtnClass}`}
                         >
@@ -2238,7 +2318,7 @@ export default function Home({}: HomeProps) {
                 </div>
                 <h3 className="text-xl md:text-2xl font-black text-white tracking-tight font-display">
                   {lang === 'id' 
-                    ? 'Eksplorasi Lokasi Cabang & Fasilitas Publik Terdekat' 
+                    ? 'Eksplorasi Lokasi Kos & Fasilitas Publik Terdekat' 
                     : 'Explore Property Locations & Nearby Public Amenities'}
                 </h3>
                 <p className="text-xs text-slate-350 leading-relaxed font-light">
@@ -2483,7 +2563,7 @@ export default function Home({}: HomeProps) {
                         onChange={(e) => setSelectedContactPropertyId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
                         className="w-full bg-white border-2 border-[#2E6F40] rounded-2xl px-4 py-3 text-sm font-extrabold text-[#3A444D] shadow-md focus:outline-none focus:ring-2 focus:ring-[#2E6F40] cursor-pointer transition-all appearance-none pr-10"
                       >
-                        <option value="all">🏢 {lang === 'id' ? 'Semua Cabang / Kontak Pusat Samara Stay' : 'All Branches / Samara Stay HQ'}</option>
+                        <option value="all">🏢 {lang === 'id' ? 'Semua Kost / Kontak Admin  Platform' : 'All Branches / Samara Stay HQ'}</option>
                         {properties.map((p) => (
                           <option key={p.id} value={p.id}>
                             📍 {p.name} ({p.address.split(',')[0]})
@@ -2499,25 +2579,25 @@ export default function Home({}: HomeProps) {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {/* Card 1: WhatsApp Admin */}
-                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm">
-                    <div className="w-12 h-12 rounded-full bg-[#E8F5E9] flex items-center justify-center text-[#2E6F40]">
+                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm min-w-0 overflow-hidden">
+                    <div className="w-12 h-12 rounded-full bg-[#E8F5E9] flex items-center justify-center text-[#2E6F40] shrink-0">
                       <MessageSquare size={22} />
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">
                           WhatsApp Admin
                         </h4>
                         {selectedProp && (
-                          <span className="text-[9px] font-bold font-mono bg-[#EEF7F0] text-[#2E6F40] px-2 py-0.5 rounded-full">
+                          <span className="text-[9px] font-bold font-mono bg-[#EEF7F0] text-[#2E6F40] px-2 py-0.5 rounded-full shrink-0">
                             {selectedProp.name.split(' ')[0]}
                           </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-[#64748B] font-medium mt-1">
+                      <p className="text-[11px] text-[#64748B] font-medium mt-1 break-words">
                         {selectedProp ? `Admin WhatsApp untuk ${selectedProp.name}` : 'Layanan respon cepat untuk reservasi & pertanyaan langsung.'}
                       </p>
-                      <p className="text-sm font-black font-mono text-[#2E6F40] mt-2">
+                      <p className="text-sm font-black font-mono text-[#2E6F40] mt-2 tabular-nums break-words">
                         {waNumFormatted}
                       </p>
                     </div>
@@ -2532,22 +2612,22 @@ export default function Home({}: HomeProps) {
                   </div>
 
                   {/* Card 2: Email Admin */}
-                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm">
-                    <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm min-w-0 overflow-hidden">
+                    <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 shrink-0">
                       <Mail size={22} />
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">
                           Email Admin
                         </h4>
                         {selectedProp && (
-                          <span className="text-[9px] font-bold font-mono bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
+                          <span className="text-[9px] font-bold font-mono bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full shrink-0">
                             {selectedProp.name.split(' ')[0]}
                           </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-[#64748B] font-medium mt-1">
+                      <p className="text-[11px] text-[#64748B] font-medium mt-1 break-words">
                         {selectedProp ? `Email resmi admin ${selectedProp.name}` : 'Kirimkan penawaran kerjasama, pertanyaan bisnis, atau komplain.'}
                       </p>
                       <p className="text-xs font-bold font-mono text-[#3A444D] mt-2 break-all">
@@ -2563,19 +2643,19 @@ export default function Home({}: HomeProps) {
                   </div>
 
                   {/* Card 3: Lokasi Gedung / Kantor */}
-                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm">
-                    <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-600">
+                  <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl text-left space-y-4 hover:border-[#2E6F40] transition-all shadow-sm min-w-0 overflow-hidden">
+                    <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-600 shrink-0">
                       <MapPin size={22} />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h4 className="font-extrabold text-[#3A444D] text-sm uppercase tracking-wider">
                         {selectedProp ? 'Lokasi Gedung' : 'Kantor Pusat'}
                       </h4>
-                      <p className="text-[11px] text-[#64748B] font-medium mt-1">
+                      <p className="text-[11px] text-[#64748B] font-medium mt-1 break-words">
                         {locationTitle}
                       </p>
                     </div>
-                    <span className="text-xs font-semibold text-[#3A444D] block leading-relaxed">
+                    <span className="text-xs font-semibold text-[#3A444D] block leading-relaxed break-words">
                       📍 {locationDesc}
                     </span>
                   </div>
@@ -2686,9 +2766,9 @@ export default function Home({}: HomeProps) {
 
                           {/* Badges */}
                           <div className="flex flex-wrap gap-1">
-                            {(p.facilities || []).slice(0, 3).map((f: any, idx) => (
+                            {normalizeFacilityList(p.facilities, DEFAULT_FACILITIES.slice(0, 4)).slice(0, 3).map((f: any, idx) => (
                               <span key={f.id || idx} className="text-[9px] bg-slate-50 border border-[#E2E8F0] text-[#475569] font-bold px-2 py-0.5 rounded-md capitalize">
-                                {f.name}
+                                {typeof f === 'string' ? f : (f.name || f.title)}
                               </span>
                             ))}
                           </div>
@@ -2702,8 +2782,7 @@ export default function Home({}: HomeProps) {
 
                             <button
                               onClick={() => {
-                                setActiveProperty(p);
-                                setUserPage('detail');
+                                openPropertyDetail(p);
                               }}
                               className="bg-[#2E6F40] hover:bg-[#1f4b2b] text-white font-extrabold py-2 px-3 rounded-xl text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-sm"
                             >
@@ -2724,51 +2803,83 @@ export default function Home({}: HomeProps) {
                 )
               ) : (
                 // MODE: DIRECT INTERACTIVE ROOM SEARCH
-                filteredRooms.length > 0 ? (
-                  filteredRooms.map(r => {
-                    const p = properties.find(prop => prop.id === r.property_id);
-                    if (!p) return null;
-                    return (
-                      <div 
-                        key={r.id} 
-                        className="bg-white border border-[#E2E8F0] hover:border-[#2E6F40] rounded-2xl p-4 flex flex-col sm:flex-row gap-4 hover:shadow-md transition-all duration-300 group shadow-sm text-left"
-                      >
-                        {/* Room image or fallback */}
-                        <div className="w-full sm:w-40 h-32 bg-slate-900 shrink-0 rounded-xl relative overflow-hidden">
-                          <img 
-                            src={r.image_url || p.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=400&q=80"} 
-                            alt={`Kamar ${r.room_number}`}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-all duration-500"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute top-2.5 left-2.5">
-                            {(() => {
-                              const isAvail = isRoomAvailable(r);
-                              return (
-                                <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase font-mono border shadow-sm ${
-                                  isAvail 
-                                    ? 'bg-emerald-600 text-white border-emerald-700' 
-                                    : r.status === 'reserved'
-                                      ? 'bg-amber-600 text-white border-amber-700'
-                                      : r.status === 'occupied' 
-                                        ? 'bg-slate-700 text-white border-slate-800' 
-                                        : 'bg-rose-600 text-white border-rose-700'
-                                }`}>
-                                  {isAvail ? 'KOSONG' : r.status === 'reserved' ? 'DIRESERVASI' : r.status === 'occupied' ? 'TERISI' : 'PERBAIKAN'}
-                                </span>
-                              );
-                            })()}
-                          </div>
-                        </div>
+                <div className="space-y-4">
+                  {/* Quick Room Category Filter Bar */}
+                  <div className="flex flex-wrap items-center gap-1.5 bg-white border border-[#E2E8F0] p-2.5 rounded-2xl shadow-2xs">
+                    <span className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider font-mono px-2">Kategori Kamar:</span>
+                    {(['all', 'Standard', 'Deluxe', 'Premium', 'Premium Plus'] as const).map((cat) => {
+                      const isActive = searchRoomType === cat;
+                      return (
+                        <button
+                          key={cat}
+                          type="button"
+                          onClick={() => setSearchRoomType(cat)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5 ${
+                            isActive
+                              ? cat === 'Premium Plus'
+                                ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 border-amber-400 shadow-xs'
+                                : 'bg-[#2E6F40] text-white border-[#2E6F40] shadow-xs'
+                              : 'bg-[#F8FAFC] text-[#475569] border-[#E2E8F0] hover:border-[#2E6F40] hover:text-[#2E6F40]'
+                          }`}
+                        >
+                          {cat === 'Premium Plus' && <Sparkles size={11} className={isActive ? 'text-slate-950' : 'text-amber-500'} />}
+                          <span>{cat === 'all' ? 'Semua Kategori' : cat}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                        {/* Room Details */}
-                        <div className="flex-1 flex flex-col justify-between space-y-2 min-w-0">
-                          <div className="space-y-1">
-                            <div className="flex justify-between items-start gap-2">
-                              <div className="truncate">
-                                <span className="text-[8px] font-mono font-extrabold uppercase text-[#2E6F40] bg-[#2E6F40]/10 border border-[#2E6F40]/20 px-2 py-0.5 rounded-md mr-1.5">{r.room_type}</span>
-                                <h3 className="font-extrabold text-[#3A444D] text-sm font-sans inline-block">Kamar No. {r.room_number}</h3>
-                              </div>
+                  {filteredRooms.length > 0 ? (
+                    filteredRooms.map(r => {
+                      const p = properties.find(prop => prop.id === r.property_id);
+                      if (!p) return null;
+                      return (
+                        <div 
+                          key={r.id} 
+                          className="bg-white border border-[#E2E8F0] hover:border-[#2E6F40] rounded-2xl p-4 flex flex-col sm:flex-row gap-4 hover:shadow-md transition-all duration-300 group shadow-sm text-left"
+                        >
+                          {/* Room image or fallback */}
+                          <div className="w-full sm:w-40 h-32 bg-slate-900 shrink-0 rounded-xl relative overflow-hidden">
+                            <img 
+                              src={r.image_url || p.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=400&q=80"} 
+                              alt={`Kamar ${r.room_number}`}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-all duration-500"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute top-2.5 left-2.5">
+                              {(() => {
+                                const isAvail = isRoomAvailable(r);
+                                return (
+                                  <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase font-mono border shadow-sm ${
+                                    isAvail 
+                                      ? 'bg-emerald-600 text-white border-emerald-700' 
+                                      : r.status === 'reserved'
+                                        ? 'bg-amber-600 text-white border-amber-700'
+                                        : r.status === 'occupied' 
+                                          ? 'bg-slate-700 text-white border-slate-800' 
+                                          : 'bg-rose-600 text-white border-rose-700'
+                                  }`}>
+                                    {isAvail ? 'KOSONG' : r.status === 'reserved' ? 'DIRESERVASI' : r.status === 'occupied' ? 'TERISI' : 'PERBAIKAN'}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </div>
+
+                          {/* Room Details */}
+                          <div className="flex-1 flex flex-col justify-between space-y-2 min-w-0">
+                            <div className="space-y-1">
+                              <div className="flex justify-between items-start gap-2">
+                                <div className="truncate">
+                                  <span className={`text-[8px] font-mono font-extrabold uppercase px-2 py-0.5 rounded-md mr-1.5 border ${
+                                    r.room_type === 'Premium Plus'
+                                      ? 'bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-800 border-amber-400'
+                                      : r.room_type === 'Premium'
+                                        ? 'text-teal-700 bg-teal-50 border-teal-200'
+                                        : 'text-[#2E6F40] bg-[#2E6F40]/10 border-[#2E6F40]/20'
+                                  }`}>{r.room_type || 'Standard'}</span>
+                                  <h3 className="font-extrabold text-[#3A444D] text-sm font-sans inline-block">Kamar No. {r.room_number}</h3>
+                                </div>
                               <span className="text-[9px] font-mono text-[#64748B] bg-slate-50 border border-[#E2E8F0] px-2 py-0.5 rounded-full uppercase shrink-0">Lantai {r.floor} ({r.size_sqm} m²)</span>
                             </div>
                             
@@ -2784,9 +2895,9 @@ export default function Home({}: HomeProps) {
 
                           {/* Facilities */}
                           <div className="flex flex-wrap gap-1">
-                            {(r.facilities || []).slice(0, 4).map((f: any, idx) => (
+                            {normalizeFacilityList(r.facilities, DEFAULT_FACILITIES.slice(0, 4)).slice(0, 4).map((f: any, idx) => (
                               <span key={f.id || idx} className="text-[8px] bg-slate-50 border border-[#E2E8F0] text-[#475569] px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">
-                                {f.name}
+                                {typeof f === 'string' ? f : (f.name || f.title)}
                               </span>
                             ))}
                           </div>
@@ -2812,8 +2923,7 @@ export default function Home({}: HomeProps) {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveProperty(p);
-                                  setUserPage('detail');
+                                  openPropertyDetail(p);
                                 }}
                                 className="border border-[#E2E8F0] hover:border-[#64748B] text-[#475569] font-bold py-1.5 px-3 rounded-xl text-[10px] transition-all cursor-pointer"
                               >
@@ -2841,12 +2951,13 @@ export default function Home({}: HomeProps) {
                       </div>
                     );
                   })
-                ) : (
-                  <div className="bg-white border border-dashed border-brand-beige rounded-3xl p-16 text-center space-y-4">
-                    <CompassIcon size={44} className="text-brand-steel mx-auto" />
-                    <p className="text-brand-steel text-sm font-light">Kamar dengan kriteria pencarian tidak ditemukan. Silakan sesuaikan filter Anda.</p>
-                  </div>
-                )
+                  ) : (
+                    <div className="bg-white border border-dashed border-brand-beige rounded-3xl p-16 text-center space-y-4">
+                      <CompassIcon size={44} className="text-brand-steel mx-auto" />
+                      <p className="text-brand-steel text-sm font-light">Kamar dengan kriteria pencarian tidak ditemukan. Silakan sesuaikan filter Anda.</p>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -2901,8 +3012,7 @@ export default function Home({}: HomeProps) {
                           </a>
                           <button
                             onClick={() => {
-                              setActiveProperty(selectedMapProperty);
-                              setUserPage('detail');
+                              openPropertyDetail(selectedMapProperty);
                             }}
                             className="bg-amber-500 text-black px-2.5 py-1 rounded-md text-[9px] font-black hover:bg-amber-600 cursor-pointer transition-colors"
                           >
@@ -2932,793 +3042,47 @@ export default function Home({}: HomeProps) {
       )}
 
       {/* ========================================================== */}
-      {/* VIEW 3: PROPERTY & CHAMBER DETAIL PAGE (AIRBNB STYLE) */}
+      {/* VIEW 3: PROPERTY & CHAMBER DETAIL PAGE (PropertyDetailView) */}
       {/* ========================================================== */}
-      {userPage === 'detail' && activeProperty && (
-        <div className="max-w-6xl mx-auto px-4 md:px-8 mt-6 space-y-8 animate-fade-in">
-          
-          {/* Breadcrumb Navigation & Back indicators */}
-          <div className="flex justify-between items-center">
-            <button 
-              onClick={() => setUserPage('search')}
-              className="inline-flex items-center gap-1.5 text-xs text-[#64748B] hover:text-[#2E6F40] font-bold cursor-pointer transition-colors px-3.5 py-2 rounded-xl border border-[#E2E8F0] bg-white shadow-xs"
-            >
-              <ChevronLeft size={14} />
-              Kembali ke Pencarian Katalog
-            </button>
-            <div className="flex items-center gap-1.5 text-[10px] text-[#64748B] font-mono">
-              <span>Home</span>
-              <ChevronRight size={10} />
-              <span>Gedung</span>
-              <ChevronRight size={10} />
-              <span className="text-[#3A444D] font-semibold">{activeProperty.name}</span>
-            </div>
-          </div>
-
-          {/* Airbnb-style Premium Image Grid Gallery */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white border border-[#E2E8F0] p-3 rounded-3xl overflow-hidden shadow-sm h-[380px]">
-            {/* 1 Big Photo (Col span 2, Row span 2) */}
-            <div className="md:col-span-2 h-full rounded-2xl overflow-hidden bg-slate-900 select-none relative group">
-              <img 
-                src={activeProperty.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=600&q=80"} 
-                alt={activeProperty.name}
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-95"
-                referrerPolicy="no-referrer"
-              />
-              <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm border border-slate-800 text-white px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider">
-                Foto Utama
-              </div>
-              
-              {/* Admin Image Uploader Trigger */}
-              <div className="absolute bottom-4 right-4 z-10">
-                <label className="bg-[#2E6F40] hover:bg-[#235531] text-white px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-1.5">
-                  <UploadCloud size={13} />
-                  <span>{uploadingImage ? "Mengunggah..." : "Upload Foto Utama"}</span>
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    className="hidden" 
-                    disabled={uploadingImage}
-                    onChange={(e) => handleUploadDetailImage(e, -1)} 
-                  />
-                </label>
-              </div>
-            </div>
-
-            {/* Grid of 4 Smaller Photos (Col span 1 each) */}
-            <div className="hidden md:grid grid-cols-2 grid-rows-2 col-span-2 gap-3 h-full">
-              {(() => {
-                const galleryImages = (activeProperty.images || []).filter(img => typeof img === 'string' && img.trim() !== '');
-                const labels = ["Ruang Kamar", "Kamar Mandi", "Area Bersama", "Rooftop Lounge"];
-                
-                return [0, 1, 2, 3].map((idx) => {
-                  const url = galleryImages[idx] || (idx === 0 ? (activeProperty.image_url && activeProperty.image_url.trim() !== '' ? activeProperty.image_url : null) : null);
-                  const label = labels[idx];
-                  return (
-                    <div 
-                      key={idx} 
-                      className={`rounded-xl overflow-hidden h-full select-none relative group ${
-                        url 
-                          ? 'bg-slate-900 cursor-zoom-in' 
-                          : 'bg-slate-900/60 border border-slate-800 flex flex-col items-center justify-center'
-                      }`}
-                      onClick={() => url && setSelectedRoomImage(url)}
-                    >
-                      {url ? (
-                        <>
-                          <img 
-                            src={url} 
-                            alt={label}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute bottom-2 left-2 bg-black/65 px-2 py-1 rounded-md text-[9px] font-semibold text-white tracking-wide">{label}</div>
-                        </>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center p-3 text-center">
-                          <UploadCloud size={20} className="mb-1 text-slate-500 group-hover:text-emerald-400 transition-colors" />
-                          <span className="text-[10px] font-bold text-slate-400">{label}</span>
-                          <span className="text-[9px] text-slate-500">Belum diunggah</span>
-                        </div>
-                      )}
-                      
-                      {/* Admin Image Uploader Trigger for Gallery */}
-                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10" onClick={(e) => e.stopPropagation()}>
-                        <label className="bg-slate-950/80 hover:bg-[#2E6F40] text-white p-2 rounded-lg shadow-md cursor-pointer flex items-center justify-center transition-colors" title="Unggah Foto Galeri">
-                          <UploadCloud size={12} />
-                          <input 
-                            type="file" 
-                            accept="image/*" 
-                            className="hidden" 
-                            disabled={uploadingImage}
-                            onChange={(e) => handleUploadDetailImage(e, idx)} 
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
-          </div>
-
-          {/* TWO COLUMN CONTENT PANEL */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 text-xs font-medium">
-            
-            {/* Left Main Details Column (col-span-8) */}
-            <div className="lg:col-span-8 space-y-8">
-              
-              {/* Complex Metadata Description Block */}
-              <div className="space-y-3.5 border-b border-[#F1F5F9] pb-6 text-left">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`px-2.5 py-1 rounded-md text-[9px] font-extrabold uppercase font-mono tracking-wider ${
-                    activeProperty.type === 'putri' 
-                      ? 'bg-pink-500/20 text-pink-300 border border-pink-500/30' 
-                      : activeProperty.type === 'putra' 
-                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' 
-                        : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                  }`}>
-                    KOS {activeProperty.type.toUpperCase()}
-                  </span>
-                  <div className="flex items-center gap-1 text-[#64748B] font-semibold font-mono text-[11px]">
-                    <Star size={13} className="text-[#2E6F40] fill-amber-500" />
-                    <span>4.9 (42 Ulasan)</span>
-                  </div>
-                  <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
-                    TERVERIFIKASI
-                  </span>
-                </div>
-
-                <h1 className="text-3xl font-black text-[#3A444D] font-display tracking-tight">{activeProperty.name}</h1>
-                
-                <div className="flex items-center gap-1.5 text-[#64748B] text-sm font-medium">
-                  <MapPin size={15} className="text-[#2E6F40] shrink-0" />
-                  <span>{activeProperty.address}</span>
-                </div>
-              </div>
-
-              {/* HARGA SEWA MULAI CARD BLOCK */}
-              <div className="bg-white border border-[#E2E8F0] p-8 rounded-[24px] text-center space-y-5 shadow-xs">
-                <div className="space-y-1">
-                  <span className="text-[10px] text-[#64748B] font-extrabold uppercase tracking-widest block">HARGA SEWA MULAI</span>
-                  <h2 className="text-3xl font-extrabold text-[#1E293B] font-display tracking-tight">
-                    {(() => {
-                      const propertyRooms = rooms.filter(r => r.property_id === activeProperty.id);
-                      const startingPrice = propertyRooms.length > 0 
-                        ? Math.min(...propertyRooms.map(r => r.price)) 
-                        : activeProperty.price;
-                      return formatRupiah(startingPrice);
-                    })()} <span className="text-sm font-medium text-[#64748B]">/ bulan</span>
-                  </h2>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setIsCatalogOpen(true)}
-                  className="w-full max-w-md mx-auto py-3.5 px-6 bg-[#334155] hover:bg-[#1E293B] text-white rounded-full font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer"
-                >
-                  <Grid size={18} />
-                  <span>Buka Katalog Kamar</span>
-                </button>
-
-                <p className="text-[10px] text-[#64748B] font-medium">Lihat semua tipe & harga kamar tersedia</p>
-              </div>
-
-              {/* DAFTAR KAMAR & KETERSEDIAAN UNIT LANGSUNG TERPADU (SUPABASE REALTIME SYNC) */}
-              {(() => {
-                const propertyRooms = rooms.filter(r => r.property_id === activeProperty.id);
-                const availableRoomsList = propertyRooms.filter(r => isRoomAvailable(r));
-                const occupiedRoomsList = propertyRooms.filter(r => !isRoomAvailable(r));
-                
-                // Available floors
-                const floors: number[] = Array.from(new Set<number>(propertyRooms.map(r => Number(r.floor)).filter(f => !isNaN(f) && f > 0))).sort((a: number, b: number) => a - b);
-
-                // Filtered rooms based on tabs & floor
-                let displayRooms = propertyRooms;
-                if (detailRoomTab === 'available') {
-                  displayRooms = availableRoomsList;
-                } else if (detailRoomTab === 'occupied') {
-                  displayRooms = occupiedRoomsList;
-                }
-
-                if (detailRoomFloor !== 'all') {
-                  displayRooms = displayRooms.filter(r => r.floor === detailRoomFloor);
-                }
-
-                return (
-                  <div className="bg-white border border-[#E2E8F0] p-6 sm:p-7 rounded-[24px] space-y-6 shadow-xs text-left">
-                    {/* Header Section */}
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-[#F1F5F9] pb-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full"></span>
-                          <h3 className="text-sm sm:text-base font-black text-[#3A444D] uppercase tracking-tight font-display">
-                            Daftar Kamar & Ketersediaan Unit
-                          </h3>
-                        </div>
-                        <p className="text-[11px] text-[#64748B] font-medium mt-1">
-                          Data ketersediaan kamar tersinkronisasi otomatis dengan database Supabase. Unit tanpa perpanjangan kontrak otomatis kembali tersedia.
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="px-3 py-1 rounded-full text-[10px] font-extrabold uppercase font-mono bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          {availableRoomsList.length} Unit Tersedia
-                        </span>
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-100 text-slate-600 border border-slate-200">
-                          {propertyRooms.length} Total
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Filter Tabs & Floor Selection */}
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      {/* Tabs */}
-                      <div className="flex flex-wrap gap-1.5 bg-[#F8FAFC] p-1 rounded-xl border border-[#E2E8F0]">
-                        <button
-                          type="button"
-                          onClick={() => setDetailRoomTab('all')}
-                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                            detailRoomTab === 'all'
-                              ? 'bg-[#2E6F40] text-white shadow-2xs'
-                              : 'text-[#64748B] hover:text-[#1E293B]'
-                          }`}
-                        >
-                          Semua Unit ({propertyRooms.length})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDetailRoomTab('available')}
-                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                            detailRoomTab === 'available'
-                              ? 'bg-[#2E6F40] text-white shadow-2xs'
-                              : 'text-emerald-700 hover:text-emerald-800'
-                          }`}
-                        >
-                          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                          Tersedia ({availableRoomsList.length})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDetailRoomTab('occupied')}
-                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                            detailRoomTab === 'occupied'
-                              ? 'bg-[#2E6F40] text-white shadow-2xs'
-                              : 'text-[#64748B] hover:text-[#1E293B]'
-                          }`}
-                        >
-                          <span className="w-2 h-2 rounded-full bg-slate-400"></span>
-                          Terisi ({occupiedRoomsList.length})
-                        </button>
-                      </div>
-
-                      {/* Floor Filter */}
-                      {floors.length > 1 && (
-                        <div className="flex items-center gap-1.5 text-[11px]">
-                          <span className="text-[#64748B] font-medium">Lantai:</span>
-                          <select
-                            value={detailRoomFloor}
-                            onChange={(e) => setDetailRoomFloor(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-                            className="bg-white border border-[#E2E8F0] rounded-lg px-2.5 py-1 text-xs font-semibold text-[#3A444D] focus:outline-none focus:border-[#2E6F40] cursor-pointer"
-                          >
-                            <option value="all">Semua Lantai</option>
-                            {floors.map(f => (
-                              <option key={f} value={f}>Lantai {f}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Rooms Grid */}
-                    {displayRooms.length > 0 ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {displayRooms.map(r => {
-                          const isAvail = isRoomAvailable(r);
-                          const isSelected = activeRoom?.id === r.id;
-
-                          return (
-                            <div
-                              key={r.id}
-                              className={`p-4 rounded-2xl border flex flex-col justify-between gap-3.5 transition-all duration-300 ${
-                                !isAvail 
-                                  ? 'bg-[#F8FAFC]/60 border-[#E2E8F0] opacity-75' 
-                                  : isSelected
-                                    ? 'border-[#2E6F40] bg-[#2E6F40]/5 shadow-sm ring-1 ring-[#2E6F40]/30'
-                                    : 'border-[#E2E8F0] bg-white hover:border-[#2E6F40] hover:shadow-sm'
-                              }`}
-                            >
-                              <div className="space-y-3">
-                                {/* Room Photo */}
-                                <div 
-                                  className="w-full h-40 rounded-xl overflow-hidden bg-slate-900 border border-[#E2E8F0] relative group cursor-pointer"
-                                  onClick={() => setSelectedRoomForDetail(r)}
-                                  title="Klik untuk melihat foto & galeri unit ini"
-                                >
-                                  <img 
-                                    src={r.image_url || 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80'} 
-                                    alt={`Kamar ${r.room_number}`} 
-                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                                    referrerPolicy="no-referrer"
-                                    onError={(e) => {
-                                      (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
-                                    }}
-                                  />
-                                  <div className="absolute top-2 left-2 bg-black/75 px-2 py-0.5 rounded text-[8px] font-bold text-white tracking-wide uppercase">
-                                    LANTAI {r.floor}
-                                  </div>
-                                  <div className="absolute bottom-2 right-2 bg-black/80 px-2 py-0.5 rounded text-[9px] font-semibold text-white">
-                                    {r.size_sqm || 16} m²
-                                  </div>
-                                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <span className="text-[10px] text-white font-bold bg-black/70 px-2.5 py-1 rounded-lg">
-                                      Lihat Galeri Foto
-                                    </span>
-                                  </div>
-                                </div>
-
-                                {/* Room Title & Status */}
-                                <div className="space-y-1">
-                                  <div className="flex justify-between items-start">
-                                    <div className="font-extrabold text-[#3A444D] text-sm font-display flex items-center gap-1.5 flex-wrap">
-                                      Unit {r.room_number}
-                                      <span className="text-[8px] font-extrabold text-[#2E6F40] bg-[#2E6F40]/10 border border-[#2E6F40]/20 px-2 py-0.5 rounded font-sans uppercase">
-                                        {r.room_type || 'Standard'}
-                                      </span>
-                                    </div>
-
-                                    <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono border flex items-center gap-1 ${
-                                      isAvail 
-                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                                        : 'bg-slate-100 text-slate-600 border-slate-200'
-                                    }`}>
-                                      {isAvail ? (
-                                        <>
-                                          <CheckCircle size={10} className="text-emerald-600" />
-                                          Tersedia
-                                        </>
-                                      ) : (
-                                        'Terisi'
-                                      )}
-                                    </span>
-                                  </div>
-
-                                  {/* Facilities */}
-                                  <div className="flex flex-wrap gap-1 pt-1">
-                                    {(r.facilities || []).slice(0, 4).map((f: any, idx) => (
-                                      <span key={f.id || idx} className="text-[9px] bg-[#F8FAFC] border border-[#E2E8F0] text-[#64748B] px-2 py-0.5 rounded-md font-medium">
-                                        {f.name}
-                                      </span>
-                                    ))}
-                                    {(r.facilities || []).length > 4 && (
-                                      <span className="text-[9px] text-[#64748B] px-1 py-0.5 font-medium">
-                                        +{(r.facilities || []).length - 4} lainnya
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Price */}
-                                <div className="border-t border-[#F1F5F9] pt-2">
-                                  <div className="text-[10px] text-[#64748B] font-medium">Tarif Sewa</div>
-                                  <div className="text-base font-extrabold text-[#1E293B]">
-                                    {formatRupiah(r.price)} <span className="text-[11px] text-[#64748B] font-normal">/ bulan</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* Action CTAs */}
-                              <div className="pt-2 border-t border-[#F1F5F9] flex items-center gap-2">
-                                {isAvail ? (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveRoom(r);
-                                        setCheckoutFlow('monthly');
-                                        window.scrollTo({ top: 1200, behavior: 'smooth' });
-                                      }}
-                                      className="flex-1 py-2 px-3 bg-[#2E6F40] hover:bg-[#235531] text-white text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center shadow-2xs"
-                                    >
-                                      Pesan Unit Ini
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveRoom(r);
-                                        setCheckoutFlow('survey');
-                                      }}
-                                      className="py-2 px-3 bg-[#F8FAFC] hover:bg-emerald-50 text-[#2E6F40] border border-[#E2E8F0] hover:border-[#2E6F40] text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center"
-                                      title="Jadwalkan survey untuk unit ini"
-                                    >
-                                      Survey
-                                    </button>
-                                  </>
-                                ) : (
-                                  <div className="w-full py-2 px-3 bg-slate-100 text-slate-500 rounded-xl text-[11px] font-medium text-center border border-slate-200">
-                                    Unit Sedang Terisi
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="py-12 px-4 border border-dashed border-[#E2E8F0] rounded-2xl text-center space-y-2">
-                        <Bed size={32} className="text-[#64748B] mx-auto opacity-50" />
-                        <p className="text-xs text-[#64748B] font-medium">
-                          Tidak ada kamar yang sesuai dengan filter yang dipilih.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* Deskripsi Hunian */}
-              <div className="bg-white border border-[#E2E8F0] p-6 rounded-[24px] space-y-3.5 shadow-xs text-left">
-                <h3 className="text-sm font-black text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
-                  <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full"></span>
-                  Deskripsi Hunian
-                </h3>
-                <p className="text-[#64748B] leading-relaxed font-medium text-xs whitespace-pre-line">
-                  {activeProperty.description || "Hunian eksklusif berfasilitas komplit, berlokasi sangat strategis dekat area komersial, pusat perkantoran, dan kampus ternama. Lingkungan asri, tenang, aman dan nyaman untuk ditinggali."}
-                </p>
-              </div>
-
-              {/* Detail Fasilitas Kompleks */}
-              <div className="space-y-4 border-b border-[#F1F5F9] pb-6 text-left">
-                <h3 className="text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans font-bold flex items-center gap-2">
-                  <Grid size={14} className="text-[#2E6F40]" />
-                  Fasilitas Kompleks Gedung
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {(activeProperty.facilities || []).map((fac: any, idx) => {
-                    const IconComp = (LucideIcons as any)[fac.icon] || LucideIcons.Sparkles;
-                    return (
-                      <div key={fac.id || idx} className="bg-white border border-[#E2E8F0] p-3.5 rounded-xl flex items-center gap-3 hover:border-[#2E6F40] transition-all">
-                        <IconComp size={14} className="text-[#2E6F40] shrink-0" />
-                        <span className="font-semibold text-[#3A444D] capitalize">{fac.name}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* ATURAN & TATA TERTIB HUNIAN (PAPIPOST & RUKITA STYLE) */}
-              <div className="bg-white border border-[#E2E8F0] p-6 rounded-[24px] space-y-6 shadow-xs text-left">
-                <h3 className="text-sm font-black text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
-                  <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full"></span>
-                  Kebijakan & Peraturan Hunian
-                </h3>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Aturan Tambahan Penghuni */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-2xl space-y-2.5">
-                    <h4 className="font-extrabold text-[#2E6F40] font-sans text-xs flex items-center gap-1.5">
-                      <BookOpen size={14} className="text-[#2E6F40]" />
-                      Aturan Tambahan Penghuni
-                    </h4>
-                    <p className="text-[#64748B] font-medium text-[11px] leading-relaxed whitespace-pre-line">
-                      {activeProperty.additional_rules || "1. Tamu lawan jenis dilarang menginap.\n2. Tidak boleh membawa binatang peliharaan.\n3. Harap menghormati privasi sesama penghuni kos."}
-                    </p>
-                  </div>
-
-                  {/* Kebijakan Hunian */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-2xl space-y-2.5">
-                    <h4 className="font-extrabold text-[#2E6F40] font-sans text-xs flex items-center gap-1.5">
-                      <Shield size={14} className="text-[#2E6F40]" />
-                      Kebijakan Hunian
-                    </h4>
-                    <p className="text-[#64748B] font-medium text-[11px] leading-relaxed whitespace-pre-line">
-                      {activeProperty.policies || "Masa tinggal minimal ditentukan saat check-in awal. Pengembalian dana sisa masa sewa mengikuti aturan tertulis yang berlaku."}
-                    </p>
-                  </div>
-
-                  {/* Ketentuan Sewa */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-2xl space-y-2.5">
-                    <h4 className="font-extrabold text-[#2E6F40] font-sans text-xs flex items-center gap-1.5">
-                      <Info size={14} className="text-[#2E6F40]" />
-                      Ketentuan Sewa & Deposit Gedung
-                    </h4>
-                    <p className="text-[#64748B] font-medium text-[11px] leading-relaxed whitespace-pre-line">
-                      {(activeProperty.terms ? activeProperty.terms.replace(/\[DEPOSIT:\d+\]/g, '').trim() : '') || `Uang jaminan deposit (refundable) sebesar ${formatRupiah(activeProperty.deposit_amount ?? 500000)} wajib dilunasi sebelum serah terima kunci properti dan disetujui pengelola.`}
-                    </p>
-                  </div>
-
-                  {/* Tata Tertib */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-2xl space-y-2.5">
-                    <h4 className="font-extrabold text-[#2E6F40] font-sans text-xs flex items-center gap-1.5">
-                      <Clock size={14} className="text-[#2E6F40]" />
-                      Tata Tertib Lingkungan
-                    </h4>
-                    <p className="text-[#64748B] font-medium text-[11px] leading-relaxed whitespace-pre-line">
-                      {activeProperty.regulations || "1. Jam kunjung tamu dibatasi hingga pukul 22:00 WIB.\n2. Dilarang membuat kegaduhan suara setelah jam malam.\n3. Sampah wajib dibuang pada tempatnya."}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* INFO SINGKAT (DARI SUPABASE & SYSTEM) */}
-              <div className="bg-white border border-[#E2E8F0] p-6 rounded-[24px] space-y-4 shadow-xs text-left">
-                <h3 className="text-sm font-black text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
-                  <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full"></span>
-                  Info Singkat
-                </h3>
-                {(() => {
-                  const activeNameLower = activeProperty.name.toLowerCase();
-                  const isTiaraCempakaActive = activeNameLower.includes('ciputra') || activeNameLower.includes('cempaka') || activeNameLower.includes('tiara');
-                  const isAtikahActive = !isTiaraCempakaActive && (activeNameLower.includes('atikah') || activeNameLower.includes('kemayoran') || activeNameLower.includes('putri'));
-                  return (
-                    <div className="space-y-3">
-                      <div className={`grid gap-3 ${isAtikahActive ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
-                        <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
-                          <div className="text-2xl font-black text-[#1E293B] font-display">
-                            {(() => {
-                              const propertyRooms = rooms.filter(r => r.property_id === activeProperty.id);
-                              const uniqueTypes = new Set(propertyRooms.map(r => r.room_type));
-                              return uniqueTypes.size || 3;
-                            })()}
-                          </div>
-                          <div className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider font-sans">Tipe Kamar</div>
-                        </div>
-                        <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
-                          <div className="text-2xl font-black text-[#1E293B] font-display">4.9★</div>
-                          <div className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider font-sans">Rating</div>
-                        </div>
-                        {isAtikahActive && (
-                          <a
-                            href="https://www.airbnb.co.id/users/profile/1469644070216777538?previous_page_name=PdpHomeMarketplace"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="bg-[#FFF8F9] hover:bg-[#FFEBEF] border border-[#FF385C]/35 p-4 rounded-2xl text-center flex flex-col items-center justify-center space-y-1 transition-all group cursor-pointer shadow-2xs"
-                          >
-                            <div className="flex items-center gap-1.5 text-[#FF385C] font-extrabold text-sm group-hover:scale-105 transition-transform">
-                              <svg className="w-4 h-4 fill-current shrink-0" viewBox="0 0 32 32">
-                                <path d="M16 1c2.008 0 3.463.963 4.751 3.269l.533 1.025c1.954 3.83 6.114 12.54 7.1 14.836l.145.353c.667 1.591.91 2.472.96 3.396l.011.315c0 4.298-3.322 7.806-7.5 7.806-3.13 0-5.836-1.956-6.953-4.758l-.147-.384-.131-.383C13.782 29.28 11.027 31.25 7.8 31.25 3.522 31.25.2 27.742.2 23.444c0-1.127.283-2.222.844-3.332l.272-.505c1.036-1.84 5.37-10.824 7.382-14.814l.551-1.058C10.537 1.963 11.992 1 14 1zm0 2c-1.11 0-2.072.585-3.082 2.387l-.46.884c-1.97 3.908-6.241 12.782-7.243 14.562l-.213.394c-.426.84-.602 1.623-.602 2.217 0 3.197 2.483 5.806 5.6 5.806 2.502 0 4.678-1.637 5.385-4.084l.113-.424.113-.424C12.392 20.355 13.9 18.5 16 18.5s3.608 1.855 4.194 5.815l.113.424.113.424c.707 2.447 2.883 4.084 5.385 4.084 3.117 0 5.6-2.609 5.6-5.806 0-.594-.176-1.377-.602-2.217l-.213-.394c-1.002-1.78-5.273-10.654-7.243-14.562l-.46-.884C21.072 3.585 20.11 3 19 3zm0 17.5c-1.105 0-2 .895-2 2s.895 2 2 2 2-.895 2-2-.895-2-2-2z"/>
-                              </svg>
-                              <span>Sewa Airbnb</span>
-                            </div>
-                            <div className="text-[10px] text-[#FF385C] font-extrabold uppercase tracking-wider font-sans flex items-center gap-1">
-                              <span>Pesan Harian</span>
-                              <ExternalLink size={10} />
-                            </div>
-                          </a>
-                        )}
-                      </div>
-
-                      {isAtikahActive && (
-                        <div className="bg-[#FFF8F9] border border-[#FF385C]/20 rounded-2xl p-3.5 text-left space-y-1">
-                          <div className="flex items-center gap-1.5 text-[#FF385C] font-extrabold text-xs">
-                            <Sparkles size={13} className="text-[#FF385C] shrink-0" />
-                            <span>Pesan Kamar Harian via Airbnb</span>
-                          </div>
-                          <p className="text-[#484848] text-[11px] leading-relaxed font-medium">
-                            Khusus Kost Atikah Kemayoran: Menyediakan layanan sewa kamar harian fully furnished (AC, Smart TV, Wi-Fi kencang, & kamar mandi dalam) dengan fasilitas check-in instan mandiri melalui Airbnb.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Immersive 360° Virtual Tour / Video Showcase section */}
-              <div className="bg-white border border-[#E2E8F0] p-6 rounded-[24px] space-y-4 shadow-xs text-left">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                  <div className="space-y-1">
-                    <span className="text-[9px] font-black font-mono text-[#2E6F40] uppercase tracking-wider block font-bold">IMMERSIVE EXPERIENCE</span>
-                    <h3 className="text-sm font-extrabold text-[#3A444D] uppercase tracking-tight flex items-center gap-1.5">
-                      <RotateCw size={14} className="text-indigo-400" />
-                      360° Virtual Room Tour
-                    </h3>
-                    <p className="text-[11px] text-[#64748B] font-medium">Eksplorasi fisik isi kamar secara menyeluruh dalam tampilan panorama interaktif.</p>
-                  </div>
-                  <button
-                    onClick={() => setVirtualTourOpen(true)}
-                    className="bg-[#2E6F40] hover:bg-[#235531] text-white font-extrabold px-4.5 py-2.5 rounded-xl text-xs tracking-wide uppercase shadow-sm transition-colors flex items-center gap-2 cursor-pointer"
-                  >
-                    <Play size={13} className="fill-white" />
-                    Mulai Virtual Tour
-                  </button>
-                </div>
-
-                <div className="relative h-44 rounded-2xl overflow-hidden bg-[#F8FAFC] border border-[#E2E8F0] select-none flex items-center justify-center">
-                  <img 
-                    src="https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=800&q=80" 
-                    alt="Panoramic Preview"
-                    className="w-full h-full object-cover opacity-35 filter blur-[1px]"
-                  />
-                  <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center gap-1">
-                    <RotateCw size={24} className="text-[#64748B] animate-spin" />
-                    <span className="text-[10px] font-bold text-[#3A444D] uppercase tracking-widest font-mono">360° Panorama Live Player</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Lokasi & Sekitar (Fasilitas Publik Terdekat) */}
-              <div className="space-y-4">
-                <h3 className="text-xs font-bold text-[#3A444D] uppercase tracking-wider font-sans font-bold flex items-center gap-2">
-                  <MapPinned size={14} className="text-[#2E6F40]" />
-                  Lokasi & Sekitar (Hotspots)
-                </h3>
-                
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-                  {/* Real Dynamic Nearby Facilities (Real GPS Coordinates & Exact Haversine Distances) */}
-                  <PropertyNearbyPlaces 
-                    property={activeProperty} 
-                    onOpenFullMap={() => {
-                      setUserPage('map');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                  />
-
-                  {/* Live Interactive Leaflet Map for Active Property */}
-                  <PropertyDetailMap 
-                    property={activeProperty} 
-                    onOpenFullMap={() => {
-                      setUserPage('map');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                  />
-                </div>
-              </div>
-
-            </div>
-
-            {/* Right Booking Column (PILIHAN TIPE KAMAR & PRICING SHEET) (col-span-4) */}
-            <div className="lg:col-span-4 space-y-4">
-              
-              <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-6 space-y-5 shadow-sm sticky top-[135px] text-left">
-                {activeRoom ? (
-                  /* GORGEOUS ACTIVE ROOM SELECTION DETAILS (RUKITA / PAPIPOST ASSISTANT) */
-                  <div className="space-y-4 animate-fade-in">
-                    <div className="border-b border-[#F1F5F9] pb-3">
-                      <span className="text-[10px] text-[#2E6F40] font-mono font-bold uppercase tracking-wider block">ASISTEN RESERVASI</span>
-                      <h3 className="text-base font-black text-[#3A444D] uppercase tracking-tight">Kamar Terpilih</h3>
-                      <p className="text-[11px] text-[#64748B] font-medium mt-0.5">Konfirmasi tipe sewa dan rincian harga sewa Anda langsung di bawah ini:</p>
-                    </div>
-
-                    <div 
-                      onClick={() => setSelectedRoomForDetail(activeRoom)}
-                      className="bg-[#F8FAFC] hover:bg-emerald-50/50 p-3.5 rounded-2xl border border-[#E2E8F0] hover:border-[#2E6F40] transition-all flex items-center justify-between gap-3 cursor-pointer group/activebox"
-                      title="Klik untuk melihat foto & detail lengkap unit ini"
-                    >
-                      <div className="flex gap-3 items-center">
-                        {activeRoom.image_url ? (
-                          <div className="relative w-14 h-14 rounded-xl overflow-hidden border border-slate-300 shrink-0">
-                            <img 
-                              src={activeRoom.image_url} 
-                              alt={`Kamar ${activeRoom.room_number}`} 
-                              className="w-full h-full object-cover group-hover/activebox:scale-110 transition-transform duration-300"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80';
-                              }}
-                            />
-                          </div>
-                        ) : (
-                          <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-300 flex items-center justify-center shrink-0">
-                            <Bed size={16} className="text-[#64748B]" />
-                          </div>
-                        )}
-                        <div>
-                          <div className="font-extrabold text-[#3A444D] text-xs flex items-center gap-1.5">
-                            <span>Unit {activeRoom.room_number}</span>
-                            <span className="text-[9px] bg-[#2E6F40]/10 text-[#2E6F40] px-1.5 py-0.5 rounded font-mono font-bold">
-                              {activeRoom.room_type}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-[#64748B] mt-0.5">Lantai {activeRoom.floor} / {activeRoom.size_sqm}m²</div>
-                          <div className="text-[10px] text-[#2E6F40] font-bold flex items-center gap-1 mt-0.5">
-                            <Info size={11} />
-                            <span>Lihat Galeri Foto ({[activeRoom.image_url, ...(activeRoom.images || [])].filter(Boolean).length} Foto)</span>
-                          </div>
-                        </div>
-                      </div>
-                      <ChevronRight size={16} className="text-[#2E6F40] group-hover/activebox:translate-x-0.5 transition-transform shrink-0" />
-                    </div>
-
-                    {/* Quick Calculator */}
-                    <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0] text-[11px] space-y-2.5 font-mono">
-                      <div className="flex justify-between">
-                        <span className="text-[#64748B]">Skema Sewa</span>
-                        <span className="text-[#2E6F40] font-bold">Bulanan (Sewa Tetap)</span>
-                      </div>
-                      <div className="flex justify-between border-t border-[#E2E8F0] pt-1.5">
-                        <span className="text-[#64748B]">Tarif Kamar Bulanan</span>
-                        <span className="text-[#3A444D]">
-                          {formatRupiah(activeRoom.price)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#64748B]">Deposit Gedung (Refundable)</span>
-                        <span className="text-[#3A444D]">
-                          {formatRupiah(activeProperty?.deposit_amount ?? 500000)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between border-t border-[#E2E8F0] pt-1.5 font-bold">
-                        <span className="text-[#2E6F40]">Total Awal Masuk</span>
-                        <span className="text-[#2E6F40]">
-                          {formatRupiah(activeRoom.price + (activeProperty?.deposit_amount ?? 500000))}
-                        </span>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSelectRoom(activeRoom, checkoutFlow === 'none' ? 'monthly' : checkoutFlow)}
-                      className="w-full py-3 bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-black uppercase tracking-wider rounded-xl transition shadow-xs cursor-pointer text-center"
-                    >
-                      Lanjutkan Formulir Pemesanan
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setActiveRoom(null)}
-                      className="w-full py-2.5 bg-white hover:bg-[#F8FAFC] text-[#3A444D] text-xs font-bold uppercase tracking-wide rounded-xl border border-[#E2E8F0] cursor-pointer text-center"
-                    >
-                      Pilih Unit Kamar Lain
-                    </button>
-                  </div>
-                ) : (
-                  /* DEFAULT SIDEBAR WITH TRUST FACTORS (RUKITA / PAPIPOST VALUE ADD) */
-                  <div className="space-y-4">
-                    <div className="border-b border-[#F1F5F9] pb-3">
-                      <span className="text-[10px] text-[#2E6F40] font-mono font-bold uppercase tracking-wider block">PEMESANAN INSTAN</span>
-                      <h3 className="text-sm font-black text-[#3A444D] uppercase tracking-tight">Samara Booking Center</h3>
-                      <p className="text-[11px] text-[#64748B] font-medium mt-0.5">Gunakan platform online terpercaya untuk memesan kamar Anda langsung:</p>
-                    </div>
-
-                    <div className="space-y-3">
-                      <div className="flex gap-2.5 bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#E2E8F0]">
-                        <Shield className="text-[#2E6F40] shrink-0 mt-0.5" size={15} />
-                        <div>
-                          <h4 className="text-[#3A444D] font-extrabold text-xs">Bebas Biaya Administrasi</h4>
-                          <p className="text-[11px] text-[#64748B] leading-normal">Semua booking kamar di Samara Stay tidak dipungut biaya admin tersembunyi.</p>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2.5 bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#E2E8F0]">
-                        <CheckCircle className="text-[#2E6F40] shrink-0 mt-0.5" size={15} />
-                        <div>
-                          <h4 className="text-[#3A444D] font-extrabold text-xs">Data Unit Terverifikasi</h4>
-                          <p className="text-[11px] text-[#64748B] leading-normal">Status dan harga yang tertera adalah data terkini langsung dari sistem super admin.</p>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2.5 bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#E2E8F0]">
-                        <Sparkles className="text-[#2E6F40] shrink-0 mt-0.5" size={15} />
-                        <div>
-                          <h4 className="text-[#3A444D] font-extrabold text-xs">Jaminan Keamanan Kamar</h4>
-                          <p className="text-[11px] text-[#64748B] leading-normal">Kunci kamar terintegrasi & sistem backup kelistrikan optimal 24 jam nonstop.</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-[#2E6F40]/5 rounded-2xl border border-[#2E6F40]/10 text-center space-y-1.5">
-                      <p className="text-[#2E6F40] font-extrabold text-[11px] uppercase tracking-wider">Mulai Reservasi Anda</p>
-                      <p className="text-[#64748B] text-[10px] leading-relaxed">
-                        Klik tombol di bawah ini untuk membuka katalog kamar dan memilih unit yang Anda inginkan!
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setIsCatalogOpen(true)}
-                        className="mt-1 inline-flex items-center gap-1.5 text-xs font-black text-[#2E6F40] hover:text-[#235531] uppercase tracking-wider cursor-pointer"
-                      >
-                        <span>Pilih Unit Kamar</span>
-                        <ArrowRight size={12} />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
+      {userPage === 'detail' && (
+        <PropertyDetailView
+          propertyParam={activeProperty ? getPropertySlug(activeProperty) : getUrlPropertyParameter()}
+          property={activeProperty}
+          properties={properties}
+          rooms={rooms}
+          activeRoom={activeRoom}
+          standardFacilities={standardFacilities}
+          uploadingImage={uploadingImage}
+          onUploadDetailImage={handleUploadDetailImage}
+          onBackToHome={() => {
+            setSearchLocation('');
+            setUserPage('home');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onOpenSearchCatalog={() => {
+            setUserPage('search');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onOpenFullMap={() => {
+            setUserPage('map');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onOpenRoomCatalogModal={() => setIsCatalogOpen(true)}
+          onSelectProperty={(prop) => {
+            setActiveProperty(prop);
+            setSelectedMapProperty(prop);
+          }}
+          onSelectRoom={(room, flowType) => {
+            if (!room) {
+              setActiveRoom(null);
+              return;
+            }
+            handleSelectRoom(room, flowType || (checkoutFlow === 'none' ? 'monthly' : checkoutFlow));
+          }}
+          onInspectRoomDetail={(room) => setSelectedRoomForDetail(room)}
+          onZoomImage={(url) => setSelectedRoomImage(url)}
+          onOpenVirtualTour={() => setVirtualTourOpen(true)}
+        />
       )}
 
       {/* ========================================================== */}
@@ -4271,16 +3635,15 @@ export default function Home({}: HomeProps) {
                 Daftar Fasilitas Dalam Kamar
               </h4>
               <div className="grid grid-cols-2 gap-2 text-xs">
-                {selectedRoomForDetail.facilities && selectedRoomForDetail.facilities.length > 0 ? (
-                  (selectedRoomForDetail.facilities || []).map((fac: any, i) => (
-                    <div key={fac.id || i} className="flex items-center gap-2 bg-[#F8F9FA] border border-[#E2E8F0] p-2.5 rounded-lg">
-                      <CheckCircle size={12} className="text-[#2E6F40]" />
-                      <span className="font-medium text-[#475569] capitalize">{fac.name}</span>
+                {normalizeFacilityList(selectedRoomForDetail.facilities, DEFAULT_FACILITIES.slice(0, 5)).map((fac: any, i) => {
+                  const facName = typeof fac === 'string' ? fac : (fac?.name || fac?.title || 'Fasilitas Unit');
+                  return (
+                    <div key={fac?.id || i} className="flex items-center gap-2 bg-[#F8F9FA] border border-[#E2E8F0] p-2.5 rounded-lg">
+                      <CheckCircle size={12} className="text-[#2E6F40] shrink-0" />
+                      <span className="font-medium text-[#475569] capitalize">{facName}</span>
                     </div>
-                  ))
-                ) : (
-                  <p className="text-[10px] text-slate-400 italic">Fasilitas standar lengkap.</p>
-                )}
+                  );
+                })}
               </div>
             </div>
 

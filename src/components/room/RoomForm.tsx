@@ -251,7 +251,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
         id: room?.id,
         property_id: Number(formData.property_id),
         room_number: formData.room_number,
-        room_type: formData.room_type as 'Standard' | 'Deluxe' | 'Premium',
+        room_type: formData.room_type as 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus',
         price: Number(formData.price),
         size_sqm: Number(formData.size_sqm),
         floor: Number(formData.floor),
@@ -309,7 +309,7 @@ export const RoomForm: React.FC<RoomFormProps> = ({
             <option value="Standard">Standard</option>
             <option value="Deluxe">Deluxe</option>
             <option value="Premium">Premium</option>
-            <option value="VVIPSuite">VVIP Suite</option>
+            <option value="Premium Plus">Premium Plus</option>
           </select>
         </div>
 

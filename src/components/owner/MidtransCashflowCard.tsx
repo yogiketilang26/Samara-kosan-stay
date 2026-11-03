@@ -50,53 +50,53 @@ export const MidtransCashflowCard: React.FC<MidtransCashflowCardProps> = ({
         </div>
       </div>
 
-      {/* 3 Summary Metrics for Owner */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* 4 Summary Metrics for Owner */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         
-        <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">
+        <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono leading-tight block">
             Total Transaksi Kotor (Gross)
           </span>
-          <div className="text-xl font-black text-slate-900 mt-1.5 font-display">
+          <div className="text-base sm:text-lg font-black text-slate-900 mt-1.5 font-mono tabular-nums tracking-tight break-words leading-snug">
             {formatRupiah(totalGrossSettled)}
           </div>
-          <span className="text-[11px] text-slate-500 mt-1 block">
+          <span className="text-[11px] text-slate-500 mt-1 block leading-snug">
             Nominal dibayar oleh penyewa
           </span>
         </div>
 
-        <div className="bg-amber-50/60 rounded-xl p-4 border border-amber-100">
-          <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider font-mono">
+        <div className="bg-amber-50/60 rounded-xl p-4 border border-amber-100 min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-[10px] sm:text-[11px] font-bold text-amber-700 uppercase tracking-wider font-mono leading-tight block">
             Biaya Layanan Gateway (MDR)
           </span>
-          <div className="text-xl font-black text-amber-900 mt-1.5 font-display">
+          <div className="text-base sm:text-lg font-black text-amber-900 mt-1.5 font-mono tabular-nums tracking-tight break-words leading-snug">
             {formatRupiah(totalMdrFee)}
           </div>
-          <span className="text-[11px] text-amber-700/80 mt-1 block">
+          <span className="text-[11px] text-amber-700/80 mt-1 block leading-snug">
             Transparan dialokasikan ke Beban COA 5030
           </span>
         </div>
 
-        <div className="bg-emerald-50/70 rounded-xl p-4 border border-emerald-100">
-          <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider font-mono">
+        <div className="bg-emerald-50/70 rounded-xl p-4 border border-emerald-100 min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-[10px] sm:text-[11px] font-bold text-emerald-800 uppercase tracking-wider font-mono leading-tight block">
             Penerimaan Bersih (Net Inflow)
           </span>
-          <div className="text-xl font-black text-emerald-700 mt-1.5 font-display">
+          <div className="text-base sm:text-lg font-black text-emerald-700 mt-1.5 font-mono tabular-nums tracking-tight break-words leading-snug">
             {formatRupiah(totalNetSettled)}
           </div>
-          <span className="text-[11px] text-emerald-600 mt-1 block">
+          <span className="text-[11px] text-emerald-600 mt-1 block leading-snug">
             Dana hak penerimaan pemilik
           </span>
         </div>
 
-        <div className="bg-blue-50/70 rounded-xl p-4 border border-blue-100">
-          <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wider font-mono">
+        <div className="bg-blue-50/70 rounded-xl p-4 border border-blue-100 min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-[10px] sm:text-[11px] font-bold text-blue-800 uppercase tracking-wider font-mono leading-tight block">
             Saldo Escrow Kliring (Akun 1200)
           </span>
-          <div className="text-xl font-black text-blue-700 mt-1.5 font-display">
+          <div className="text-base sm:text-lg font-black text-blue-700 mt-1.5 font-mono tabular-nums tracking-tight break-words leading-snug">
             {formatRupiah(unreconciledEscrow)}
           </div>
-          <span className="text-[11px] text-blue-600 mt-1 block">
+          <span className="text-[11px] text-blue-600 mt-1 block leading-snug">
             Dana mengendap menuju bank operasional
           </span>
         </div>

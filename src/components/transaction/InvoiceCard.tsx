@@ -22,44 +22,44 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ receipt, onClose }) =>
         <p className="text-[9px] font-bold text-[#64748B] font-mono tracking-wider">BUKTI SETORAN NOTARIAL RESMI</p>
       </div>
 
-      <div className="space-y-2 text-[11px] font-medium leading-relaxed font-sans">
-        <div className="flex justify-between border-b border-slate-100 py-1">
-          <span className="text-[#64748B] uppercase font-mono text-[9px]">Nomor Invoice</span>
-          <span className="font-mono text-slate-800 select-all">{receipt.id}</span>
+      <div className="space-y-2 text-[11px] font-medium leading-relaxed font-sans min-w-0">
+        <div className="flex justify-between items-center gap-2 border-b border-slate-100 py-1 min-w-0">
+          <span className="text-[#64748B] uppercase font-mono text-[9px] shrink-0">Nomor Invoice</span>
+          <span className="font-mono text-slate-800 select-all text-right break-all">{receipt.id}</span>
         </div>
 
-        <div className="flex justify-between border-b border-slate-100 py-1">
-          <span className="text-[#64748B] uppercase font-mono text-[9px]">Penyewa</span>
-          <span className="text-slate-800 font-bold capitalize">{receipt.name}</span>
+        <div className="flex justify-between items-center gap-2 border-b border-slate-100 py-1 min-w-0">
+          <span className="text-[#64748B] uppercase font-mono text-[9px] shrink-0">Penyewa</span>
+          <span className="text-slate-800 font-bold capitalize text-right truncate">{receipt.name}</span>
         </div>
 
-        <div className="flex justify-between border-b border-slate-100 py-1">
-          <span className="text-[#64748B] uppercase font-mono text-[9px]">Alokasi Kamar</span>
-          <span className="text-slate-800 font-mono font-bold">Kamar {receipt.roomNo}</span>
+        <div className="flex justify-between items-center gap-2 border-b border-slate-100 py-1 min-w-0">
+          <span className="text-[#64748B] uppercase font-mono text-[9px] shrink-0">Alokasi Kamar</span>
+          <span className="text-slate-800 font-mono font-bold text-right shrink-0">Kamar {receipt.roomNo}</span>
         </div>
 
-        <div className="flex justify-between border-b border-slate-100 py-1">
-          <span className="text-[#64748B] uppercase font-mono text-[9px]">Tanggal Settle</span>
-          <span className="text-slate-700 font-mono">{receipt.date}</span>
+        <div className="flex justify-between items-center gap-2 border-b border-slate-100 py-1 min-w-0">
+          <span className="text-[#64748B] uppercase font-mono text-[9px] shrink-0">Tanggal Settle</span>
+          <span className="text-slate-700 font-mono text-right">{receipt.date}</span>
         </div>
 
-        <div className="flex justify-between border-b border-slate-100 py-1">
-          <span className="text-[#64748B] uppercase font-mono text-[9px]">Metode Pembayaran</span>
-          <span className="text-slate-700 font-mono uppercase">{receipt.method}</span>
+        <div className="flex justify-between items-center gap-2 border-b border-slate-100 py-1 min-w-0">
+          <span className="text-[#64748B] uppercase font-mono text-[9px] shrink-0">Metode Pembayaran</span>
+          <span className="text-slate-700 font-mono uppercase text-right truncate">{receipt.method}</span>
         </div>
 
-        <div className="flex justify-between border-b border-slate-100 py-1">
-          <span className="text-[#64748B] uppercase font-mono text-[9px]">Garansi Harga</span>
-          <span className="text-slate-700 font-sans italic">Bebas Pajak & Biaya Tambahan</span>
+        <div className="flex justify-between items-center gap-2 border-b border-slate-100 py-1 min-w-0">
+          <span className="text-[#64748B] uppercase font-mono text-[9px] shrink-0">Garansi Harga</span>
+          <span className="text-slate-700 font-sans italic text-right">Bebas Pajak & Biaya Tambahan</span>
         </div>
       </div>
 
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 text-center space-y-1">
-        <span className="text-[9px] uppercase font-bold text-[#64748B] font-mono">NOMINAL YANG DIBAYARKAN</span>
-        <div className="text-base font-extrabold text-[#2E6F40] font-mono">{formatRupiah(receipt.amountPaid)}</div>
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 text-center space-y-1 min-w-0 overflow-hidden">
+        <span className="text-[9px] uppercase font-bold text-[#64748B] font-mono block">NOMINAL YANG DIBAYARKAN</span>
+        <div className="text-base font-extrabold text-[#2E6F40] font-mono tabular-nums break-words">{formatRupiah(receipt.amountPaid)}</div>
         <p className="text-[8px] text-emerald-600 font-mono font-bold uppercase tracking-wider flex items-center justify-center gap-1">
           <CheckCircle size={10} className="text-emerald-600 shrink-0" />
-          MIDTRANS_CAPTURE_STATUS: SUCCESS
+          <span className="truncate">MIDTRANS_CAPTURE_STATUS: SUCCESS</span>
         </p>
       </div>
 

@@ -34,6 +34,7 @@ export default function StaffAdmin() {
   const [activeTab, setActiveTab] = useState<'rooms' | 'surveys' | 'tenants' | 'maintenance' | 'assets' | 'petty_cash' | 'shift_log'>('rooms');
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
   const [roomFilterStatus, setRoomFilterStatus] = useState<string>('all');
+  const [roomFilterType, setRoomFilterType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -42,6 +43,7 @@ export default function StaffAdmin() {
   // Modal: Change Room Status
   const [selectedRoomForStatus, setSelectedRoomForStatus] = useState<Room | null>(null);
   const [newRoomStatus, setNewRoomStatus] = useState<RoomStatus>('available');
+  const [newRoomType, setNewRoomType] = useState<Room['room_type']>('Standard');
 
   // Modal: Maintenance Ticket (Create & Edit)
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
@@ -183,9 +185,10 @@ export default function StaffAdmin() {
         refetchMaintenance(),
         refetchExtensions(),
         refetchPettyCash(),
-        refetchActivityLogs()
+        refetchActivityLogs(),
+        refetchFixedAssets()
       ]);
-      showToast('Data operasional staf, kas kecil, & log berhasil disinkronkan.');
+      showToast('Data operasional staf, kas kecil, aset, & log berhasil disinkronkan dari Supabase.');
     } catch (e) {
       showToast('Gagal memuat ulang data.', 'error');
     } finally {
@@ -198,12 +201,14 @@ export default function StaffAdmin() {
     return rooms.filter(room => {
       const matchProp = selectedPropertyId === 'all' || String(room.property_id) === String(selectedPropertyId);
       const matchStatus = roomFilterStatus === 'all' || room.status === roomFilterStatus;
+      const matchType = roomFilterType === 'all' || (room.room_type || 'Standard') === roomFilterType;
       const matchSearch = !searchQuery || 
         room.room_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (room.room_type && room.room_type.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (room.current_tenant_name && room.current_tenant_name.toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchProp && matchStatus && matchSearch;
+      return matchProp && matchStatus && matchType && matchSearch;
     });
-  }, [rooms, selectedPropertyId, roomFilterStatus, searchQuery]);
+  }, [rooms, selectedPropertyId, roomFilterStatus, roomFilterType, searchQuery]);
 
   // Operational Room Counts
   const roomMetrics = useMemo(() => {
@@ -268,18 +273,18 @@ export default function StaffAdmin() {
     window.open(url, '_blank');
   };
 
-  // Quick Room Status Update
+  // Quick Room Status & Category Update
   const handleUpdateRoomStatus = async () => {
     if (!selectedRoomForStatus) return;
     try {
-      const updated: Room = { ...selectedRoomForStatus, status: newRoomStatus };
+      const updated: Room = { ...selectedRoomForStatus, status: newRoomStatus, room_type: newRoomType };
       await database.saveRoom(updated);
       await database.logActivity(
         user?.name || 'Staff Lapangan',
         'UPDATE_ROOM_STATUS',
-        `Kamar ${selectedRoomForStatus.room_number}: Status diperbarui menjadi "${newRoomStatus}"`
+        `Kamar ${selectedRoomForStatus.room_number}: Status "${newRoomStatus}", Kategori "${newRoomType}"`
       );
-      showToast(`Status Kamar ${selectedRoomForStatus.room_number} diubah menjadi "${newRoomStatus}".`);
+      showToast(`Kamar ${selectedRoomForStatus.room_number} diperbarui: Status "${newRoomStatus}" (${newRoomType}).`);
       setSelectedRoomForStatus(null);
       await Promise.all([refetchRooms(), refetchActivityLogs()]);
     } catch (err: any) {
@@ -904,71 +909,71 @@ export default function StaffAdmin() {
         {/* Operational Metrics Cards */}
         <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* Total Rooms */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Total Kamar</span>
-            <div className="mt-2 flex items-baseline justify-between gap-1">
-              <span className="text-2xl font-black text-white font-display tabular-nums">{roomMetrics.total}</span>
-              <span className="text-xs font-bold text-teal-400 tabular-nums">{roomMetrics.occupancyRate}% Terisi</span>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 sm:p-4 flex flex-col justify-between min-w-0 overflow-hidden">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono truncate">Total Kamar</span>
+            <div className="mt-2 flex items-baseline justify-between flex-wrap gap-1 min-w-0">
+              <span className="text-xl sm:text-2xl font-black text-white font-display tabular-nums">{roomMetrics.total}</span>
+              <span className="text-[11px] font-bold text-teal-400 tabular-nums truncate">{roomMetrics.occupancyRate}% Terisi</span>
             </div>
           </div>
 
           {/* Occupied */}
-          <div className="bg-slate-900 border border-sky-900/40 rounded-2xl p-4 flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-sky-400 uppercase tracking-wider font-mono flex items-center gap-1">
+          <div className="bg-slate-900 border border-sky-900/40 rounded-2xl p-3.5 sm:p-4 flex flex-col justify-between min-w-0 overflow-hidden">
+            <span className="text-[11px] font-bold text-sky-400 uppercase tracking-wider font-mono flex items-center gap-1 min-w-0">
               <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0"></span>
               <span className="truncate">Terisi (Occupied)</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between gap-1">
-              <span className="text-2xl font-black text-sky-200 font-display tabular-nums">{roomMetrics.occupied}</span>
-              <span className="text-[11px] text-slate-400">Penghuni Aktif</span>
+            <div className="mt-2 flex items-baseline justify-between flex-wrap gap-1 min-w-0">
+              <span className="text-xl sm:text-2xl font-black text-sky-200 font-display tabular-nums">{roomMetrics.occupied}</span>
+              <span className="text-[11px] text-slate-400 truncate">Penghuni Aktif</span>
             </div>
           </div>
 
           {/* Available */}
-          <div className="bg-slate-900 border border-emerald-900/40 rounded-2xl p-4 flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider font-mono flex items-center gap-1">
+          <div className="bg-slate-900 border border-emerald-900/40 rounded-2xl p-3.5 sm:p-4 flex flex-col justify-between min-w-0 overflow-hidden">
+            <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider font-mono flex items-center gap-1 min-w-0">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
-              <span>Siap Huni</span>
+              <span className="truncate">Siap Huni</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between gap-1">
-              <span className="text-2xl font-black text-emerald-200 font-display tabular-nums">{roomMetrics.available}</span>
-              <span className="text-[11px] text-emerald-400 font-semibold">Tersedia</span>
+            <div className="mt-2 flex items-baseline justify-between flex-wrap gap-1 min-w-0">
+              <span className="text-xl sm:text-2xl font-black text-emerald-200 font-display tabular-nums">{roomMetrics.available}</span>
+              <span className="text-[11px] text-emerald-400 font-semibold truncate">Tersedia</span>
             </div>
           </div>
 
           {/* Maintenance */}
-          <div className="bg-slate-900 border border-amber-900/40 rounded-2xl p-4 flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-1">
+          <div className="bg-slate-900 border border-amber-900/40 rounded-2xl p-3.5 sm:p-4 flex flex-col justify-between min-w-0 overflow-hidden">
+            <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-1 min-w-0">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
               <span className="truncate">Perbaikan / Rusak</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between gap-1">
-              <span className="text-2xl font-black text-amber-200 font-display tabular-nums">{roomMetrics.maintenance}</span>
-              <span className="text-[11px] text-amber-400">Maintenance</span>
+            <div className="mt-2 flex items-baseline justify-between flex-wrap gap-1 min-w-0">
+              <span className="text-xl sm:text-2xl font-black text-amber-200 font-display tabular-nums">{roomMetrics.maintenance}</span>
+              <span className="text-[11px] text-amber-400 truncate">Maintenance</span>
             </div>
           </div>
 
           {/* Cleaning / Reserved */}
-          <div className="bg-slate-900 border border-purple-900/40 rounded-2xl p-4 flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-purple-400 uppercase tracking-wider font-mono flex items-center gap-1">
+          <div className="bg-slate-900 border border-purple-900/40 rounded-2xl p-3.5 sm:p-4 flex flex-col justify-between min-w-0 overflow-hidden">
+            <span className="text-[11px] font-bold text-purple-400 uppercase tracking-wider font-mono flex items-center gap-1 min-w-0">
               <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0"></span>
-              <span>Dibersihkan</span>
+              <span className="truncate">Dibersihkan</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between gap-1">
-              <span className="text-2xl font-black text-purple-200 font-display tabular-nums">{roomMetrics.cleaning}</span>
-              <span className="text-[11px] text-purple-300">Siap Inspeksi</span>
+            <div className="mt-2 flex items-baseline justify-between flex-wrap gap-1 min-w-0">
+              <span className="text-xl sm:text-2xl font-black text-purple-200 font-display tabular-nums">{roomMetrics.cleaning}</span>
+              <span className="text-[11px] text-purple-300 truncate">Siap Inspeksi</span>
             </div>
           </div>
 
           {/* Survey Today */}
-          <div className="bg-slate-900 border border-teal-900/40 rounded-2xl p-4 flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-teal-400 uppercase tracking-wider font-mono flex items-center gap-1">
+          <div className="bg-slate-900 border border-teal-900/40 rounded-2xl p-3.5 sm:p-4 flex flex-col justify-between min-w-0 overflow-hidden">
+            <span className="text-[11px] font-bold text-teal-400 uppercase tracking-wider font-mono flex items-center gap-1 min-w-0">
               <span className="w-1.5 h-1.5 rounded-full bg-teal-400 shrink-0"></span>
-              <span>Jadwal Survey</span>
+              <span className="truncate">Jadwal Survey</span>
             </span>
-            <div className="mt-2 flex items-baseline justify-between gap-1">
-              <span className="text-2xl font-black text-teal-200 font-display tabular-nums">{surveys.length}</span>
-              <span className="text-[11px] text-slate-400">Calon Penyewa</span>
+            <div className="mt-2 flex items-baseline justify-between flex-wrap gap-1 min-w-0">
+              <span className="text-xl sm:text-2xl font-black text-teal-200 font-display tabular-nums">{surveys.length}</span>
+              <span className="text-[11px] text-slate-400 truncate">Calon Penyewa</span>
             </div>
           </div>
         </section>
@@ -1099,32 +1104,58 @@ export default function StaffAdmin() {
         {/* TAB 1: KONTROL & DENAH STATUS KAMAR */}
         {activeTab === 'rooms' && (
           <div className="space-y-4">
-            {/* Status Filter Buttons */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[
-                  { id: 'all', label: 'Semua Status' },
-                  { id: 'available', label: 'Siap Huni (Available)', color: 'text-emerald-400' },
-                  { id: 'occupied', label: 'Terisi (Occupied)', color: 'text-sky-400' },
-                  { id: 'maintenance', label: 'Dalam Perbaikan', color: 'text-amber-400' },
-                  { id: 'cleaning', label: 'Pembersihan / Kotor', color: 'text-purple-400' }
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setRoomFilterStatus(tab.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
-                      roomFilterStatus === tab.id
-                        ? 'bg-slate-800 border-teal-500/50 text-white shadow-sm'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900'
-                    }`}
-                  >
-                    <span className={tab.color || ''}>{tab.label}</span>
-                  </button>
-                ))}
+            {/* Status & Category Filter Buttons */}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { id: 'all', label: 'Semua Status' },
+                    { id: 'available', label: 'Siap Huni (Available)', color: 'text-emerald-400' },
+                    { id: 'occupied', label: 'Terisi (Occupied)', color: 'text-sky-400' },
+                    { id: 'maintenance', label: 'Dalam Perbaikan', color: 'text-amber-400' },
+                    { id: 'cleaning', label: 'Pembersihan / Kotor', color: 'text-purple-400' }
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setRoomFilterStatus(tab.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
+                        roomFilterStatus === tab.id
+                          ? 'bg-slate-800 border-teal-500/50 text-white shadow-sm'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900'
+                      }`}
+                    >
+                      <span className={tab.color || ''}>{tab.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="text-xs text-slate-400">
+                  Menampilkan <strong className="text-white">{filteredRooms.length}</strong> unit kamar
+                </div>
               </div>
 
-              <div className="text-xs text-slate-400">
-                Menampilkan <strong className="text-white">{filteredRooms.length}</strong> unit kamar
+              {/* Room Category Filter Strip (Standard, Deluxe, Premium, Premium Plus) */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono mr-1">Kategori Kamar:</span>
+                {(['all', 'Standard', 'Deluxe', 'Premium', 'Premium Plus'] as const).map(cat => {
+                  const isActive = roomFilterType === cat;
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => setRoomFilterType(cat)}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5 ${
+                        isActive
+                          ? cat === 'Premium Plus'
+                            ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 border-amber-400 shadow-sm'
+                            : 'bg-teal-500/20 border-teal-500/50 text-teal-300 shadow-sm'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900'
+                      }`}
+                    >
+                      {cat === 'Premium Plus' && <Sparkles size={11} className={isActive ? 'text-slate-950' : 'text-amber-400'} />}
+                      <span>{cat === 'all' ? 'Semua Kategori' : cat}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -1147,7 +1178,7 @@ export default function StaffAdmin() {
                 return (
                   <div 
                     key={room.id}
-                    className={`bg-slate-900 rounded-2xl border p-4 flex flex-col justify-between transition-all duration-200 hover:border-slate-700 shadow-lg ${
+                    className={`bg-slate-900 rounded-2xl border p-4 flex flex-col justify-between transition-all duration-200 hover:border-slate-700 shadow-lg min-w-0 overflow-hidden ${
                       isOccupied 
                         ? 'border-sky-900/50' 
                         : isAvailable 
@@ -1157,24 +1188,35 @@ export default function StaffAdmin() {
                         : 'border-purple-900/50'
                     }`}
                   >
-                    <div>
-                      {/* Card Header: Room Number & Status Badge */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-extrabold text-xl text-white font-display tracking-tight">
+                    <div className="min-w-0">
+                      {/* Card Header: Room Number, Category & Status Badge */}
+                      <div className="flex items-start justify-between gap-2 min-w-0">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <h3 className="font-extrabold text-lg sm:text-xl text-white font-display tracking-tight tabular-nums">
                               Kamar {room.room_number}
                             </h3>
-                            <span className="text-[10px] text-slate-400 font-mono">
+                            <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider font-mono border shrink-0 ${
+                              room.room_type === 'Premium Plus'
+                                ? 'bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-300 border-amber-500/40'
+                                : room.room_type === 'Premium'
+                                  ? 'bg-teal-500/15 text-teal-300 border-teal-500/30'
+                                  : room.room_type === 'Deluxe'
+                                    ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
+                                    : 'bg-slate-800 text-slate-300 border-slate-700'
+                            }`}>
+                              {room.room_type || 'Standard'}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono shrink-0">
                               Lt. {room.floor || 1}
                             </span>
                           </div>
-                          <p className="text-[11px] text-slate-400 truncate max-w-[170px] mt-0.5">
+                          <p className="text-[11px] text-slate-400 truncate mt-0.5">
                             {propertyName}
                           </p>
                         </div>
 
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border shrink-0 ${
                           isOccupied
                             ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
                             : isAvailable
@@ -1188,20 +1230,20 @@ export default function StaffAdmin() {
                       </div>
 
                       {/* Room Occupant Information */}
-                      <div className="mt-3.5 bg-slate-950 rounded-xl p-3 border border-slate-850 space-y-1.5 text-xs">
+                      <div className="mt-3.5 bg-slate-950 rounded-xl p-3 border border-slate-850 space-y-1.5 text-xs min-w-0 overflow-hidden">
                         {isOccupied ? (
                           <>
-                            <div className="flex items-center justify-between text-slate-300">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Penghuni:</span>
-                              <span className="font-bold text-white truncate max-w-[120px]">
+                            <div className="flex items-center justify-between gap-2 text-slate-300 min-w-0">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">Penghuni:</span>
+                              <span className="font-bold text-white truncate">
                                 {room.current_tenant_name || tenantInRoom?.full_name || 'Penghuni Aktif'}
                               </span>
                             </div>
 
                             {tenantInRoom && (
-                              <div className="flex items-center justify-between pt-1 border-t border-slate-900">
-                                <span className="text-[10px] text-slate-400">Masa Sewa:</span>
-                                <span className="font-mono text-[11px] text-teal-400">
+                              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-900 min-w-0">
+                                <span className="text-[10px] text-slate-400 shrink-0">Masa Sewa:</span>
+                                <span className="font-mono text-[11px] text-teal-400 tabular-nums shrink-0">
                                   {tenantInRoom.duration_months} Bulan
                                 </span>
                               </div>
@@ -1230,14 +1272,15 @@ export default function StaffAdmin() {
 
                     {/* Quick Operational Actions */}
                     <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
-                      {/* Change Status Button */}
+                      {/* Change Status & Category Button */}
                       <button
                         onClick={() => {
                           setSelectedRoomForStatus(room);
                           setNewRoomStatus(room.status);
+                          setNewRoomType(room.room_type || 'Standard');
                         }}
                         className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer border border-slate-700"
-                        title="Ubah status ketersediaan kamar"
+                        title="Ubah status ketersediaan & kategori kamar"
                       >
                         <ArrowRightLeft size={11} />
                         <span>Status</span>
@@ -2306,6 +2349,22 @@ export default function StaffAdmin() {
               >
                 <X size={16} />
               </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-400 font-mono uppercase tracking-wider block">
+                Kategori Kelas Kamar:
+              </label>
+              <select
+                value={newRoomType}
+                onChange={(e) => setNewRoomType(e.target.value as Room['room_type'])}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs font-bold text-white outline-none focus:border-teal-500 cursor-pointer"
+              >
+                <option value="Standard">Standard</option>
+                <option value="Deluxe">Deluxe</option>
+                <option value="Premium">Premium</option>
+                <option value="Premium Plus">Premium Plus</option>
+              </select>
             </div>
 
             <div className="space-y-2">

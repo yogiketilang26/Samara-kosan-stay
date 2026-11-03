@@ -40,51 +40,51 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect, onViewDetail
           )}
         </div>
       )}
-      <div className="flex justify-between items-start">
-        <div>
-          <div className="flex items-center gap-2">
+      <div className="flex justify-between items-start gap-2 min-w-0">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="font-extrabold text-sm text-white font-display uppercase">Kamar {room.room_number}</span>
             <RoomAvailabilityBadge status={room.status as any} />
           </div>
-          <p className="text-[10px] text-slate-400 font-mono mt-0.5 mt-1">Kelas: {room.room_type}</p>
+          <p className="text-[10px] text-slate-400 font-mono mt-1 truncate">Kelas: {room.room_type}</p>
         </div>
         
         {room.is_daily_enabled && (
-          <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md text-[8px] font-extrabold uppercase font-mono tracking-wider">
+          <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md text-[8px] font-extrabold uppercase font-mono tracking-wider shrink-0">
             BISA HARIAN
           </span>
         )}
       </div>
 
       <div className="grid grid-cols-2 gap-2 border-y border-slate-850 py-2 text-[10px] text-slate-400 font-mono">
-        <div className="flex items-center gap-1">
-          <Layers size={11} className="text-amber-500" />
-          <span>Lantai {room.floor}</span>
+        <div className="flex items-center gap-1 min-w-0">
+          <Layers size={11} className="text-amber-500 shrink-0" />
+          <span className="truncate">Lantai {room.floor}</span>
         </div>
-        <div className="flex items-center gap-1">
-          <Maximize size={11} className="text-amber-500" />
-          <span>Luas {room.size_sqm} m²</span>
+        <div className="flex items-center gap-1 min-w-0">
+          <Maximize size={11} className="text-amber-500 shrink-0" />
+          <span className="truncate">Luas {room.size_sqm} m²</span>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap gap-1 min-w-0">
         {(room.facilities || []).slice(0, 3).map((f: any, idx) => (
-          <span key={f.id || idx} className="bg-slate-850 text-slate-350 text-[9px] px-1.5 py-0.5 rounded border border-slate-750">
+          <span key={f.id || idx} className="bg-slate-850 text-slate-350 text-[9px] px-1.5 py-0.5 rounded border border-slate-750 truncate max-w-full">
             {f.name}
           </span>
         ))}
       </div>
 
-      <div className="flex items-center justify-between pt-2">
-        <div className="flex flex-col">
+      <div className="flex items-center justify-between gap-2 pt-2 min-w-0">
+        <div className="flex flex-col min-w-0">
           <span className="text-[8px] font-bold text-slate-400 uppercase font-mono">Tarif Sewa</span>
-          <span className="text-[11px] font-bold text-white font-mono mt-0.5">{formatRupiah(room.price)}<span className="text-[9px] font-normal text-slate-500 font-sans">/bln</span></span>
+          <span className="text-[11px] font-bold text-white font-mono tabular-nums mt-0.5 break-words">{formatRupiah(room.price)}<span className="text-[9px] font-normal text-slate-500 font-sans">/bln</span></span>
           {room.is_daily_enabled && room.daily_price && (
-            <span className="text-[9px] text-indigo-400 font-mono mt-0.5">D: {formatRupiah(room.daily_price)}/hari</span>
+            <span className="text-[9px] text-indigo-400 font-mono tabular-nums mt-0.5 break-words">D: {formatRupiah(room.daily_price)}/hari</span>
           )}
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           {onViewDetail && (
             <button
               onClick={onViewDetail}

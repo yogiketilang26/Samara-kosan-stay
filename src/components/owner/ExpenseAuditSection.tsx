@@ -42,13 +42,13 @@ export const ExpenseAuditSection: React.FC<ExpenseAuditSectionProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Maintenance Costs Feed */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono flex items-center gap-1.5">
-              <Wrench size={13} className="text-slate-400" />
-              Pemeliharaan Gedung & Servis ({maintenanceList.length} Item)
+        <div className="space-y-3 min-w-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono flex items-center gap-1.5 min-w-0">
+              <Wrench size={13} className="text-slate-400 shrink-0" />
+              <span className="truncate">Pemeliharaan Gedung & Servis ({maintenanceList.length} Item)</span>
             </h3>
-            <span className="text-xs font-bold text-amber-600">
+            <span className="text-xs font-bold text-amber-600 tabular-nums shrink-0">
               Total: {formatRupiah(totalMaintenanceCost)}
             </span>
           </div>
@@ -60,13 +60,13 @@ export const ExpenseAuditSection: React.FC<ExpenseAuditSectionProps> = ({
           ) : (
             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
               {maintenanceList.slice(0, 5).map((m) => (
-                <div key={m.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
-                  <div>
-                    <div className="font-bold text-slate-800">{m.title}</div>
-                    <div className="text-[11px] text-slate-500">Kamar {m.room} • Teknisi: {m.tech || 'Internal'}</div>
+                <div key={m.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between gap-3 text-xs min-w-0">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-slate-800 truncate">{m.title}</div>
+                    <div className="text-[11px] text-slate-500 truncate">Kamar {m.room} • Teknisi: {m.tech || 'Internal'}</div>
                   </div>
-                  <div className="text-right">
-                    <div className="font-bold text-slate-900">{formatRupiah(m.cost)}</div>
+                  <div className="text-right shrink-0">
+                    <div className="font-bold text-slate-900 tabular-nums">{formatRupiah(m.cost)}</div>
                     <span className="text-[10px] text-emerald-600 font-semibold uppercase">{m.status}</span>
                   </div>
                 </div>
@@ -76,24 +76,24 @@ export const ExpenseAuditSection: React.FC<ExpenseAuditSectionProps> = ({
         </div>
 
         {/* Petty Cash & Logistic POs */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono flex items-center gap-1.5">
-              <ShoppingBag size={13} className="text-slate-400" />
-              Pengadaan & Kas Kecil Operasional
+        <div className="space-y-3 min-w-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono flex items-center gap-1.5 min-w-0">
+              <ShoppingBag size={13} className="text-slate-400 shrink-0" />
+              <span className="truncate">Pengadaan & Kas Kecil Operasional</span>
             </h3>
-            <span className="text-xs text-slate-500">Log Approval</span>
+            <span className="text-xs text-slate-500 shrink-0">Log Approval</span>
           </div>
 
           <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
             {pettyCashList.slice(0, 3).map((pc) => (
-              <div key={pc.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
-                <div>
-                  <div className="font-bold text-slate-800 line-clamp-1">{pc.purpose}</div>
-                  <div className="text-[11px] text-slate-500">Pemohon: {pc.applicant} • {pc.date}</div>
+              <div key={pc.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between gap-3 text-xs min-w-0">
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-slate-800 truncate">{pc.purpose}</div>
+                  <div className="text-[11px] text-slate-500 truncate">Pemohon: {pc.applicant} • {pc.date}</div>
                 </div>
-                <div className="text-right">
-                  <div className="font-bold text-slate-900">{formatRupiah(pc.amount)}</div>
+                <div className="text-right shrink-0">
+                  <div className="font-bold text-slate-900 tabular-nums">{formatRupiah(pc.amount)}</div>
                   <span className={`text-[10px] font-semibold uppercase ${
                     pc.status === 'approved' ? 'text-emerald-600' : 'text-amber-600'
                   }`}>
@@ -104,13 +104,13 @@ export const ExpenseAuditSection: React.FC<ExpenseAuditSectionProps> = ({
             ))}
 
             {purchaseOrders.slice(0, 2).map((po) => (
-              <div key={po.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
-                <div>
-                  <div className="font-bold text-slate-800 line-clamp-1">PO: {po.items}</div>
-                  <div className="text-[11px] text-slate-500">Vendor: {po.vendor} • {po.date}</div>
+              <div key={po.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between gap-3 text-xs min-w-0">
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-slate-800 truncate">PO: {po.items}</div>
+                  <div className="text-[11px] text-slate-500 truncate">Vendor: {po.vendor} • {po.date}</div>
                 </div>
-                <div className="text-right">
-                  <div className="font-bold text-slate-900">{formatRupiah(po.amount)}</div>
+                <div className="text-right shrink-0">
+                  <div className="font-bold text-slate-900 tabular-nums">{formatRupiah(po.amount)}</div>
                   <span className="text-[10px] text-emerald-600 font-semibold uppercase">{po.status}</span>
                 </div>
               </div>

@@ -406,62 +406,62 @@ export const StaffOperationsSection: React.FC<StaffOperationsSectionProps> = ({
       {/* 2. Operational KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Tiket Perbaikan Aktif</span>
-            <div className="p-2 bg-amber-50 text-amber-600 rounded-xl">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 text-slate-500 mb-3 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">Tiket Perbaikan Aktif</span>
+            <div className="p-2 bg-amber-50 text-amber-600 rounded-xl shrink-0">
               <Wrench size={16} />
             </div>
           </div>
-          <div className="text-2xl font-black text-slate-900 font-display">
+          <div className="text-xl sm:text-2xl font-black text-slate-900 font-display tabular-nums break-words">
             {openMaintenanceCount} <span className="text-xs font-normal text-slate-500">tiket aktif</span>
           </div>
-          <p className="text-[11px] text-slate-500 mt-1">
+          <p className="text-[11px] text-slate-500 mt-1 truncate">
             {roomsInMaintenance} unit kamar sedang diperbaiki
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Pengajuan Kas Kecil</span>
-            <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 text-slate-500 mb-3 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">Pengajuan Kas Kecil</span>
+            <div className="p-2 bg-blue-50 text-blue-600 rounded-xl shrink-0">
               <Wallet size={16} />
             </div>
           </div>
-          <div className="text-2xl font-black text-slate-900 font-display">
+          <div className="text-xl sm:text-2xl font-black text-slate-900 font-display tabular-nums break-words">
             {pendingPettyCash.length} <span className="text-xs font-normal text-slate-500">menunggu admin</span>
           </div>
-          <p className="text-[11px] text-slate-500 mt-1 font-mono">
+          <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums break-words">
             Total: {formatRupiah(totalPendingPettyAmount)}
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Turnover & Kebersihan</span>
-            <div className="p-2 bg-teal-50 text-teal-600 rounded-xl">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 text-slate-500 mb-3 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">Turnover & Kebersihan</span>
+            <div className="p-2 bg-teal-50 text-teal-600 rounded-xl shrink-0">
               <BedDouble size={16} />
             </div>
           </div>
-          <div className="text-2xl font-black text-slate-900 font-display">
+          <div className="text-xl sm:text-2xl font-black text-slate-900 font-display tabular-nums break-words">
             {roomsCleaning} <span className="text-xs font-normal text-slate-500">unit dibersihkan</span>
           </div>
-          <p className="text-[11px] text-slate-500 mt-1">
+          <p className="text-[11px] text-slate-500 mt-1 truncate">
             Persiapan unit untuk tenant berikutnya
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Log Lapangan Terkoneksi</span>
-            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 text-slate-500 mb-3 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">Log Lapangan Terkoneksi</span>
+            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl shrink-0">
               <ShieldCheck size={16} />
             </div>
           </div>
-          <div className="text-2xl font-black text-emerald-600 font-display">
+          <div className="text-xl sm:text-2xl font-black text-emerald-600 font-display tabular-nums break-words">
             {staffLogs.length} <span className="text-xs font-normal text-slate-500">aktivitas staf</span>
           </div>
-          <p className="text-[11px] text-slate-500 mt-1">
+          <p className="text-[11px] text-slate-500 mt-1 truncate">
             Sinkronisasi audit trail 100% realtime
           </p>
         </div>

@@ -108,6 +108,7 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPropertyId, setSelectedPropertyId] = useState<number | 'all'>('all');
   const [selectedStatus, setSelectedStatus] = useState<RoomStatusType | 'all'>('all');
+  const [selectedRoomType, setSelectedRoomType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus'>('all');
   const [selectedFloor, setSelectedFloor] = useState<number | 'all'>('all');
   const [sortBy, setSortBy] = useState<'number-asc' | 'number-desc' | 'price-asc' | 'price-desc' | 'floor'>('number-asc');
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
@@ -148,6 +149,10 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
       if (selectedStatus !== 'all' && roomStatus !== selectedStatus) {
         return false;
       }
+      // 2b. Room Category (room_type) filter
+      if (selectedRoomType !== 'all' && (r.room_type || 'Standard') !== selectedRoomType) {
+        return false;
+      }
       // 3. Floor filter
       if (selectedFloor !== 'all' && r.floor !== selectedFloor) {
         return false;
@@ -184,7 +189,7 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
       }
       return 0;
     });
-  }, [rooms, selectedPropertyId, selectedStatus, selectedFloor, searchQuery, sortBy, properties]);
+  }, [rooms, selectedPropertyId, selectedStatus, selectedRoomType, selectedFloor, searchQuery, sortBy, properties]);
 
   // Handler for quick status toggle
   const handleInitiateStatusChange = (room: Room, targetStatus: RoomStatusType) => {
@@ -419,6 +424,22 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
             <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#64748B] pointer-events-none" />
           </div>
 
+          {/* Room Category Selector */}
+          <div className="relative">
+            <select
+              value={selectedRoomType}
+              onChange={(e) => setSelectedRoomType(e.target.value as any)}
+              className="py-2 pl-2.5 pr-7 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl font-bold text-[#3A444D] text-xs focus:outline-none focus:border-[#0D9488] appearance-none cursor-pointer"
+            >
+              <option value="all">Semua Kategori Kamar</option>
+              <option value="Standard">Standard</option>
+              <option value="Deluxe">Deluxe</option>
+              <option value="Premium">Premium</option>
+              <option value="Premium Plus">Premium Plus</option>
+            </select>
+            <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#64748B] pointer-events-none" />
+          </div>
+
           {/* Floor Selector */}
           {availableFloors.length > 1 && (
             <div className="relative">
@@ -552,6 +573,32 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
         )}
       </div>
 
+      {/* Quick Filter Category Pills */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+        <span className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider mr-1">Kategori:</span>
+        {(['all', 'Standard', 'Deluxe', 'Premium', 'Premium Plus'] as const).map((cat) => {
+          const count = cat === 'all' ? rooms.length : rooms.filter(r => (r.room_type || 'Standard') === cat).length;
+          const isActive = selectedRoomType === cat;
+          return (
+            <button
+              key={cat}
+              type="button"
+              onClick={() => setSelectedRoomType(cat)}
+              className={`px-3 py-1 rounded-lg font-bold transition-all text-xs cursor-pointer border whitespace-nowrap flex items-center gap-1.5 ${
+                isActive
+                  ? cat === 'Premium Plus'
+                    ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 border-amber-400 shadow-2xs'
+                    : 'bg-[#0D9488] text-white border-[#0D9488]'
+                  : 'bg-white text-[#64748B] border-[#E2E8F0] hover:bg-slate-50 hover:text-[#3A444D]'
+              }`}
+            >
+              {cat === 'Premium Plus' && <Sparkles size={11} className={isActive ? 'text-slate-950' : 'text-amber-500'} />}
+              <span>{cat === 'all' ? 'Semua Kategori' : cat} ({count})</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* 3. ROOM CARDS / LIST CONTAINER */}
       {filteredRooms.length === 0 ? (
         <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-8 text-center space-y-3">
@@ -570,6 +617,7 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
               setSearchQuery('');
               setSelectedPropertyId('all');
               setSelectedStatus('all');
+              setSelectedRoomType('all');
               setSelectedFloor('all');
             }}
             className="text-xs font-bold text-[#0D9488] hover:underline cursor-pointer"
@@ -620,7 +668,15 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
                       <span className="font-black text-sm text-[#3A444D] font-display uppercase tracking-tight">
                         Unit {room.room_number}
                       </span>
-                      <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-mono">
+                      <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded border font-mono ${
+                        room.room_type === 'Premium Plus'
+                          ? 'bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-800 border-amber-400'
+                          : room.room_type === 'Premium'
+                            ? 'bg-teal-50 text-teal-700 border-teal-200'
+                            : room.room_type === 'Deluxe'
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-200'
+                      }`}>
                         {room.room_type}
                       </span>
                     </div>
@@ -845,7 +901,15 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
                       <h4 className="font-extrabold text-[#3A444D] text-xs">
                         Unit {room.room_number}
                       </h4>
-                      <span className="text-[8px] font-extrabold uppercase px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 border border-slate-200 font-mono">
+                      <span className={`text-[8px] font-extrabold uppercase px-1.5 py-0.2 rounded border font-mono ${
+                        room.room_type === 'Premium Plus'
+                          ? 'bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-800 border-amber-400'
+                          : room.room_type === 'Premium'
+                            ? 'bg-teal-50 text-teal-700 border-teal-200'
+                            : room.room_type === 'Deluxe'
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-200'
+                      }`}>
                         {room.room_type}
                       </span>
                     </div>

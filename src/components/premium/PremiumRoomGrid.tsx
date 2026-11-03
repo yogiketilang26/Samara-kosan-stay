@@ -18,7 +18,7 @@ export const PremiumRoomGrid: React.FC<PremiumRoomGridProps> = ({
   title = "Pilihan Kamar Eksklusif",
   subtitle = "Temukan kamar kos impian Anda dengan fasilitas terlengkap dan jaminan kenyamanan tingkat tinggi."
 }) => {
-  const [filterType, setFilterType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium'>('all');
+  const [filterType, setFilterType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus'>('all');
 
   const filteredRooms = filterType === 'all' 
     ? rooms 
@@ -40,15 +40,17 @@ export const PremiumRoomGrid: React.FC<PremiumRoomGridProps> = ({
       </div>
 
       {/* Quick Category Tab Filter Bar */}
-      <div className="flex flex-wrap justify-center gap-2 max-w-md mx-auto">
-        {(['all', 'Standard', 'Deluxe', 'Premium'] as const).map((type) => (
+      <div className="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto">
+        {(['all', 'Standard', 'Deluxe', 'Premium', 'Premium Plus'] as const).map((type) => (
           <button
             key={type}
             type="button"
             onClick={() => setFilterType(type)}
             className={`px-4 py-2 rounded-full text-xs font-bold transition-all duration-300 cursor-pointer ${
               filterType === type
-                ? 'bg-[#0D9488] text-white shadow-sm'
+                ? type === 'Premium Plus'
+                  ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 shadow-sm border border-amber-400'
+                  : 'bg-[#0D9488] text-white shadow-sm'
                 : 'bg-white border border-[#E2E8F0] text-[#3A444D] hover:border-[#0D9488] hover:text-[#0D9488]'
             }`}
           >

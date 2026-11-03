@@ -61,8 +61,14 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
 
         {/* Room Type Badge */}
         <div className="absolute top-4 right-4">
-          <span className="bg-[#3A444D]/80 backdrop-blur-md text-white text-[10px] font-semibold px-3 py-1 rounded-full flex items-center gap-1">
-            <LucideIcons.Sparkles className="w-3 h-3 text-amber-400" />
+          <span className={`backdrop-blur-md text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1 shadow-sm ${
+            room.room_type === 'Premium Plus'
+              ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 border border-amber-300'
+              : room.room_type === 'Premium'
+                ? 'bg-[#0D9488]/90 text-white border border-teal-400/40'
+                : 'bg-[#3A444D]/85 text-white'
+          }`}>
+            <LucideIcons.Sparkles className={`w-3 h-3 ${room.room_type === 'Premium Plus' ? 'text-slate-950' : 'text-amber-400'}`} />
             {room.room_type}
           </span>
         </div>
@@ -88,23 +94,23 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
       </div>
 
       {/* Main Metadata Section */}
-      <div className="space-y-3 flex-1 text-left">
-        <div className="flex justify-between items-start gap-2">
-          <div>
-            <h3 className="text-lg font-bold text-[#3A444D] leading-tight group-hover:text-[#0D9488] transition-colors">
+      <div className="space-y-3 flex-1 text-left min-w-0">
+        <div className="flex justify-between items-start gap-2 min-w-0">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base sm:text-lg font-bold text-[#3A444D] leading-tight group-hover:text-[#0D9488] transition-colors truncate">
               Kamar {room.room_number}
             </h3>
-            <p className="text-xs text-[#64748B] mt-0.5">Tipe: Kamar {room.room_type}</p>
+            <p className="text-xs text-[#64748B] mt-0.5 truncate">Tipe: Kamar {room.room_type}</p>
           </div>
 
-          <div className="text-right">
+          <div className="text-right shrink-0">
             <span className="text-[10px] text-[#64748B] uppercase font-semibold block">Mulai Dari</span>
-            <div className="text-base font-extrabold text-[#0D9488]">
+            <div className="text-sm sm:text-base font-extrabold text-[#0D9488] tabular-nums">
               {formatRupiah(room.price)}
               <span className="text-xs text-[#64748B] font-normal">/bln</span>
             </div>
             {room.is_daily_enabled && room.daily_price && (
-              <span className="text-[10px] text-[#64748B] block mt-0.5">
+              <span className="text-[10px] text-[#64748B] block mt-0.5 tabular-nums">
                 {formatRupiah(room.daily_price)}<span className="font-normal text-[9px]">/hari</span>
               </span>
             )}
@@ -127,15 +133,17 @@ export const PremiumRoomCard: React.FC<PremiumRoomCardProps> = ({ room, onSelect
         <div className="space-y-1.5 pt-1">
           <span className="text-[10px] font-bold text-[#3A444D] uppercase tracking-wider block">Fasilitas Unit:</span>
           <div className="flex flex-wrap gap-1.5">
-            {(room.facilities || []).slice(0, 3).map((f: any, idx) => {
-              const IconComp = (LucideIcons as any)[f.icon] || LucideIcons.Sparkles;
+            {(room.facilities && room.facilities.length > 0 ? room.facilities : ['WiFi Cepat', 'AC Inverter', 'Kamar Mandi Dalam']).slice(0, 3).map((f: any, idx) => {
+              const facName = typeof f === 'string' ? f : (f?.name || f?.title || 'Fasilitas');
+              const iconKey = typeof f === 'object' && f?.icon ? f.icon : 'Sparkles';
+              const IconComp = (LucideIcons as any)[iconKey] || LucideIcons.Sparkles;
               return (
                 <div 
-                  key={f.id || idx} 
+                  key={f?.id || idx} 
                   className="flex items-center gap-1 bg-[#F8FAFC] border border-[#E2E8F0] px-2.5 py-1 rounded-xl text-xs text-[#64748B] font-medium"
                 >
                   <IconComp className="w-3.5 h-3.5 text-[#0D9488]" />
-                  <span>{f.name}</span>
+                  <span>{facName}</span>
                 </div>
               );
             })}

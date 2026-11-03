@@ -2645,10 +2645,16 @@ async function startServer() {
         }
       }
 
-      // Enforce room_type check constraint in remote DB ('Standard', 'Deluxe', 'Premium')
-      const allowedRoomTypes = ['Standard', 'Deluxe', 'Premium'];
-      if (cleanData.room_type && !allowedRoomTypes.includes(cleanData.room_type)) {
+      // Enforce room_type check constraint in remote DB while supporting 'Premium Plus'
+      let requestedRoomType = String(cleanData.room_type || '').trim();
+      if (requestedRoomType === 'Premium Plus' || requestedRoomType === 'Premium+' || requestedRoomType === 'VVIPSuite' || requestedRoomType === 'VVIP Suite') {
+        requestedRoomType = 'Premium Plus';
         cleanData.room_type = 'Premium';
+        cleanData.facilities = ['__ROOM_TYPE:Premium Plus__'];
+      } else if (requestedRoomType) {
+        const allowedRoomTypes = ['Standard', 'Deluxe', 'Premium'];
+        cleanData.room_type = allowedRoomTypes.includes(requestedRoomType) ? requestedRoomType : 'Premium';
+        cleanData.facilities = [];
       }
 
       // Ensure proper numeric types
@@ -2789,11 +2795,14 @@ async function startServer() {
 
       let finalRoom = finalRoomData;
       if (finalRoom) {
+        const rawFacs = Array.isArray(finalRoom.facilities) ? finalRoom.facilities : [];
+        const isPremPlus = requestedRoomType === 'Premium Plus' || rawFacs.some((item: any) => typeof item === 'string' && item === '__ROOM_TYPE:Premium Plus__');
         const resolvedFacilities = (finalRoom.room_facilities || [])
           .map((rf: any) => rf?.facilities)
           .filter(Boolean);
         finalRoom = {
           ...finalRoom,
+          room_type: isPremPlus ? 'Premium Plus' : finalRoom.room_type,
           facilities: resolvedFacilities
         };
         delete finalRoom.room_facilities;
@@ -6460,8 +6469,6 @@ async function startServer() {
       if (error) {
         if (error.message?.includes('exceed_egress_quota') || error.message?.includes('quota') || error.message?.includes('restricted') || error.message?.includes('spend caps')) {
           markServerQuotaRestricted(error.message);
-          const seeds = getTableDefaultSeeds('bookings');
-          return res.status(200).json({ success: true, data: seeds, fallback: true });
         }
         console.warn('[BOOKINGS API] Query notice:', error.message);
         return res.status(500).json({ success: false, error: error.message, data: [] });
@@ -6477,8 +6484,7 @@ async function startServer() {
       if (err?.message?.includes('exceed_egress_quota') || err?.message?.includes('quota') || err?.message?.includes('restricted')) {
         markServerQuotaRestricted(err?.message);
       }
-      const seeds = getTableDefaultSeeds('bookings');
-      return res.status(200).json({ success: true, data: seeds, fallback: true });
+      return res.status(500).json({ success: false, error: err?.message || 'Bookings query failed', data: [] });
     }
   });
 
@@ -6491,7 +6497,10 @@ async function startServer() {
     'users', 'tenants', 'payments', 'contracts', 'financial_transactions', 
     'journal_entries', 'midtrans_logs', 'cash_flows', 'pnl_reports', 
     'balance_sheets', 'audits', 'bookings', 'surveys', 'contract_extensions',
-    'coupons'
+    'coupons', 'accounts', 'maintenance', 'petty_cash_requests', 'fixed_assets',
+    'budgets', 'vendors', 'purchase_orders', 'inventory_items',
+    'bank_statement_items', 'midtrans_clearing_transactions',
+    'bank_reconciliation_matches', 'activity_logs'
   ]);
 
   const TABLE_TO_RESOURCE_MAP: Record<string, string> = {
@@ -6502,6 +6511,13 @@ async function startServer() {
     contract_extensions: 'contracts',
     financial_transactions: 'finances',
     journal_entries: 'finances',
+    accounts: 'finances',
+    budgets: 'finances',
+    vendors: 'finances',
+    purchase_orders: 'finances',
+    bank_statement_items: 'finances',
+    midtrans_clearing_transactions: 'finances',
+    bank_reconciliation_matches: 'finances',
     midtrans_logs: 'payments',
     cash_flows: 'finances',
     pnl_reports: 'finances',
@@ -6513,6 +6529,9 @@ async function startServer() {
     properties: 'properties',
     rooms: 'properties',
     fixed_assets: 'properties',
+    maintenance: 'properties',
+    petty_cash_requests: 'properties',
+    inventory_items: 'properties',
     coupons: 'properties'
   };
 
@@ -6570,37 +6589,41 @@ async function startServer() {
           if (error) {
             if (error.message?.includes('exceed_egress_quota') || error.message?.includes('quota') || error.message?.includes('restricted') || error.message?.includes('spend caps')) {
               markServerQuotaRestricted(error.message);
-              const seeds = table === 'properties' ? DEFAULT_PROPERTIES : (table === 'rooms' ? DEFAULT_ROOMS : []);
-              return res.status(200).json({ success: true, data: seeds, fallback: true });
             }
             console.warn(`[DATA API:${table}] Authenticated notice:`, error.message);
             return res.status(500).json({ success: false, error: error.message, data: [] });
           }
 
           // Mask sensitive PII for tenants / bookings / users / surveys (R8)
-          const sanitizedData = sanitizePiiResponse(req.authProfile?.role, data || [], [
+          let sanitizedData = sanitizePiiResponse(req.authProfile?.role, data || [], [
             'nik', 'nik_pasangan', 'spouse_nik', 'spouse_phone', 'identity_number',
             'ktp_image', 'ktp_url', 'marriage_certificate_url', 'marriage_book_url', 'family_card_url'
           ]);
+
+          if (table === 'rooms' && Array.isArray(sanitizedData)) {
+            sanitizedData = sanitizedData.map((r: any) => {
+              const rawFacs = Array.isArray(r.facilities) ? r.facilities : [];
+              const isPremPlus = rawFacs.some((item: any) => typeof item === 'string' && item === '__ROOM_TYPE:Premium Plus__');
+              return {
+                ...r,
+                room_type: isPremPlus ? 'Premium Plus' : r.room_type,
+                facilities: rawFacs.filter((item: any) => !(typeof item === 'string' && item.startsWith('__ROOM_TYPE:')))
+              };
+            });
+          }
 
           return res.status(200).json({ success: true, data: sanitizedData });
         } catch (err: any) {
           if (err?.message?.includes('exceed_egress_quota') || err?.message?.includes('quota') || err?.message?.includes('restricted')) {
             markServerQuotaRestricted(err?.message);
           }
-          const seeds = table === 'properties' ? DEFAULT_PROPERTIES : (table === 'rooms' ? DEFAULT_ROOMS : []);
-          return res.status(200).json({ success: true, data: seeds, fallback: true });
+          return res.status(500).json({ success: false, error: err?.message || 'Query failed', data: [] });
         }
       });
     }
 
     if (!PUBLIC_READ_TABLES.has(table)) {
       return res.status(403).json({ success: false, error: `Access to table '${table}' is restricted.` });
-    }
-
-    if (isServerQuotaActive()) {
-      const seeds = table === 'properties' ? DEFAULT_PROPERTIES : (table === 'rooms' ? DEFAULT_ROOMS : []);
-      return res.status(200).json({ success: true, data: seeds, fallback: true });
     }
 
     try {
@@ -6627,19 +6650,28 @@ async function startServer() {
       if (error) {
         if (error.message?.includes('exceed_egress_quota') || error.message?.includes('quota') || error.message?.includes('restricted') || error.message?.includes('spend caps')) {
           markServerQuotaRestricted(error.message);
-          const seeds = getTableDefaultSeeds(table);
-          return res.status(200).json({ success: true, data: seeds, fallback: true });
         }
         console.warn(`[DATA API:${table}] Query notice:`, error.message);
         return res.status(500).json({ success: false, error: error.message, data: [] });
       }
-      return res.status(200).json({ success: true, data: data || [] });
+      let outputData = data || [];
+      if (table === 'rooms' && Array.isArray(outputData)) {
+        outputData = outputData.map((r: any) => {
+          const rawFacs = Array.isArray(r.facilities) ? r.facilities : [];
+          const isPremPlus = rawFacs.some((item: any) => typeof item === 'string' && item === '__ROOM_TYPE:Premium Plus__');
+          return {
+            ...r,
+            room_type: isPremPlus ? 'Premium Plus' : r.room_type,
+            facilities: rawFacs.filter((item: any) => !(typeof item === 'string' && item.startsWith('__ROOM_TYPE:')))
+          };
+        });
+      }
+      return res.status(200).json({ success: true, data: outputData });
     } catch (err: any) {
       if (err?.message?.includes('exceed_egress_quota') || err?.message?.includes('quota') || err?.message?.includes('restricted')) {
         markServerQuotaRestricted(err?.message);
       }
-      const seeds = getTableDefaultSeeds(table);
-      return res.status(200).json({ success: true, data: seeds, fallback: true });
+      return res.status(500).json({ success: false, error: err?.message || 'Query failed', data: [] });
     }
   });
 

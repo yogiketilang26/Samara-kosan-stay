@@ -101,7 +101,7 @@ export const LeaseExpiringMonitor: React.FC<LeaseExpiringMonitorProps> = ({
             return (
               <div 
                 key={item.id}
-                className={`p-4 rounded-xl border flex flex-col justify-between space-y-3 transition-all ${
+                className={`p-4 rounded-xl border flex flex-col justify-between space-y-3 transition-all min-w-0 overflow-hidden ${
                   leaseInfo.isExpiredPast24h
                     ? 'bg-slate-50 border-slate-200'
                     : leaseInfo.isDueToday
@@ -111,36 +111,36 @@ export const LeaseExpiringMonitor: React.FC<LeaseExpiringMonitorProps> = ({
                     : 'bg-slate-50/70 border-slate-200'
                 }`}
               >
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-black text-slate-900 font-mono bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <span className="text-xs font-black text-slate-900 font-mono bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs shrink-0">
                       Kamar {item.room_number}
                     </span>
-                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border shadow-2xs ${leaseInfo.badgeClass}`}>
+                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border shadow-2xs truncate ${leaseInfo.badgeClass}`}>
                       {leaseInfo.remainingDaysText}
                     </span>
                   </div>
 
-                  <div className="mt-3 space-y-1">
-                    <div className="font-extrabold text-slate-900 text-xs">{item.full_name}</div>
-                    <div className="text-[11px] text-slate-500 font-mono flex items-center justify-between">
-                      <span>{item.phone}</span>
-                      <span className="text-[10px] font-bold text-slate-400">{item.duration_months} Bulan</span>
+                  <div className="mt-3 space-y-1 min-w-0">
+                    <div className="font-extrabold text-slate-900 text-xs truncate">{item.full_name}</div>
+                    <div className="text-[11px] text-slate-500 font-mono flex items-center justify-between gap-2 min-w-0">
+                      <span className="truncate">{item.phone}</span>
+                      <span className="text-[10px] font-bold text-slate-400 shrink-0">{item.duration_months} Bulan</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-2 border-t border-slate-200/60 pt-2.5 text-[11px]">
-                  <div className="flex items-center justify-between text-slate-500 font-mono text-[10px]">
-                    <span>Jatuh Tempo:</span>
-                    <span className="font-extrabold text-slate-700">
+                <div className="space-y-2 border-t border-slate-200/60 pt-2.5 text-[11px] min-w-0">
+                  <div className="flex items-center justify-between gap-2 text-slate-500 font-mono text-[10px]">
+                    <span className="shrink-0">Jatuh Tempo:</span>
+                    <span className="font-extrabold text-slate-700 truncate">
                       {leaseInfo.endDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
                     </span>
                   </div>
 
-                  <div className="flex items-center justify-between text-slate-500 text-[10px]">
-                    <span>Status Ketersediaan:</span>
-                    <span className={`font-bold ${
+                  <div className="flex items-center justify-between gap-2 text-slate-500 text-[10px]">
+                    <span className="shrink-0">Status Ketersediaan:</span>
+                    <span className={`font-bold truncate ${
                       leaseInfo.isExpiredPast24h 
                         ? 'text-emerald-700' 
                         : leaseInfo.isDueToday 
@@ -164,8 +164,8 @@ export const LeaseExpiringMonitor: React.FC<LeaseExpiringMonitorProps> = ({
                       rel="noopener noreferrer"
                       className="mt-1 w-full py-1.5 px-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1.5 transition-colors"
                     >
-                      <MessageCircle size={12} className="text-emerald-600" />
-                      Kirim Reminder WhatsApp
+                      <MessageCircle size={12} className="text-emerald-600 shrink-0" />
+                      <span className="truncate">Kirim Reminder WhatsApp</span>
                     </a>
                   )}
                 </div>

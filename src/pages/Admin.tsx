@@ -31,6 +31,7 @@ import InvoiceCard from '../components/transaction/InvoiceCard';
 import { CoaDiagnosticModal } from '../components/accounting/CoaDiagnosticModal';
 import { AccountingIntegrityAuditModal } from '../components/accounting/AccountingIntegrityAuditModal';
 import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
+import { MonthlyCashflowDashboard } from '../components/owner/MonthlyCashflowDashboard';
 import { AssetManagementSection } from '../components/AssetManagementSection';
 import { EgressManagementPanel } from '../components/common/EgressManagementPanel';
 import { egressGuard } from '../lib/egressGuard';
@@ -1122,7 +1123,7 @@ export default function Admin({}: AdminProps) {
   const [autoRefreshLogs, setAutoRefreshLogs] = useState<boolean>(true);
 
   // MailerSend Email Integration States
-  const [testEmailTo, setTestEmailTo] = useState('yogiatmaja26@gmail.com');
+  const [testEmailTo, setTestEmailTo] = useState('');
   const [testEmailSubject, setTestEmailSubject] = useState('Tes Integrasi MailerSend - Samara Stay');
   const [testEmailBody, setTestEmailBody] = useState('Halo! Ini adalah email uji coba dari modul Integrasi MailerSend premium Samara Stay. Konfigurasi email berhasil berjalan real-time!');
   const [emailSenderEmail, setEmailSenderEmail] = useState('info@trial-3yxj5ljp10zg6o2r.mlsender.net');
@@ -3081,30 +3082,30 @@ export default function Admin({}: AdminProps) {
 
             {/* Quick KPI stats row */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Okupansi Kamar</span>
-                <span className="text-2xl font-extrabold text-[#0D9488] font-mono block">{occupancyRate}%</span>
-                <span className="text-[11px] text-[#64748B] font-sans block">{totalOccupied} terisi dari {rooms.length} unit</span>
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Okupansi Kamar</span>
+                <span className="text-xl sm:text-2xl font-extrabold text-[#0D9488] font-mono tabular-nums block">{occupancyRate}%</span>
+                <span className="text-[11px] text-[#64748B] font-sans block truncate">{totalOccupied} terisi dari {rooms.length} unit</span>
               </div>
 
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Sewa Bulanan Aktif</span>
-                <span className="text-2xl font-extrabold text-[#3A444D] font-mono block">{bookings.length} kontrak</span>
-                <span className="text-[11px] text-[#64748B] font-sans block">Approved settlement</span>
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Sewa Bulanan Aktif</span>
+                <span className="text-xl sm:text-2xl font-extrabold text-[#3A444D] font-mono tabular-nums block">{bookings.length} kontrak</span>
+                <span className="text-[11px] text-[#64748B] font-sans block truncate">Approved settlement</span>
               </div>
 
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Total Pendapatan (Inflow)</span>
-                <span className="text-base sm:text-lg font-extrabold text-[#0D9488] font-mono block leading-loose select-all">{formatRupiah(totalInflow > 0 ? totalInflow : rawRevenue)}</span>
-                <span className="text-[11px] text-[#64748B] font-sans block">
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Total Pendapatan (Inflow)</span>
+                <span className="text-base sm:text-lg font-extrabold text-[#0D9488] font-mono tabular-nums break-words block leading-snug select-all">{formatRupiah(totalInflow > 0 ? totalInflow : rawRevenue)}</span>
+                <span className="text-[10px] sm:text-[11px] text-[#64748B] font-sans block break-words leading-snug">
                   {totalInflow > 0 ? `Kas Real-Time (Kontrak: ${formatRupiah(rawRevenue)})` : 'Sewa terakumulasi'}
                 </span>
               </div>
 
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-5 rounded-[20px] text-center space-y-1 shadow-xs">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono">Pajak PBJT (10%)</span>
-                <span className="text-base sm:text-lg font-extrabold text-amber-600 font-mono block leading-loose select-all">{formatRupiah(Math.round((totalInflow > 0 ? totalInflow : rawRevenue) * 0.10))}</span>
-                <span className="text-[11px] text-[#64748B] font-sans block">Kewajiban pajak daerah (10%)</span>
+              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Pajak PBJT (10%)</span>
+                <span className="text-base sm:text-lg font-extrabold text-amber-600 font-mono tabular-nums break-words block leading-snug select-all">{formatRupiah(Math.round((totalInflow > 0 ? totalInflow : rawRevenue) * 0.10))}</span>
+                <span className="text-[10px] sm:text-[11px] text-[#64748B] font-sans block truncate">Kewajiban pajak daerah (10%)</span>
               </div>
             </div>
 
@@ -3123,6 +3124,18 @@ export default function Admin({}: AdminProps) {
                 </ResponsiveContainer>
               </div>
             </div>
+
+            {/* Dashboard Keuangan: Ringkasan Arus Kas Bulanan (Pemasukan vs Pengeluaran) */}
+            <MonthlyCashflowDashboard
+              transactions={transactions}
+              payments={payments}
+              bookings={bookings}
+              properties={properties}
+              selectedPropertyId="all"
+              grossRevenue={totalInflow > 0 ? totalInflow : rawRevenue}
+              totalExpenses={totalOutflow}
+              theme="light"
+            />
 
             {/* Sisa Durasi Sewa & 24h Auto-Release Engine Section */}
             {(() => {
@@ -3767,6 +3780,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
         {activeTab === 'finance' && (
               <div className="space-y-6 animate-fade-in">
                 {/* SAMARA_FINANCE_ERP_START */}
+
+                {/* Dashboard Keuangan: Ringkasan Arus Kas Bulanan (Pemasukan vs Pengeluaran) */}
+                <MonthlyCashflowDashboard
+                  transactions={transactions}
+                  payments={payments}
+                  bookings={bookings}
+                  properties={properties}
+                  selectedPropertyId="all"
+                  grossRevenue={totalInflow > 0 ? totalInflow : rawRevenue}
+                  totalExpenses={totalOutflow}
+                  theme="light"
+                />
                 
                 {/* MailerSend Email Debugger and Diagnostics Console */}
                  <div className="bg-amber-50 border border-amber-200 rounded-3xl p-4 md:p-5 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between shadow-xs">
@@ -3904,42 +3929,42 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                        </div>
  
                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
-                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
-                             <TrendingUp size={10} className="text-emerald-400" />
-                             Total Pendapatan (Inflow)
+                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
+                             <TrendingUp size={10} className="text-emerald-400 shrink-0" />
+                             <span className="truncate">Total Pendapatan (Inflow)</span>
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-[#10b981] font-mono">{formatRupiah(totalInflow)}</div>
-                           <p className="text-[9px] text-slate-500">Omset hunian real-time & jaminan DP survey</p>
+                           <div className="text-base md:text-lg font-extrabold text-[#10b981] font-mono tabular-nums break-words">{formatRupiah(totalInflow)}</div>
+                           <p className="text-[9px] text-slate-500 truncate">Omset hunian real-time & jaminan DP survey</p>
                          </div>
  
-                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
-                             <TrendingDown size={10} className="text-red-400" />
-                             Biaya Operasional (Outflow)
+                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
+                             <TrendingDown size={10} className="text-red-400 shrink-0" />
+                             <span className="truncate">Biaya Operasional (Outflow)</span>
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-[#ef4444] font-mono">{formatRupiah(totalOutflow)}</div>
-                           <p className="text-[9px] text-slate-500">Beban pemeliharaan, utilitas & gaji staff</p>
+                           <div className="text-base md:text-lg font-extrabold text-[#ef4444] font-mono tabular-nums break-words">{formatRupiah(totalOutflow)}</div>
+                           <p className="text-[9px] text-slate-500 truncate">Beban pemeliharaan, utilitas & gaji staff</p>
                          </div>
  
-                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
-                             <Coins size={10} className="text-amber-400" />
-                             Net Profit Laba Bersih
+                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
+                             <Coins size={10} className="text-amber-400 shrink-0" />
+                             <span className="truncate">Net Profit Laba Bersih</span>
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-[#0D9488] font-bold font-mono">{formatRupiah(netEarnings)}</div>
-                           <p className="text-[9px] text-slate-500 font-sans">Marjin Laba: {totalInflow ? Math.round((netEarnings / totalInflow)*100) : 0}%</p>
+                           <div className="text-base md:text-lg font-extrabold text-[#0D9488] font-bold font-mono tabular-nums break-words">{formatRupiah(netEarnings)}</div>
+                           <p className="text-[9px] text-slate-500 font-sans truncate">Marjin Laba: {totalInflow ? Math.round((netEarnings / totalInflow)*100) : 0}%</p>
                          </div>
  
-                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1">
-                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1">
-                             <Percent size={10} className="text-sky-400" />
-                             Kewajiban Pajak PBJT (10%)
+                         <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
+                           <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
+                             <Percent size={10} className="text-sky-400 shrink-0" />
+                             <span className="truncate">Kewajiban Pajak PBJT (10%)</span>
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-sky-400 font-mono">
+                           <div className="text-base md:text-lg font-extrabold text-sky-400 font-mono tabular-nums break-words">
                              {formatRupiah(accounts.find(a=>a.id===2100)?.balance || 0)}
                            </div>
-                           <p className="text-[9px] text-slate-500 font-sans">Disisihkan otomatis dari billing lunas</p>
+                           <p className="text-[9px] text-slate-500 font-sans truncate">Disisihkan otomatis dari billing lunas</p>
                          </div>
                        </div>
                      </div>
@@ -4052,45 +4077,45 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       
                       {/* STATS ROW */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <div className="bg-slate-900 text-white p-5 rounded-3xl border border-slate-800 shadow-lg flex flex-col justify-between">
-                          <span className="text-[9px] text-amber-400 font-bold uppercase font-mono tracking-wider">Status Timbangan COA</span>
-                          <div className="text-sm font-black mt-1 font-sans flex items-center gap-1.5">
-                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                            DEBIT = KREDIT (Balanced)
+                        <div className="bg-slate-900 text-white p-5 rounded-3xl border border-slate-800 shadow-lg flex flex-col justify-between min-w-0 overflow-hidden">
+                          <span className="text-[9px] text-amber-400 font-bold uppercase font-mono tracking-wider truncate">Status Timbangan COA</span>
+                          <div className="text-sm font-black mt-1 font-sans flex items-center gap-1.5 min-w-0">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                            <span className="truncate">DEBIT = KREDIT (Balanced)</span>
                           </div>
-                          <span className="text-[9px] text-[#64748B] mt-1">Asas double-entry terjaga otomatis</span>
+                          <span className="text-[9px] text-[#64748B] mt-1 truncate">Asas double-entry terjaga otomatis</span>
                         </div>
                         
-                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
-                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider">Total Entri Buku Jurnal</span>
-                          <div className="text-xl font-black text-slate-800 font-mono mt-1">{journalEntries.length} Baris</div>
-                          <span className="text-[9px] text-[#64748B] mt-1">Arsip transaksi tercatat permanen</span>
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
+                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider truncate">Total Entri Buku Jurnal</span>
+                          <div className="text-xl font-black text-slate-800 font-mono tabular-nums mt-1">{journalEntries.length} Baris</div>
+                          <span className="text-[9px] text-[#64748B] mt-1 truncate">Arsip transaksi tercatat permanen</span>
                         </div>
 
-                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
-                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider">Rekening Akun Aktif (COA)</span>
-                          <div className="text-xl font-black text-slate-800 font-mono mt-1">{accounts.length} Akun</div>
-                          <span className="text-[9px] text-[#64748B] mt-1">Aset, Liabilitas, Ekuitas, Pendapatan, Beban</span>
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
+                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider truncate">Rekening Akun Aktif (COA)</span>
+                          <div className="text-xl font-black text-slate-800 font-mono tabular-nums mt-1">{accounts.length} Akun</div>
+                          <span className="text-[9px] text-[#64748B] mt-1 truncate">Aset, Liabilitas, Ekuitas, Pendapatan, Beban</span>
                         </div>
 
-                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between">
-                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider">Ekspor Arsip Keuangan</span>
-                          <div className="flex gap-1.5 mt-2">
+                        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
+                          <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono tracking-wider truncate">Ekspor Arsip Keuangan</span>
+                          <div className="flex gap-1.5 mt-2 min-w-0">
                             <button
                               onClick={handleExportLedgerCSV}
-                              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer"
+                              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] py-2 px-2 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer min-w-0"
                               title="Ekspor Ledger ke CSV/Excel"
                             >
-                              <FileSpreadsheet size={12} />
-                              Ledger Excel
+                              <FileSpreadsheet size={12} className="shrink-0" />
+                              <span className="truncate">Ledger Excel</span>
                             </button>
                             <button
                               onClick={handleExportCOACSV}
-                              className="flex-1 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-900 text-white font-extrabold text-[10px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer"
+                              className="flex-1 bg-[#0D9488]/10 text-[#0D9488] hover:bg-slate-900 hover:text-white font-extrabold text-[10px] py-2 px-2 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer min-w-0"
                               title="Ekspor COA ke CSV/Excel"
                             >
-                              <Download size={12} />
-                              COA Excel
+                              <Download size={12} className="shrink-0" />
+                              <span className="truncate">COA Excel</span>
                             </button>
                           </div>
                         </div>
@@ -4361,36 +4386,36 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     <div className="space-y-6 animate-fade-in">
                       {/* Summary Cards */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Total Kliring Masuk (Gross)</span>
-                          <div className="text-xl font-bold font-mono text-slate-900">
+                        <div className="bg-white rounded-3xl p-4 sm:p-5 border border-gray-100 shadow-xs space-y-2 min-w-0 overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block truncate">Total Kliring Masuk (Gross)</span>
+                          <div className="text-base sm:text-lg xl:text-xl font-bold font-mono text-slate-900 tabular-nums break-words">
                             {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.gross_amount || 0), 0))}
                           </div>
-                          <p className="text-[10px] text-slate-500">Volume akumulasi pembayaran Midtrans (1200)</p>
+                          <p className="text-[10px] text-slate-500 truncate">Volume akumulasi pembayaran Midtrans (1200)</p>
                         </div>
 
-                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Total Biaya Layanan (5030)</span>
-                          <div className="text-xl font-bold font-mono text-amber-600">
+                        <div className="bg-white rounded-3xl p-4 sm:p-5 border border-gray-100 shadow-xs space-y-2 min-w-0 overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block truncate">Total Biaya Layanan (5030)</span>
+                          <div className="text-base sm:text-lg xl:text-xl font-bold font-mono text-amber-600 tabular-nums break-words">
                             {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.fee_amount || 0), 0))}
                           </div>
-                          <p className="text-[10px] text-slate-500">Potongan Merchant Admin Fee Midtrans</p>
+                          <p className="text-[10px] text-slate-500 truncate">Potongan Merchant Admin Fee Midtrans</p>
                         </div>
 
-                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Pending Settlement / Reconcile</span>
-                          <div className="text-xl font-bold font-mono text-blue-600">
+                        <div className="bg-white rounded-3xl p-4 sm:p-5 border border-gray-100 shadow-xs space-y-2 min-w-0 overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block truncate">Pending Settlement / Reconcile</span>
+                          <div className="text-base sm:text-lg xl:text-xl font-bold font-mono text-blue-600 tabular-nums break-words">
                             {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.outstanding_amount || 0), 0))}
                           </div>
-                          <p className="text-[10px] text-slate-500">Saldo Piutang Kliring belum cair ke Kas Bank (1010)</p>
+                          <p className="text-[10px] text-slate-500 truncate">Saldo Piutang Kliring belum cair ke Kas Bank (1010)</p>
                         </div>
 
-                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-2">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block">Total Sudah Rekonsiliasi</span>
-                          <div className="text-xl font-bold font-mono text-emerald-600">
+                        <div className="bg-white rounded-3xl p-4 sm:p-5 border border-gray-100 shadow-xs space-y-2 min-w-0 overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase font-mono tracking-wider block truncate">Total Sudah Rekonsiliasi</span>
+                          <div className="text-base sm:text-lg xl:text-xl font-bold font-mono text-emerald-600 tabular-nums break-words">
                             {formatRupiah(clearingTransactions.reduce((acc, c) => acc + (c.reconciled_amount || 0), 0))}
                           </div>
-                          <p className="text-[10px] text-slate-500">Saldo yang telah terverifikasi mutasi bank</p>
+                          <p className="text-[10px] text-slate-500 truncate">Saldo yang telah terverifikasi mutasi bank</p>
                         </div>
                       </div>
 

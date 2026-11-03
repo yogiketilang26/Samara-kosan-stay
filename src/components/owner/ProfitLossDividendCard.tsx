@@ -61,32 +61,32 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Revenue Column */}
-        <div className="bg-slate-50/70 rounded-2xl p-5 border border-slate-100 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-200/70 pb-2.5">
-            <div className="flex items-center gap-1.5 text-emerald-700 font-bold text-xs">
-              <ArrowUpRight size={15} />
-              <span>PENDAPATAN USAHA (REVENUE)</span>
+        <div className="bg-slate-50/70 rounded-2xl p-4 sm:p-5 border border-slate-100 space-y-4 min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-200/70 pb-2.5 min-w-0">
+            <div className="flex items-center gap-1.5 text-emerald-700 font-bold text-xs min-w-0">
+              <ArrowUpRight size={15} className="shrink-0" />
+              <span className="truncate">PENDAPATAN USAHA (REVENUE)</span>
             </div>
-            <span className="text-xs font-black text-slate-900 font-display">
+            <span className="text-xs font-black text-slate-900 font-display tabular-nums shrink-0">
               {formatRupiah(grossRevenue)}
             </span>
           </div>
 
           <div className="space-y-2">
             {revenueBreakdown.map((rev) => (
-              <div key={rev.code} className="flex items-center justify-between text-xs py-1">
-                <div className="flex items-center gap-2 text-slate-600">
-                  <span className="font-mono text-[10px] bg-slate-200/80 px-1.5 py-0.5 rounded text-slate-700 font-semibold">
+              <div key={rev.code} className="flex items-center justify-between gap-2 text-xs py-1 min-w-0">
+                <div className="flex items-center gap-2 text-slate-600 min-w-0 flex-1">
+                  <span className="font-mono text-[10px] bg-slate-200/80 px-1.5 py-0.5 rounded text-slate-700 font-semibold shrink-0">
                     {rev.code}
                   </span>
-                  <span>{rev.name}</span>
+                  <span className="truncate">{rev.name}</span>
                   {rev.isEstimated && (
-                    <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-bold uppercase tracking-wider">
+                    <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-bold uppercase tracking-wider shrink-0">
                       [Estimasi]
                     </span>
                   )}
                 </div>
-                <span className="font-semibold text-slate-800">
+                <span className="font-semibold text-slate-800 tabular-nums shrink-0">
                   {formatRupiah(rev.amount)}
                 </span>
               </div>
@@ -95,32 +95,32 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
         </div>
 
         {/* Expense Column */}
-        <div className="bg-slate-50/70 rounded-2xl p-5 border border-slate-100 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-200/70 pb-2.5">
-            <div className="flex items-center gap-1.5 text-amber-700 font-bold text-xs">
-              <ArrowDownRight size={15} />
-              <span>BEBAN OPERASIONAL (EXPENSES)</span>
+        <div className="bg-slate-50/70 rounded-2xl p-4 sm:p-5 border border-slate-100 space-y-4 min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-200/70 pb-2.5 min-w-0">
+            <div className="flex items-center gap-1.5 text-amber-700 font-bold text-xs min-w-0">
+              <ArrowDownRight size={15} className="shrink-0" />
+              <span className="truncate">BEBAN OPERASIONAL (EXPENSES)</span>
             </div>
-            <span className="text-xs font-black text-amber-900 font-display">
+            <span className="text-xs font-black text-amber-900 font-display tabular-nums shrink-0">
               {formatRupiah(totalExpenses)}
             </span>
           </div>
 
           <div className="space-y-2">
             {expenseBreakdown.map((exp) => (
-              <div key={exp.code} className="flex items-center justify-between text-xs py-1">
-                <div className="flex items-center gap-2 text-slate-600">
-                  <span className="font-mono text-[10px] bg-amber-100/70 px-1.5 py-0.5 rounded text-amber-800 font-semibold">
+              <div key={exp.code} className="flex items-center justify-between gap-2 text-xs py-1 min-w-0">
+                <div className="flex items-center gap-2 text-slate-600 min-w-0 flex-1">
+                  <span className="font-mono text-[10px] bg-amber-100/70 px-1.5 py-0.5 rounded text-amber-800 font-semibold shrink-0">
                     {exp.code}
                   </span>
-                  <span className="line-clamp-1">{exp.name}</span>
+                  <span className="truncate">{exp.name}</span>
                   {exp.isEstimated && (
-                    <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-bold uppercase tracking-wider">
+                    <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-bold uppercase tracking-wider shrink-0">
                       [Estimasi]
                     </span>
                   )}
                 </div>
-                <span className="font-semibold text-slate-800">
+                <span className="font-semibold text-slate-800 tabular-nums shrink-0">
                   {formatRupiah(exp.amount)}
                 </span>
               </div>
@@ -131,13 +131,13 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
       </div>
 
       {/* Interactive Dividend & Yield Simulator */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-slate-900 text-white rounded-2xl p-6 border border-slate-800 space-y-5">
+      <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-slate-900 text-white rounded-2xl p-4 sm:p-6 border border-slate-800 space-y-5 overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30 shrink-0">
               <Calculator size={16} />
             </div>
-            <div>
+            <div className="min-w-0">
               <h3 className="text-sm font-extrabold text-white font-display">
                 Simulasi Pembagian Dividen / Hasil Bersih
               </h3>
@@ -148,7 +148,7 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
           </div>
 
           {/* Slider Ratio */}
-          <div className="flex items-center gap-3 bg-slate-800 px-4 py-2 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-3 bg-slate-800 px-4 py-2 rounded-xl border border-slate-700 shrink-0">
             <span className="text-xs text-slate-300 font-mono">Rasio Payout:</span>
             <input 
               type="range"
@@ -159,7 +159,7 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
               onChange={(e) => setDividendPayoutRatio(Number(e.target.value))}
               className="w-24 accent-emerald-500 cursor-pointer"
             />
-            <span className="text-xs font-black text-emerald-400 font-mono w-10 text-right">
+            <span className="text-xs font-black text-emerald-400 font-mono w-10 text-right tabular-nums">
               {dividendPayoutRatio}%
             </span>
           </div>
@@ -167,29 +167,29 @@ export const ProfitLossDividendCard: React.FC<ProfitLossDividendCardProps> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           
-          <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/80">
-            <span className="text-[10px] text-slate-400 font-mono uppercase font-bold block">
+          <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/80 min-w-0 overflow-hidden">
+            <span className="text-[10px] text-slate-400 font-mono uppercase font-bold block truncate">
               Laba Bersih Operasional (100%)
             </span>
-            <div className="text-lg font-black text-white mt-1 font-display">
+            <div className="text-base sm:text-lg font-black text-white mt-1 font-display tabular-nums break-words">
               {formatRupiah(netOperatingIncome)}
             </div>
           </div>
 
-          <div className="bg-emerald-950/40 rounded-xl p-4 border border-emerald-500/30">
-            <span className="text-[10px] text-emerald-300 font-mono uppercase font-bold block">
+          <div className="bg-emerald-950/40 rounded-xl p-4 border border-emerald-500/30 min-w-0 overflow-hidden">
+            <span className="text-[10px] text-emerald-300 font-mono uppercase font-bold block truncate">
               Distribusi Dividen Pemilik ({dividendPayoutRatio}%)
             </span>
-            <div className="text-lg font-black text-emerald-400 mt-1 font-display">
+            <div className="text-base sm:text-lg font-black text-emerald-400 mt-1 font-display tabular-nums break-words">
               {formatRupiah(dividendPool)}
             </div>
           </div>
 
-          <div className="bg-blue-950/40 rounded-xl p-4 border border-blue-500/30">
-            <span className="text-[10px] text-blue-300 font-mono uppercase font-bold block">
+          <div className="bg-blue-950/40 rounded-xl p-4 border border-blue-500/30 min-w-0 overflow-hidden">
+            <span className="text-[10px] text-blue-300 font-mono uppercase font-bold block truncate">
               Cadangan Kas / Retained ({100 - dividendPayoutRatio}%)
             </span>
-            <div className="text-lg font-black text-blue-400 mt-1 font-display">
+            <div className="text-base sm:text-lg font-black text-blue-400 mt-1 font-display tabular-nums break-words">
               {formatRupiah(retainedReserve)}
             </div>
           </div>
