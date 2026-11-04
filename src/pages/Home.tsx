@@ -3098,6 +3098,10 @@ export default function Home({}: HomeProps) {
               setActiveProperty(prop);
               setIsCatalogOpen(true);
             }}
+            onViewPropertyDetail={(prop) => {
+              setIsCatalogOpen(false);
+              openPropertyDetail(prop);
+            }}
             onScheduleSurvey={(prop) => {
               setActiveProperty(prop);
               const propRooms = rooms.filter(r => r.property_id === prop.id);
@@ -3113,13 +3117,209 @@ export default function Home({}: HomeProps) {
       )}
       {/* ========================================================== */}
 
-      {/* KATALOG KAMAR POPUP MODAL */}
+      {/* MODAL: DESKRIPSI & KETERSEDIAAN (DARI PETA & SEKITAR) ATAU KATALOG KAMAR */}
       <Modal
         isOpen={isCatalogOpen}
         onClose={() => setIsCatalogOpen(false)}
-        title="KATALOG KAMAR TERSEDIA"
+        title={userPage === 'map' ? "INFORMASI KOS & KETERSEDIAAN KAMAR" : "KATALOG KAMAR TERSEDIA"}
       >
-        {activeProperty && (
+        {activeProperty && userPage === 'map' && (() => {
+          const pRooms = rooms.filter(r => r.property_id === activeProperty.id);
+          const availableRooms = pRooms.filter(r => isRoomAvailable(r));
+          const nameLower = (activeProperty.name || '').toLowerCase();
+          const isTiaraCempaka = nameLower.includes('ciputra') || nameLower.includes('cempaka') || nameLower.includes('tiara');
+          const isAtikah = !isTiaraCempaka && (nameLower.includes('atikah') || nameLower.includes('atika') || nameLower.includes('kemayoran') || nameLower.includes('putri') || activeProperty.id === 2);
+
+          const detailedDesc = (activeProperty.description && activeProperty.description.trim() && activeProperty.description !== '(test)')
+            ? activeProperty.description
+            : (isAtikah
+                ? (lang === 'id'
+                    ? "Terletak sangat strategis di pusat kota Kemayoran, menghadirkan konsep hunian kos modern serta opsi sewa kamar harian fully furnished yang nyaman, tenang, dan praktis."
+                    : "Strategically located in the city center, offering modern boarding concepts and fully furnished daily room rentals that are comfortable, quiet, and convenient.")
+                : (lang === 'id'
+                    ? "Terletak di kawasan Kemayoran yang strategis dan tenang, menawarkan pengalaman tinggal premium dengan fasilitas lengkap dan aman."
+                    : "Located in a serene residential area in Kemayoran, offering a premium living experience with complete amenities."));
+
+          return (
+            <div className="space-y-5 text-left max-h-[78vh] overflow-y-auto pr-1">
+              {/* Switcher Antar Kos */}
+              <div className="flex flex-wrap items-center gap-1.5 pb-3 border-b border-[#E2E8F0]">
+                {properties.map(p => {
+                  const isCurr = p.id === activeProperty.id;
+                  const countAvail = rooms.filter(r => r.property_id === p.id && isRoomAvailable(r)).length;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setActiveProperty(p)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                        isCurr
+                          ? 'bg-[#1D603A] text-white border-[#1D603A] shadow-xs'
+                          : 'bg-[#F8FAFC] text-[#3A444D] border-[#E2E8F0] hover:border-[#1D603A]'
+                      }`}
+                    >
+                      <span>{getPropertyCategoryLabel(p.name)}</span>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
+                        isCurr ? 'bg-black/25 text-white' : 'bg-emerald-50 text-[#1D603A]'
+                      }`}>
+                        {countAvail} Kosong
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Tampilan Deskripsi Seperti Tampilan Depan */}
+              <div className="bg-white border border-brand-beige rounded-[24px] overflow-hidden shadow-sm flex flex-col text-left">
+                <div className="relative h-[220px] sm:h-[260px] bg-slate-100 overflow-hidden select-none">
+                  <img
+                    src={activeProperty.image_url || "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=600&q=80"}
+                    alt={activeProperty.name}
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute top-4 left-4">
+                    <span className="px-3.5 py-1 rounded-md text-[10px] font-extrabold font-mono bg-white/95 text-[#1D603A] uppercase tracking-wider shadow-sm">
+                      {getPropertyCategoryLabel(activeProperty.name)}
+                    </span>
+                  </div>
+                  <div className="absolute top-4 right-4">
+                    <span className="px-4 py-1 rounded-md text-[10px] font-bold text-white uppercase tracking-wider bg-[#1D603A]">
+                      {availableRooms.length > 0
+                        ? (lang === 'id' ? `${availableRooms.length} Kamar Tersedia` : `${availableRooms.length} Rooms Available`)
+                        : (lang === 'id' ? 'Penuh' : 'Full')}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-5 sm:p-6 space-y-5 text-left">
+                  <div className="space-y-3">
+                    <h3 className="font-extrabold text-brand-primary text-xl sm:text-2xl tracking-tight">
+                      {activeProperty.name}
+                    </h3>
+
+                    <div className="flex items-start gap-1.5 text-brand-steel text-xs">
+                      <MapPin size={15} className="text-brand-taupe shrink-0 mt-0.5" />
+                      <span className="font-medium text-[#64748B] leading-relaxed">{activeProperty.address}</span>
+                    </div>
+
+                    <p className="text-brand-steel text-xs sm:text-sm font-light leading-relaxed">
+                      {detailedDesc}
+                    </p>
+                  </div>
+
+                  {/* Ringkasan & Status Ketersediaan Kamar */}
+                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-4 bg-[#1D603A] rounded-full" />
+                        <h4 className="text-xs sm:text-sm font-extrabold text-[#1E293B] uppercase tracking-tight">
+                          Ketersediaan Kamar ({getPropertyCategoryLabel(activeProperty.name)})
+                        </h4>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold">
+                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-lg">
+                          {availableRooms.length} Unit Tersedia
+                        </span>
+                        <span className="bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-1 rounded-lg">
+                          {pRooms.length} Total Kamar
+                        </span>
+                      </div>
+                    </div>
+
+                    {pRooms.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                        {pRooms.map(r => {
+                          const isAvail = isRoomAvailable(r);
+                          return (
+                            <div
+                              key={r.id}
+                              className={`p-3 rounded-xl border flex items-center justify-between gap-2 ${
+                                isAvail
+                                  ? 'bg-white border-emerald-200/80'
+                                  : 'bg-slate-50 border-slate-200/70 opacity-70'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-extrabold text-xs text-[#1E293B]">
+                                    Unit {r.room_number}
+                                  </span>
+                                  <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 border border-amber-500/20">
+                                    {r.room_type || 'Standard'}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-[#64748B] font-mono block mt-0.5">
+                                  Lantai {r.floor} • {formatRupiah(r.price)}/bln
+                                </span>
+                              </div>
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[9px] font-extrabold uppercase font-mono shrink-0 border ${
+                                  isAvail
+                                    ? 'bg-emerald-500/10 text-emerald-700 border-emerald-500/25'
+                                    : r.status === 'reserved'
+                                      ? 'bg-amber-500/10 text-amber-700 border-amber-500/25'
+                                      : 'bg-slate-100 text-slate-500 border-slate-200'
+                                }`}
+                              >
+                                {isAvail ? 'Tersedia' : r.status === 'reserved' ? 'Direservasi' : 'Terisi'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-[#64748B] font-mono py-3 text-center">
+                        Belum ada data unit kamar untuk kos ini.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Footer Card: Rating, Kategori, Harga Mulai & Button Selengkapnya */}
+                  <div className="space-y-4 pt-4 border-t border-brand-beige/60">
+                    <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2.5 text-brand-steel">
+                        <span className="flex items-center gap-1 font-bold text-brand-primary">
+                          <Star size={14} className="text-[#0D9488] fill-amber-500" />
+                          4.9
+                        </span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-brand-beige" />
+                        <span className="text-[10px] font-extrabold font-mono uppercase bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2.5 py-0.5 rounded-md">
+                          {getPropertyCategoryLabel(activeProperty.name)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-brand-steel text-[10px] font-medium uppercase font-mono tracking-wider">
+                          {lang === 'id' ? 'Mulai Rp' : 'From IDR'}
+                        </span>
+                        <span className="text-base font-extrabold text-brand-primary tabular-nums">
+                          {formatRupiah(activeProperty.price).replace("Rp", "").trim()}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCatalogOpen(false);
+                          openPropertyDetail(activeProperty);
+                        }}
+                        className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full font-bold text-xs bg-[#205D41] hover:bg-[#164731] text-white cursor-pointer transition-all shadow-sm"
+                      >
+                        <span>{lang === 'id' ? 'Selengkapnya' : 'More Details'}</span>
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {activeProperty && userPage !== 'map' && (
           <div className="space-y-5 text-left max-h-[75vh] overflow-y-auto pr-1">
             <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-3">
               <div>

@@ -41,7 +41,9 @@ import {
   AlertCircle,
   Globe,
   RefreshCw,
-  Compass
+  Compass,
+  ArrowRight,
+  Star
 } from 'lucide-react';
 import { 
   createGoogleMapsRoadmapLayer,
@@ -61,6 +63,7 @@ interface PropertyMapViewProps {
   rooms: Room[];
   selectedPropertyId?: number | null;
   onSelectProperty: (property: Property) => void;
+  onViewPropertyDetail?: (property: Property) => void;
   onSelectRoomBooking?: (room: Room, property: Property) => void;
   onScheduleSurvey?: (property: Property) => void;
   lang?: 'id' | 'en';
@@ -96,6 +99,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
   rooms,
   selectedPropertyId,
   onSelectProperty,
+  onViewPropertyDetail,
   onSelectRoomBooking,
   onScheduleSurvey,
   lang = 'id'
@@ -786,69 +790,98 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
     );
   };
 
+  const getPropertyCategoryLabel = (name: string = '') => {
+    const lower = name.toLowerCase();
+    if (lower.includes('tiara')) return 'Compact Kos';
+    if (lower.includes('atika') || lower.includes('atikah')) return 'Urban hub kos';
+    if (lower.includes('samara')) return 'Companion kos';
+    return name;
+  };
+
+  const getPropertyFrontPageDescription = (prop: Property): string => {
+    if (prop.description && prop.description.trim() && prop.description !== '(test)') {
+      return prop.description;
+    }
+    const nameLower = (prop.name || '').toLowerCase();
+    const isTiara = nameLower.includes('ciputra') || nameLower.includes('cempaka') || nameLower.includes('tiara');
+    const isAtikah = !isTiara && (nameLower.includes('atikah') || nameLower.includes('atika') || nameLower.includes('putri') || prop.id === 2);
+
+    if (isAtikah) {
+      return lang === 'id'
+        ? 'Terletak sangat strategis di pusat kota Kemayoran, menghadirkan konsep hunian kos modern serta opsi sewa kamar harian fully furnished yang nyaman, tenang, dan praktis.'
+        : 'Strategically located in the city center, offering modern boarding concepts and fully furnished daily room rentals that are comfortable, quiet, and convenient.';
+    }
+    return lang === 'id'
+      ? 'Terletak di kawasan Kemayoran yang strategis dan tenang, menawarkan pengalaman tinggal premium dengan fasilitas lengkap dan aman.'
+      : 'Located in a serene residential area in Kemayoran, offering a premium living experience with complete amenities.';
+  };
+
   return (
-    <div 
-      className={`bg-white rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden transition-all duration-300 flex flex-col ${
-        isFullscreen ? 'fixed inset-0 z-[9999] rounded-none' : 'w-full h-[820px]'
-      }`}
-    >
+    <div className="space-y-8">
+      <div 
+        className={`bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden transition-all duration-300 flex flex-col ${
+          isFullscreen ? 'fixed inset-0 z-[9999] rounded-none h-screen w-screen' : 'w-full h-auto lg:h-[860px] xl:h-[880px]'
+        }`}
+      >
       {/* ------------------------------------------------------ */}
       {/* HEADER CONTROLS BAR */}
       {/* ------------------------------------------------------ */}
-      <div className="bg-[#3A444D] text-white px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 shrink-0 z-20">
+      <div className="bg-[#3A444D] text-white px-3.5 sm:px-5 py-3 sm:py-3.5 flex flex-col xl:flex-row xl:items-center justify-between gap-3 shrink-0 z-20">
         
         {/* Title & Brand */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400">
+        <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 min-w-0">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5 sm:mt-0">
             <Compass size={18} />
           </div>
-          <div>
-            <h2 className="text-sm font-extrabold tracking-tight flex items-center gap-2">
-              <span>Eksplorasi Peta & Fasilitas Sekitar</span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-mono">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <h2 className="text-xs sm:text-sm font-extrabold tracking-tight truncate">
+                Eksplorasi Peta & Fasilitas Sekitar
+              </h2>
+              <span className="text-[9px] sm:text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1 font-mono shrink-0">
                 <Globe size={10} /> OpenStreetMap + Leaflet
               </span>
-            </h2>
-            <p className="text-[11px] text-slate-300">
-              {activeProperty ? `${activeProperty.name} (${activeProperty.city || 'Jakarta'})` : 'Pilih unit kos'} &bull; Radius {radiusFilter > 0 ? `${radiusFilter / 1000} km` : 'Semua'}
+            </div>
+            <p className="text-[10px] sm:text-[11px] text-slate-300 truncate mt-0.5">
+              {activeProperty ? `${getPropertyCategoryLabel(activeProperty.name)} — ${activeProperty.name}` : 'Pilih unit kos'} &bull; Radius {radiusFilter > 0 ? `${radiusFilter / 1000} km` : 'Semua'}
             </p>
           </div>
         </div>
 
         {/* Global Toolbar Buttons */}
-        <div className="flex items-center flex-wrap gap-2">
+        <div className="flex items-center flex-wrap gap-1.5 sm:gap-2 w-full xl:w-auto justify-start xl:justify-end">
           
           {/* Reload Overpass POI Data Button */}
           <button
             onClick={() => loadOsmAmenities(true)}
             disabled={isLoadingOsm}
-            className="bg-white/10 hover:bg-white/20 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-white/10 disabled:opacity-50"
+            className="bg-white/10 hover:bg-white/20 text-white text-[11px] sm:text-xs font-bold px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-white/10 disabled:opacity-50 shrink-0"
             title="Tarik Ulang Fasilitas dari OpenStreetMap"
           >
-            <RefreshCw size={13} className={isLoadingOsm ? 'animate-spin text-emerald-400' : 'text-slate-300'} />
-            <span>{isLoadingOsm ? 'Memuat OSM...' : 'Sinkronkan OSM'}</span>
+            <RefreshCw size={12} className={isLoadingOsm ? 'animate-spin text-emerald-400' : 'text-slate-300'} />
+            <span>{isLoadingOsm ? 'Memuat...' : 'Sinkronkan OSM'}</span>
           </button>
 
           {/* My Location GPS Button */}
           <button
             onClick={handleGetUserLocation}
             disabled={isLocatingUser}
-            className="bg-blue-600/80 hover:bg-blue-600 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-blue-400/30 disabled:opacity-50"
+            className="bg-blue-600/80 hover:bg-blue-600 text-white text-[11px] sm:text-xs font-bold px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-blue-400/30 disabled:opacity-50 shrink-0"
             title="Deteksi Lokasi GPS Saya"
           >
-            {isLocatingUser ? <RotateCw size={13} className="animate-spin" /> : <LocateFixed size={13} />}
+            {isLocatingUser ? <RotateCw size={12} className="animate-spin" /> : <LocateFixed size={12} />}
             <span>{isLocatingUser ? 'Mencari...' : 'Posisi Saya'}</span>
           </button>
 
           {/* Layer Selector */}
-          <div className="flex items-center bg-black/30 p-1 rounded-xl border border-white/15 text-xs">
-            <Layers size={13} className="text-emerald-400 mx-2" />
+          <div className="flex items-center bg-black/30 px-2 py-1.5 rounded-xl border border-white/15 text-[11px] sm:text-xs min-w-0 max-w-full sm:max-w-[230px]">
+            <Layers size={12} className="text-emerald-400 mr-1.5 shrink-0" />
             <select
               value={activeLayer}
               onChange={(e) => setActiveLayer(e.target.value as MapLayerType)}
-              className="bg-transparent text-white text-xs font-bold focus:outline-none pr-2 cursor-pointer"
+              className="bg-transparent text-white text-[11px] sm:text-xs font-bold focus:outline-none pr-1 cursor-pointer truncate w-full"
             >
-              <option value="google-roadmap" className="text-slate-900">Google Maps (Peta Jalan Resmi)</option>
+              <option value="google-roadmap" className="text-slate-900">Google Maps (Peta Jalan)</option>
               <option value="google-hybrid" className="text-slate-900">Google Maps (Satelit + Jalan)</option>
               <option value="osm" className="text-slate-900">OpenStreetMap (Standar)</option>
               <option value="satellite" className="text-slate-900">Citra Satelit Esri</option>
@@ -858,46 +891,96 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
           {/* Fit All Bounds Button */}
           <button
             onClick={handleFitAllProperties}
-            className="bg-white/10 hover:bg-white/20 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-white/10"
+            className="bg-white/10 hover:bg-white/20 text-white text-[11px] sm:text-xs font-bold px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-white/10 shrink-0"
             title="Lihat Seluruh Cabang Properti"
           >
-            <Maximize2 size={13} />
+            <Maximize2 size={12} />
             <span>Semua Cabang</span>
           </button>
 
           {/* Fullscreen Toggle */}
           <button
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="bg-[#2E6F40] hover:bg-[#235531] text-white text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+            className="bg-[#2E6F40] hover:bg-[#235531] text-white text-[11px] sm:text-xs font-bold px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm shrink-0 ml-auto sm:ml-0"
           >
-            {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
             <span>{isFullscreen ? 'Tutup Fullscreen' : 'Layar Penuh'}</span>
           </button>
         </div>
       </div>
 
       {/* ------------------------------------------------------ */}
+      {/* DEDICATED PROPERTY BRANCH BAR (MOVED OUT OF MAP OVERLAY) */}
+      {/* ------------------------------------------------------ */}
+      <div className="bg-[#F8FAFC] border-b border-[#E2E8F0] px-3.5 sm:px-5 py-2.5 shrink-0 z-20">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-[#475569] font-mono shrink-0">
+            <Building2 size={13} className="text-[#2E6F40] shrink-0" />
+            <span>Pilih Lokasi Kos di Peta:</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full md:w-auto flex-1 md:max-w-3xl">
+            {properties.map(p => {
+              const isSelected = p.id === activePropId;
+              const pRooms = rooms.filter(r => r.property_id === p.id);
+              const availCount = pRooms.filter(r => r.status === 'available' || !r.status).length;
+              const categoryLabel = getPropertyCategoryLabel(p.name);
+
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleFlyToProperty(p)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between gap-2 cursor-pointer border text-left min-w-0 ${
+                    isSelected
+                      ? 'bg-[#2E6F40] text-white border-[#2E6F40] shadow-sm ring-2 ring-[#2E6F40]/20'
+                      : 'bg-white text-slate-800 border-slate-200 hover:bg-emerald-50/40 hover:border-[#2E6F40]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Building2 size={14} className={`shrink-0 ${isSelected ? 'text-amber-300' : 'text-[#2E6F40]'}`} />
+                    <div className="min-w-0">
+                      <span className="block text-[11px] sm:text-xs font-extrabold truncate leading-tight">
+                        {categoryLabel}
+                      </span>
+                      <span className={`block text-[9px] truncate ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
+                        {p.name}
+                      </span>
+                    </div>
+                  </div>
+                  <span className={`text-[9px] sm:text-[10px] px-2 py-0.5 rounded-md font-mono font-extrabold shrink-0 ${
+                    isSelected ? 'bg-black/25 text-white' : 'bg-emerald-50 text-emerald-800 border border-emerald-200/60'
+                  }`}>
+                    {availCount} Unit
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ------------------------------------------------------ */}
       {/* MAIN SPLIT VIEW (MAP + SIDEBAR PANEL) */}
       {/* ------------------------------------------------------ */}
-      <div className="flex-1 flex flex-col lg:flex-row relative overflow-hidden">
+      <div className="flex-1 flex flex-col lg:flex-row relative overflow-hidden min-h-0">
         
         {/* ==================================================== */}
         {/* LEFT / CENTER: LEAFLET MAP CONTAINER */}
         {/* ==================================================== */}
-        <div className="flex-1 relative h-[450px] lg:h-full w-full bg-slate-100">
+        <div className="w-full lg:flex-1 relative h-[320px] sm:h-[400px] md:h-[460px] lg:h-full bg-slate-100 shrink-0">
           <div ref={mapContainerRef} className="w-full h-full z-10" />
 
           {/* Tile Load Error Fallback Banner */}
           {mapTileError && (
-            <div className="absolute top-16 right-4 z-[450] bg-rose-600/95 text-white text-xs font-semibold px-3.5 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 backdrop-blur-md border border-rose-400/40 animate-fade-in max-w-sm">
+            <div className="absolute top-3 right-3 left-3 sm:left-auto z-[450] bg-rose-600/95 text-white text-xs font-semibold px-3.5 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 backdrop-blur-md border border-rose-400/40 animate-fade-in sm:max-w-sm">
               <AlertCircle size={16} className="text-amber-300 shrink-0" />
-              <div className="flex-1">
-                <span className="font-bold block">{mapTileError}</span>
-                <span className="text-[10px] text-rose-100">Silakan ganti ke Citra Satelit Esri atau periksa koneksi.</span>
+              <div className="flex-1 min-w-0">
+                <span className="font-bold block truncate">{mapTileError}</span>
+                <span className="text-[10px] text-rose-100 block">Silakan ganti ke Citra Satelit Esri atau periksa koneksi.</span>
               </div>
               <button 
                 onClick={() => setMapTileError(null)} 
-                className="text-white/80 hover:text-white font-black text-sm px-1"
+                className="text-white/80 hover:text-white font-black text-sm px-1 shrink-0"
                 title="Tutup Notifikasi"
               >
                 ✕
@@ -907,146 +990,139 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
           {/* Overpass Live Fetch Status Badge */}
           {isLoadingOsm && (
-            <div className="absolute top-16 left-4 z-[450] bg-slate-900/90 text-white text-xs font-semibold px-3.5 py-2 rounded-2xl shadow-xl flex items-center gap-2 backdrop-blur-md border border-slate-700/50">
-              <RefreshCw size={13} className="animate-spin text-emerald-400" />
-              <span>Memindai fasilitas sekitar via OpenStreetMap Overpass API...</span>
+            <div className="absolute top-3 left-3 z-[450] bg-slate-900/90 text-white text-[11px] font-semibold px-3 py-1.5 rounded-xl shadow-lg flex items-center gap-2 backdrop-blur-md border border-slate-700/50 max-w-[calc(100%-1.5rem)]">
+              <RefreshCw size={12} className="animate-spin text-emerald-400 shrink-0" />
+              <span className="truncate">Memindai fasilitas sekitar via OpenStreetMap...</span>
             </div>
           )}
-
-          {/* Floating Property Jump Switcher (Overlaid at top of Map) */}
-          <div className="absolute top-4 left-4 right-4 lg:right-auto z-[400] flex gap-2 overflow-x-auto no-scrollbar py-1">
-            {properties.map(p => {
-              const isSelected = p.id === activePropId;
-              const pRooms = rooms.filter(r => r.property_id === p.id);
-              const availCount = pRooms.filter(r => r.status === 'available' || !r.status).length;
-
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => handleFlyToProperty(p)}
-                  className={`px-3.5 py-2 rounded-2xl text-xs font-extrabold shadow-md backdrop-blur-md transition-all flex items-center gap-2 cursor-pointer shrink-0 border ${
-                    isSelected
-                      ? 'bg-[#2E6F40] text-white border-white ring-2 ring-[#2E6F40]/30 scale-105'
-                      : 'bg-white/95 text-slate-800 border-slate-300 hover:bg-white hover:border-[#2E6F40]'
-                  }`}
-                >
-                  <Building2 size={14} className={isSelected ? 'text-amber-300' : 'text-[#2E6F40]'} />
-                  <span>{p.name}</span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                    isSelected ? 'bg-black/30 text-white' : 'bg-emerald-100 text-emerald-800'
-                  }`}>
-                    {availCount} Unit
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Floating Category Filter Pills (Overlaid on Bottom Left of Map) */}
-          <div className="absolute bottom-6 left-4 z-[400] bg-white/95 backdrop-blur-md border border-slate-200 p-2 rounded-2xl shadow-xl max-w-[calc(100%-2rem)] md:max-w-xl overflow-x-auto no-scrollbar flex items-center gap-1.5">
-            <button
-              onClick={() => setSelectedCategory('all')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold uppercase tracking-wide transition-all shrink-0 cursor-pointer ${
-                selectedCategory === 'all'
-                  ? 'bg-[#3A444D] text-white shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              ✨ Semua ({activePropertyAmenities.length})
-            </button>
-
-            {AMENITY_CATEGORIES.map(cat => {
-              const count = activePropertyAmenities.filter(a => a.category === cat.id).length;
-              const isSelected = selectedCategory === cat.id;
-
-              return (
-                <button
-                  key={cat.id}
-                  onClick={() => setSelectedCategory(cat.id)}
-                  className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer border ${
-                    isSelected
-                      ? 'shadow-sm font-black'
-                      : 'border-transparent text-slate-600 hover:bg-slate-100'
-                  }`}
-                  style={{
-                    backgroundColor: isSelected ? cat.bgColor : undefined,
-                    color: isSelected ? cat.color : undefined,
-                    borderColor: isSelected ? cat.borderColor : undefined
-                  }}
-                >
-                  {getAmenityCategoryIcon(cat.id, 12)}
-                  <span>{lang === 'id' ? cat.labelId : cat.labelEn}</span>
-                  <span className="text-[10px] font-mono opacity-80">({count})</span>
-                </button>
-              );
-            })}
-          </div>
         </div>
 
         {/* ==================================================== */}
         {/* RIGHT: INTERACTIVE AMENITIES & PROPERTY SIDEBAR */}
         {/* ==================================================== */}
-        <div className="w-full lg:w-[420px] bg-[#F8FAFC] border-t lg:border-t-0 lg:border-l border-[#E2E8F0] flex flex-col h-[400px] lg:h-full z-20 text-left">
+        <div className="w-full lg:w-[390px] xl:w-[440px] bg-[#F8FAFC] border-t lg:border-t-0 lg:border-l border-[#E2E8F0] flex flex-col h-[540px] sm:h-[580px] lg:h-full z-20 text-left shrink-0 min-h-0">
           
-          {/* Active Property Card Header */}
-          {activeProperty && (
-            <div className="p-4 bg-white border-b border-[#E2E8F0] space-y-3 shrink-0">
-              <div className="flex justify-between items-start gap-2">
-                <div>
-                  <span className="text-[10px] font-black font-mono text-[#2E6F40] uppercase tracking-wider block">
-                    CABANG AKTIF TERPILIH
-                  </span>
-                  <h3 className="text-base font-extrabold text-[#1E293B] font-display">
-                    {activeProperty.name}
-                  </h3>
-                  <p className="text-xs text-[#64748B] line-clamp-1 mt-0.5">
-                    {activeProperty.address}
-                  </p>
-                  <p className="text-[10px] font-mono text-slate-400 mt-0.5 flex items-center gap-1">
-                    <Globe size={11} className="text-emerald-600" />
-                    OSM: {activeProperty.lat.toFixed(5)}, {activeProperty.lng.toFixed(5)}
-                  </p>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="text-xs font-extrabold text-[#2E6F40] font-mono block">
-                    {formatRupiah(activeProperty.price)}
-                  </span>
-                  <span className="text-[10px] text-[#64748B]">per bulan</span>
-                </div>
-              </div>
+          {/* Active Property Card Header (Front-Page Style Description + Room Availability + Selengkapnya) */}
+          {activeProperty && (() => {
+            const propRooms = rooms.filter(r => r.property_id === activeProperty.id);
+            const availableRooms = propRooms.filter(
+              r => r.status === 'available' || (r.status as string) === 'ready' || !r.status
+            );
+            const detailedDesc = getPropertyFrontPageDescription(activeProperty);
 
-              {/* Action Buttons */}
-              <div className="grid grid-cols-3 gap-2 pt-1">
-                {onScheduleSurvey && (
+            return (
+              <div className="p-3.5 sm:p-4 bg-white border-b border-[#E2E8F0] space-y-3 shrink-0">
+                <div className="flex gap-3 items-start">
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 shrink-0 relative">
+                    <img
+                      src={activeProperty.image_url || 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=600&q=80'}
+                      alt={activeProperty.name}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                    <span className="absolute bottom-1 left-1 right-1 bg-[#1D603A]/90 text-white text-[8px] font-bold uppercase text-center py-0.5 rounded">
+                      {availableRooms.length} Kosong
+                    </span>
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <span className="text-[9px] sm:text-[10px] font-black font-mono text-[#2E6F40] uppercase tracking-wider bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                        {getPropertyCategoryLabel(activeProperty.name)}
+                      </span>
+                      <span className="flex items-center gap-0.5 text-[10px] font-bold text-[#1E293B]">
+                        <Star size={11} className="text-amber-500 fill-amber-500" />
+                        4.9
+                      </span>
+                    </div>
+                    <h3 className="text-sm sm:text-base font-extrabold text-[#1E293B] font-display truncate mt-1">
+                      {activeProperty.name}
+                    </h3>
+                    <p className="text-[11px] text-[#64748B] line-clamp-1 mt-0.5">
+                      {activeProperty.address}
+                    </p>
+                    <div className="flex items-baseline gap-1 mt-1">
+                      <span className="text-[9px] text-[#64748B] uppercase font-mono">Mulai</span>
+                      <span className="text-xs sm:text-sm font-extrabold text-[#2E6F40] font-mono tabular-nums">
+                        {formatRupiah(activeProperty.price)}
+                      </span>
+                      <span className="text-[10px] text-[#64748B]">/bln</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Front-page style description */}
+                <p className="text-[11px] text-[#475569] leading-relaxed line-clamp-2 bg-[#F8FAFC] p-2.5 rounded-xl border border-[#E2E8F0]">
+                  {detailedDesc}
+                </p>
+
+                {/* Ketersediaan Kamar Ringkas */}
+                <div className="bg-[#EEF7F0]/60 border border-[#2E6F40]/20 rounded-xl p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="font-extrabold text-[#1E293B] uppercase tracking-wider flex items-center gap-1">
+                      <Bed size={12} className="text-[#2E6F40]" />
+                      Ketersediaan Kamar
+                    </span>
+                    <span className="font-mono font-bold text-[#2E6F40] bg-white px-2 py-0.5 rounded-md border border-[#2E6F40]/20">
+                      {availableRooms.length} dari {propRooms.length} Unit Tersedia
+                    </span>
+                  </div>
+                  {propRooms.length > 0 && (
+                    <div className="flex flex-wrap gap-1 max-h-14 overflow-y-auto pr-0.5">
+                      {propRooms.slice(0, 6).map(r => {
+                        const isAvail = r.status === 'available' || (r.status as string) === 'ready' || !r.status;
+                        return (
+                          <span
+                            key={r.id}
+                            className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-md border ${
+                              isAvail
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-slate-100 text-slate-400 border-slate-200 line-through'
+                            }`}
+                          >
+                            Unit {r.room_number} ({isAvail ? 'Tersedia' : 'Terisi'})
+                          </span>
+                        );
+                      })}
+                      {propRooms.length > 6 && (
+                        <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-md bg-white text-slate-600 border border-slate-200">
+                          +{propRooms.length - 6} lainnya
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Action Buttons: Ringkasan, Selengkapnya (ke Detail Kos), Survey */}
+                <div className="grid grid-cols-12 gap-1.5 pt-0.5">
                   <button
-                    onClick={() => onScheduleSurvey(activeProperty)}
-                    className="py-2 px-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer text-center"
+                    type="button"
+                    onClick={() => onSelectProperty(activeProperty)}
+                    className="col-span-5 py-2 px-2 bg-white hover:bg-emerald-50 border border-[#2E6F40]/40 text-[#2E6F40] rounded-xl text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer text-center"
                   >
-                    <Calendar size={12} className="text-[#2E6F40]" />
-                    <span>Survey</span>
+                    <Bed size={12} className="shrink-0" />
+                    <span className="truncate">Info & Kamar</span>
                   </button>
-                )}
-                <button
-                  onClick={() => onSelectProperty(activeProperty)}
-                  className="py-2 px-2 bg-[#2E6F40] hover:bg-[#235531] text-white rounded-xl text-[11px] font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer shadow-xs text-center"
-                >
-                  <Bed size={12} />
-                  <span>Kamar</span>
-                </button>
-                <a
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${activeProperty.lat},${activeProperty.lng}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="py-2 px-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer shadow-xs text-center"
-                >
-                  <Navigation size={12} className="text-emerald-400" />
-                  <span>Rute</span>
-                </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onViewPropertyDetail) {
+                        onViewPropertyDetail(activeProperty);
+                      } else {
+                        onSelectProperty(activeProperty);
+                      }
+                    }}
+                    className="col-span-7 py-2 px-2.5 bg-[#205D41] hover:bg-[#164731] text-white rounded-xl text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs text-center"
+                  >
+                    <span className="truncate">Selengkapnya</span>
+                    <ArrowRight size={12} className="shrink-0" />
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
-          {/* Filter & Search Bar */}
+          {/* Filter, Category & Search Bar */}
           <div className="p-3 bg-white border-b border-[#E2E8F0] space-y-2.5 shrink-0">
             {/* Search Input */}
             <div className="relative">
@@ -1056,12 +1132,12 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Cari stasiun, kampus, RS, minimarket terdekat..."
-                className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2E6F40]/30 transition-all font-medium text-slate-800"
+                className="w-full pl-9 pr-7 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2E6F40]/30 transition-all font-medium text-slate-800"
               />
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
                 >
                   ✕
                 </button>
@@ -1070,7 +1146,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
             {/* Radius Distance Filter Chips */}
             <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 shrink-0">
+              <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 shrink-0">
                 <Route size={12} className="text-[#2E6F40]" />
                 Radius:
               </span>
@@ -1086,7 +1162,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                   <button
                     key={r.val}
                     onClick={() => setRadiusFilter(r.val)}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${
+                    className={`px-2 py-1 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer shrink-0 ${
                       radiusFilter === r.val
                         ? 'bg-[#2E6F40] text-white shadow-xs'
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -1095,6 +1171,50 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
                     {r.label}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* Category Filter Pills (Relocated from Map Canvas for Clean View) */}
+            <div className="pt-1 border-t border-slate-100">
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory('all')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wide transition-all shrink-0 cursor-pointer border ${
+                    selectedCategory === 'all'
+                      ? 'bg-[#3A444D] text-white border-[#3A444D] shadow-2xs'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  ✨ Semua ({activePropertyAmenities.length})
+                </button>
+
+                {AMENITY_CATEGORIES.map(cat => {
+                  const count = activePropertyAmenities.filter(a => a.category === cat.id).length;
+                  const isSelected = selectedCategory === cat.id;
+
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setSelectedCategory(cat.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer border ${
+                        isSelected
+                          ? 'shadow-2xs font-black'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                      style={{
+                        backgroundColor: isSelected ? cat.bgColor : undefined,
+                        color: isSelected ? cat.color : undefined,
+                        borderColor: isSelected ? cat.borderColor : undefined
+                      }}
+                    >
+                      {getAmenityCategoryIcon(cat.id, 11)}
+                      <span>{lang === 'id' ? cat.labelId : cat.labelEn}</span>
+                      <span className="text-[9px] font-mono opacity-80">({count})</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1222,6 +1342,170 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
 
         </div>
 
+      </div>
+      </div>
+
+      {/* ===================================================================== */}
+      {/* DESKRIPSI & KETERSEDIAAN KAMAR MASING-MASING KOS (FRONT-PAGE STYLE) */}
+      {/* ===================================================================== */}
+      <div className="pt-2 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2 border-b border-[#E2E8F0] pb-4">
+          <div className="text-left space-y-1">
+            <span className="text-[10px] font-bold text-[#1D603A] tracking-[0.2em] uppercase font-mono block">
+              {lang === 'id' ? 'INFORMASI CABANG & KETERSEDIAAN UNIT' : 'BRANCH OVERVIEW & ROOM AVAILABILITY'}
+            </span>
+            <h3 className="text-xl sm:text-2xl font-extrabold text-[#1E293B] tracking-tight font-serif">
+              {lang === 'id' ? 'Deskripsi & Ketersediaan Kamar Masing-Masing Kos' : 'Property Description & Room Availability'}
+            </h3>
+          </div>
+          <p className="text-xs text-[#64748B] font-medium">
+            {lang === 'id'
+              ? 'Pilih "Selengkapnya" untuk membuka halaman detail lengkap masing-masing kos.'
+              : 'Click "More Details" to open the full detail page for each boarding house.'}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {properties.map((p, idx) => {
+            const pRooms = rooms.filter(r => r.property_id === p.id);
+            const availableRooms = pRooms.filter(
+              r => r.status === 'available' || (r.status as string) === 'ready' || !r.status
+            );
+            const isSelected = activeProperty?.id === p.id;
+            const isGreen = idx % 2 === 0;
+            const themeBadgeClass = isGreen ? 'bg-[#1D603A]' : 'bg-[#2E3545]';
+            const themeBtnClass = isGreen
+              ? 'bg-[#205D41] hover:bg-[#164731] text-white'
+              : 'bg-[#374457] hover:bg-[#273241] text-white';
+            const detailedDesc = getPropertyFrontPageDescription(p);
+
+            return (
+              <div
+                key={p.id}
+                onClick={() => handleFlyToProperty(p)}
+                className={`bg-white border rounded-[24px] overflow-hidden shadow-sm flex flex-col group transition-all duration-300 hover:shadow-md text-left cursor-pointer ${
+                  isSelected
+                    ? 'border-[#2E6F40] ring-2 ring-[#2E6F40]/20'
+                    : 'border-brand-beige'
+                }`}
+              >
+                <div className="relative h-[220px] sm:h-[240px] bg-slate-100 overflow-hidden select-none">
+                  <img
+                    src={p.image_url || 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=600&q=80'}
+                    alt={p.name}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute top-3 left-3">
+                    <span className="px-3 py-1 rounded-md text-[10px] font-extrabold font-mono bg-white/95 text-[#1D603A] uppercase tracking-wider shadow-sm">
+                      {getPropertyCategoryLabel(p.name)}
+                    </span>
+                  </div>
+                  <div className="absolute top-3 right-3">
+                    <span className={`px-3.5 py-1 rounded-md text-[10px] font-bold text-white uppercase tracking-wider ${themeBadgeClass}`}>
+                      {availableRooms.length > 0
+                        ? `${availableRooms.length} Kamar Tersedia`
+                        : (lang === 'id' ? 'Penuh' : 'Full')}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-5 sm:p-6 flex-1 flex flex-col justify-between space-y-5 text-left">
+                  <div className="space-y-3">
+                    <h4 className="font-extrabold text-brand-primary text-lg sm:text-xl tracking-tight">
+                      {p.name}
+                    </h4>
+
+                    <div className="flex items-start gap-1.5 text-brand-steel text-xs">
+                      <MapPin size={14} className="text-brand-taupe shrink-0 mt-0.5" />
+                      <span className="font-medium text-[#64748B] leading-relaxed line-clamp-2">{p.address}</span>
+                    </div>
+
+                    <p className="text-brand-steel text-xs font-light leading-relaxed">
+                      {detailedDesc}
+                    </p>
+
+                    {/* Ketersediaan Kamar Breakdown */}
+                    <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-3 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-extrabold text-[#1E293B] flex items-center gap-1.5">
+                          <Bed size={13} className="text-[#2E6F40]" />
+                          Status Ketersediaan Kamar
+                        </span>
+                        <span className="font-mono font-bold text-[#2E6F40] text-[10px]">
+                          {availableRooms.length}/{pRooms.length} Kosong
+                        </span>
+                      </div>
+                      {pRooms.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {pRooms.map(r => {
+                            const isAvail = r.status === 'available' || (r.status as string) === 'ready' || !r.status;
+                            return (
+                              <span
+                                key={r.id}
+                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg border ${
+                                  isAvail
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-400 border-slate-200'
+                                }`}
+                              >
+                                {r.room_number} • {isAvail ? 'Tersedia' : 'Terisi'}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 font-mono">Belum ada data kamar.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-4 border-t border-brand-beige/50">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 text-brand-steel">
+                        <span className="flex items-center gap-1 font-bold text-brand-primary">
+                          <Star size={14} className="text-[#0D9488] fill-amber-500" />
+                          4.9
+                        </span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-brand-beige" />
+                        <span className="text-[10px] font-extrabold font-mono uppercase bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2 py-0.5 rounded-md">
+                          {getPropertyCategoryLabel(p.name)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-brand-steel text-[10px] font-medium uppercase font-mono tracking-wider">
+                          {lang === 'id' ? 'Mulai Rp' : 'From IDR'}
+                        </span>
+                        <span className="text-sm sm:text-base font-extrabold text-brand-primary tabular-nums">
+                          {formatRupiah(p.price).replace('Rp', '').trim()}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onViewPropertyDetail) {
+                            onViewPropertyDetail(p);
+                          } else {
+                            onSelectProperty(p);
+                          }
+                        }}
+                        className={`w-full inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full font-bold text-xs cursor-pointer transition-all ${themeBtnClass}`}
+                      >
+                        <span>{lang === 'id' ? 'Selengkapnya' : 'More Details'}</span>
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

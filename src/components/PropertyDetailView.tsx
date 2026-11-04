@@ -513,87 +513,53 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 md:px-8 mt-6 space-y-8 animate-fade-in">
-      {/* Breadcrumb Navigation & Quick Property Switcher by URL Parameter */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap justify-between items-center gap-2">
-          <div className="flex items-center gap-2">
+    <div className="max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 mt-4 sm:mt-6 space-y-6 sm:space-y-8 animate-fade-in">
+      {/* Breadcrumb Navigation */}
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              updateUrlPropertyParam(null);
+              if (onBackToHome) onBackToHome();
+            }}
+            className="inline-flex items-center gap-1.5 text-xs text-[#64748B] hover:text-[#2E6F40] font-bold cursor-pointer transition-colors px-3 sm:px-3.5 py-2 rounded-xl border border-[#E2E8F0] bg-white shadow-xs"
+          >
+            <ChevronLeft size={14} />
+            <span>Kembali ke Beranda</span>
+          </button>
+          {onOpenSearchCatalog && (
             <button
               type="button"
               onClick={() => {
                 updateUrlPropertyParam(null);
-                if (onBackToHome) onBackToHome();
+                onOpenSearchCatalog();
               }}
-              className="inline-flex items-center gap-1.5 text-xs text-[#64748B] hover:text-[#2E6F40] font-bold cursor-pointer transition-colors px-3.5 py-2 rounded-xl border border-[#E2E8F0] bg-white shadow-xs"
+              className="inline-flex items-center gap-1.5 text-xs text-[#64748B] hover:text-[#2E6F40] font-bold cursor-pointer transition-colors px-3 sm:px-3.5 py-2 rounded-xl border border-[#E2E8F0] bg-white shadow-xs"
             >
-              <ChevronLeft size={14} />
-              Kembali ke Beranda
+              <span>Pencarian Katalog</span>
             </button>
-            {onOpenSearchCatalog && (
-              <button
-                type="button"
-                onClick={() => {
-                  updateUrlPropertyParam(null);
-                  onOpenSearchCatalog();
-                }}
-                className="inline-flex items-center gap-1.5 text-xs text-[#64748B] hover:text-[#2E6F40] font-bold cursor-pointer transition-colors px-3.5 py-2 rounded-xl border border-[#E2E8F0] bg-white shadow-xs"
-              >
-                Pencarian Katalog
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1.5 text-[10px] text-[#64748B] font-mono">
-            <span>Home</span>
-            <ChevronRight size={10} />
-            <span className="text-[#2E6F40] font-bold">{renamedCategoryLabel}</span>
-            <ChevronRight size={10} />
-            <span className="text-[#3A444D] font-semibold">{resolvedProperty.name}</span>
-          </div>
+          )}
         </div>
 
-        {/* Renamed Properties URL Parameter Switcher Bar */}
-        {allProperties.length > 1 && (
-          <div className="bg-white border border-[#E2E8F0] p-2.5 rounded-2xl flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider font-mono text-[#64748B] px-2">
-              Pilih Kategori Kos:
-            </span>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {allProperties.map((p) => {
-                const isCurrent = p.id === resolvedProperty.id;
-                const catLabel = getPropertyCategoryLabel(p.name);
-                const pAvailCount = allRooms.filter((r) => r.property_id === p.id && isRoomAvailable(r)).length;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => handleSwitchProperty(p)}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 border ${
-                      isCurrent
-                        ? 'bg-[#2E6F40] text-white border-[#2E6F40] shadow-xs'
-                        : 'bg-[#F8FAFC] text-[#3A444D] border-[#E2E8F0] hover:border-[#2E6F40] hover:text-[#2E6F40]'
-                    }`}
-                  >
-                    <span>{catLabel}</span>
-                    <span
-                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded-md ${
-                        isCurrent ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
-                      }`}
-                    >
-                      {pAvailCount} Kosong
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 text-[10px] text-[#64748B] font-mono overflow-x-auto no-scrollbar whitespace-nowrap">
+          <span>Home</span>
+          <ChevronRight size={10} className="shrink-0" />
+          <span className="text-[#2E6F40] font-bold">{renamedCategoryLabel}</span>
+          <ChevronRight size={10} className="shrink-0" />
+          <span className="text-[#3A444D] font-semibold truncate">{resolvedProperty.name}</span>
+        </div>
       </div>
 
       {/* Airbnb-style Premium Image Grid Gallery */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white border border-[#E2E8F0] p-3 rounded-3xl overflow-hidden shadow-sm h-[380px]">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 sm:gap-3 bg-white border border-[#E2E8F0] p-2.5 sm:p-3 rounded-2xl sm:rounded-3xl overflow-hidden shadow-sm h-auto md:h-[360px] lg:h-[400px]">
         {/* 1 Big Photo (Col span 2, Row span 2) */}
-        <div className="md:col-span-2 h-full rounded-2xl overflow-hidden bg-slate-900 select-none relative group">
+        <div
+          className="md:col-span-2 h-[220px] sm:h-[300px] md:h-full rounded-xl sm:rounded-2xl overflow-hidden bg-slate-900 select-none relative group cursor-zoom-in"
+          onClick={() =>
+            resolvedProperty.image_url && onZoomImage && onZoomImage(resolvedProperty.image_url)
+          }
+        >
           <img
             src={
               resolvedProperty.image_url ||
@@ -603,16 +569,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-95"
             referrerPolicy="no-referrer"
           />
-          <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm border border-slate-800 text-white px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider">
+          <div className="absolute top-3 left-3 sm:top-4 sm:left-4 bg-black/70 backdrop-blur-sm border border-slate-800 text-white px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider">
             {renamedCategoryLabel}
           </div>
 
-          {/* Admin Image Uploader Trigger */}
+          {/* Subtle Admin Image Uploader Trigger on Hover */}
           {onUploadDetailImage && (
-            <div className="absolute bottom-4 right-4 z-10">
-              <label className="bg-[#2E6F40] hover:bg-[#235531] text-white px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-1.5">
-                <UploadCloud size={13} />
-                <span>{uploadingImage ? 'Mengunggah...' : 'Upload Foto Utama'}</span>
+            <div
+              className="absolute top-3 right-3 sm:top-4 sm:right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <label
+                className="bg-slate-950/80 hover:bg-[#2E6F40] text-white px-2.5 py-1.5 rounded-xl text-[10px] font-extrabold uppercase font-mono tracking-wider shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                title="Upload Foto Utama"
+              >
+                <UploadCloud size={12} />
+                <span className="hidden sm:inline">{uploadingImage ? 'Mengunggah...' : 'Ubah Foto'}</span>
                 <input
                   type="file"
                   accept="image/*"
@@ -625,8 +597,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           )}
         </div>
 
-        {/* Grid of 4 Smaller Photos (Col span 1 each) */}
-        <div className="hidden md:grid grid-cols-2 grid-rows-2 col-span-2 gap-3 h-full">
+        {/* Grid of 4 Smaller Photos (Responsive 2x2 grid on tablet/laptop, 4-col strip on mobile) */}
+        <div className="grid grid-cols-4 md:grid-cols-2 md:grid-rows-2 md:col-span-2 gap-2 sm:gap-3 h-[76px] sm:h-[96px] md:h-full">
           {(() => {
             const galleryImages = (resolvedProperty.images || []).filter(
               (img) => typeof img === 'string' && img.trim() !== ''
@@ -734,7 +706,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             <div>
-              <h1 className="text-3xl font-black text-[#3A444D] font-display tracking-tight">
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-[#3A444D] font-display tracking-tight leading-snug">
                 {renamedCategoryLabel} — {resolvedProperty.name}
               </h1>
               {renamedMeta?.tagline && (
@@ -742,18 +714,18 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-1.5 text-[#64748B] text-sm font-medium">
-              <MapPin size={15} className="text-[#2E6F40] shrink-0" />
-              <span>{resolvedProperty.address}</span>
+            <div className="flex items-start sm:items-center gap-1.5 text-[#64748B] text-xs sm:text-sm font-medium">
+              <MapPin size={15} className="text-[#2E6F40] shrink-0 mt-0.5 sm:mt-0" />
+              <span className="leading-relaxed">{resolvedProperty.address}</span>
             </div>
           </div>
 
           {/* Deskripsi Hunian (Specific Property Description) */}
-          <div className="bg-white border border-[#E2E8F0] p-6 rounded-[24px] space-y-3.5 shadow-xs text-left">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-black text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
-                <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full"></span>
-                Deskripsi Hunian — {renamedCategoryLabel}
+          <div className="bg-white border border-[#E2E8F0] p-5 sm:p-6 rounded-2xl sm:rounded-[24px] space-y-3.5 shadow-xs text-left">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs sm:text-sm font-black text-[#3A444D] uppercase tracking-tight flex items-center gap-2">
+                <span className="w-1.5 h-4 bg-[#2E6F40] rounded-full shrink-0"></span>
+                <span>Deskripsi Hunian — {renamedCategoryLabel}</span>
               </h3>
               <span className="text-[10px] font-mono font-bold text-[#64748B] bg-[#F8FAFC] border border-[#E2E8F0] px-2.5 py-0.5 rounded-lg">
                 /{activeSlug}
@@ -765,14 +737,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           </div>
 
           {/* HARGA SEWA MULAI CARD BLOCK */}
-          <div className="bg-white border border-[#E2E8F0] p-8 rounded-[24px] text-center space-y-5 shadow-xs">
+          <div className="bg-white border border-[#E2E8F0] p-5 sm:p-6 md:p-8 rounded-2xl sm:rounded-[24px] text-center space-y-4 sm:space-y-5 shadow-xs">
             <div className="space-y-1">
               <span className="text-[10px] text-[#64748B] font-extrabold uppercase tracking-widest block">
                 HARGA SEWA MULAI
               </span>
-              <h2 className="text-3xl font-extrabold text-[#1E293B] font-display tracking-tight">
+              <h2 className="text-2xl sm:text-3xl font-extrabold text-[#1E293B] font-display tracking-tight tabular-nums">
                 {formatRupiah(startingPrice)}{' '}
-                <span className="text-sm font-medium text-[#64748B]">/ bulan</span>
+                <span className="text-xs sm:text-sm font-medium text-[#64748B]">/ bulan</span>
               </h2>
             </div>
 
@@ -780,9 +752,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={onOpenRoomCatalogModal}
-                className="w-full max-w-md mx-auto py-3.5 px-6 bg-[#334155] hover:bg-[#1E293B] text-white rounded-full font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer"
+                className="w-full max-w-md mx-auto py-3 sm:py-3.5 px-5 sm:px-6 bg-[#334155] hover:bg-[#1E293B] text-white rounded-full font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer text-xs sm:text-sm"
               >
-                <Grid size={18} />
+                <Grid size={16} />
                 <span>Buka Katalog Kamar</span>
               </button>
             )}
@@ -1334,8 +1306,63 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
         {/* Right Booking Column (PILIHAN TIPE KAMAR & PRICING SHEET) (col-span-4) */}
         <div className="lg:col-span-4 space-y-4">
-          <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-6 space-y-5 shadow-sm sticky top-[135px] text-left">
-            {activeRoom ? (
+          <div className="lg:sticky lg:top-[135px] space-y-4">
+            {/* Relocated Renamed Properties Switcher Card */}
+            {allProperties.length > 1 && (
+              <div className="bg-white border border-[#E2E8F0] rounded-2xl sm:rounded-[24px] p-4 sm:p-5 space-y-3 shadow-xs text-left">
+                <div className="flex items-center justify-between gap-2 border-b border-[#F1F5F9] pb-2.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider font-mono text-[#2E6F40] flex items-center gap-1.5">
+                    <Building2 size={13} className="text-[#2E6F40] shrink-0" />
+                    <span>Pilih Kategori Kos</span>
+                  </span>
+                  <span className="text-[9px] font-mono text-[#64748B]">
+                    {allProperties.length} Cabang
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-2">
+                  {allProperties.map((p) => {
+                    const isCurrent = p.id === resolvedProperty.id;
+                    const catLabel = getPropertyCategoryLabel(p.name);
+                    const pAvailCount = allRooms.filter(
+                      (r) => r.property_id === p.id && isRoomAvailable(r)
+                    ).length;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleSwitchProperty(p)}
+                        className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-between gap-2 border text-left ${
+                          isCurrent
+                            ? 'bg-[#2E6F40] text-white border-[#2E6F40] shadow-xs'
+                            : 'bg-[#F8FAFC] text-[#3A444D] border-[#E2E8F0] hover:border-[#2E6F40] hover:text-[#2E6F40]'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <span className="block font-extrabold truncate">{catLabel}</span>
+                          <span
+                            className={`block text-[9px] font-medium truncate ${
+                              isCurrent ? 'text-emerald-100' : 'text-[#64748B]'
+                            }`}
+                          >
+                            {p.name}
+                          </span>
+                        </div>
+                        <span
+                          className={`text-[9px] font-mono px-2 py-0.5 rounded-md shrink-0 font-extrabold ${
+                            isCurrent ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
+                          }`}
+                        >
+                          {pAvailCount} Kosong
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white border border-[#E2E8F0] rounded-2xl sm:rounded-[24px] p-5 sm:p-6 space-y-5 shadow-sm text-left">
+              {activeRoom ? (
               <div className="space-y-4 animate-fade-in">
                 <div className="border-b border-[#F1F5F9] pb-3">
                   <span className="text-[10px] text-[#2E6F40] font-mono font-bold uppercase tracking-wider block">
@@ -1507,6 +1534,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>
