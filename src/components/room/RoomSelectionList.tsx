@@ -733,8 +733,8 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
                   )}
                 </div>
 
-                {/* Pricing & Daily Badge */}
-                <div className="flex items-center justify-between text-xs pt-0.5">
+                {/* Pricing & Daily / Airbnb Badges */}
+                <div className="flex items-center justify-between text-xs pt-0.5 gap-2">
                   <div>
                     <span className="text-[10px] text-[#64748B] block font-mono">Tarif Sewa</span>
                     <span className="font-extrabold text-xs text-[#3A444D] font-mono">
@@ -742,11 +742,31 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
                       <span className="text-[9px] font-normal text-slate-500 font-sans">/bln</span>
                     </span>
                   </div>
-                  {room.is_daily_enabled && (
-                    <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono">
-                      Harian
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1 flex-wrap justify-end">
+                    {room.is_daily_enabled && (
+                      <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono">
+                        Harian
+                      </span>
+                    )}
+                    {(room.is_airbnb_enabled || room.airbnb_url) && (
+                      room.airbnb_url ? (
+                        <a
+                          href={room.airbnb_url.startsWith('http') ? room.airbnb_url : `https://${room.airbnb_url}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="bg-[#FF385C]/10 hover:bg-[#FF385C]/20 text-[#FF385C] border border-[#FF385C]/30 text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono flex items-center gap-0.5 transition"
+                          title="Buka listing Airbnb kamar ini"
+                        >
+                          <span>Airbnb ↗</span>
+                        </a>
+                      ) : (
+                        <span className="bg-[#FF385C]/10 text-[#FF385C] border border-[#FF385C]/30 text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded font-mono">
+                          Airbnb
+                        </span>
+                      )
+                    )}
+                  </div>
                 </div>
 
                 {/* BOTTOM ROW: QUICK STATUS TOGGLE FOR STAFF + ACTION BUTTONS */}
@@ -912,6 +932,24 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
                       }`}>
                         {room.room_type}
                       </span>
+                      {(room.is_airbnb_enabled || room.airbnb_url) && (
+                        room.airbnb_url ? (
+                          <a
+                            href={room.airbnb_url.startsWith('http') ? room.airbnb_url : `https://${room.airbnb_url}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-[#FF385C]/10 hover:bg-[#FF385C]/20 text-[#FF385C] border border-[#FF385C]/30 text-[8px] font-extrabold uppercase px-1.5 py-0.2 rounded font-mono"
+                            title="Buka listing Airbnb"
+                          >
+                            Airbnb ↗
+                          </a>
+                        ) : (
+                          <span className="bg-[#FF385C]/10 text-[#FF385C] border border-[#FF385C]/30 text-[8px] font-extrabold uppercase px-1.5 py-0.2 rounded font-mono">
+                            Airbnb
+                          </span>
+                        )
+                      )}
                     </div>
                     <p className="text-[10px] text-[#64748B] font-mono mt-0.5 truncate">
                       {propName} • {room.size_sqm} m²

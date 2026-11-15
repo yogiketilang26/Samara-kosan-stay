@@ -4,7 +4,8 @@ import * as LucideIcons from 'lucide-react';
 import {
   Sparkles, BookOpen, Clock, Shield, MapPin, ChevronLeft,
   CheckCircle, Info, Bed, RotateCw, Play, ArrowRight, Star,
-  ChevronRight, MapPinned, Compass, Grid, UploadCloud, ExternalLink
+  ChevronRight, MapPinned, Compass, Grid, UploadCloud, ExternalLink,
+  Building2
 } from 'lucide-react';
 import { Property, Room, StandardFacility } from '../types';
 import { database, normalizeFacilityList, inferFacilityIcon } from '../lib/supabase';
@@ -382,14 +383,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     propertiesFromParent && propertiesFromParent.length > 0 ? propertiesFromParent : internalProperties;
   const allRooms = roomsFromParent && roomsFromParent.length > 0 ? roomsFromParent : internalRooms;
 
-  // Fetch from Supabase if rendered standalone without parent properties/rooms
+  const hasFetchedStandalonePropRef = useRef(false);
+  const hasFetchedStandaloneRoomRef = useRef(false);
+
+  // Fetch from Supabase at most once if rendered standalone without parent properties/rooms
   useEffect(() => {
-    if (!propertiesFromParent || propertiesFromParent.length === 0) {
+    if ((!propertiesFromParent || propertiesFromParent.length === 0) && !hasFetchedStandalonePropRef.current) {
+      hasFetchedStandalonePropRef.current = true;
       database.fetchProperties().then((res) => {
         if (res && res.length > 0) setInternalProperties(res);
       });
     }
-    if (!roomsFromParent || roomsFromParent.length === 0) {
+    if ((!roomsFromParent || roomsFromParent.length === 0) && !hasFetchedStandaloneRoomRef.current) {
+      hasFetchedStandaloneRoomRef.current = true;
       database.fetchRooms().then((res) => {
         if (res && res.length > 0) setInternalRooms(res);
       });
@@ -951,6 +957,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                               >
                                 {r.room_type || 'Standard'}
                               </span>
+                              {(r.is_airbnb_enabled || r.airbnb_url || resolvedProperty.is_airbnb_enabled || resolvedProperty.airbnb_url) && (
+                                <span className="px-2 py-0.5 rounded-md text-[8px] font-extrabold uppercase font-mono border bg-[#FFF8F9] text-[#FF385C] border-[#FF385C]/30">
+                                  Airbnb
+                                </span>
+                              )}
                             </div>
 
                             <span
@@ -1008,34 +1019,47 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       </div>
 
                       {/* Action CTAs */}
-                      <div className="pt-2 border-t border-[#F1F5F9] flex items-center gap-2">
-                        {isAvail ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (onSelectRoom) onSelectRoom(r, 'monthly');
-                                window.scrollTo({ top: 1200, behavior: 'smooth' });
-                              }}
-                              className="flex-1 py-2 px-3 bg-[#2E6F40] hover:bg-[#235531] text-white text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center shadow-2xs"
-                            >
-                              Pesan Unit Ini
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (onSelectRoom) onSelectRoom(r, 'survey');
-                              }}
-                              className="py-2 px-3 bg-[#F8FAFC] hover:bg-emerald-50 text-[#2E6F40] border border-[#E2E8F0] hover:border-[#2E6F40] text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center"
-                              title="Jadwalkan survey untuk unit ini"
-                            >
-                              Survey
-                            </button>
-                          </>
-                        ) : (
-                          <div className="w-full py-2 px-3 bg-slate-100 text-slate-500 rounded-xl text-[11px] font-medium text-center border border-slate-200">
-                            Unit Sedang Terisi
-                          </div>
+                      <div className="pt-2 border-t border-[#F1F5F9] space-y-2">
+                        <div className="flex items-center gap-2">
+                          {isAvail ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onSelectRoom) onSelectRoom(r, 'monthly');
+                                  window.scrollTo({ top: 1200, behavior: 'smooth' });
+                                }}
+                                className="flex-1 py-2 px-3 bg-[#2E6F40] hover:bg-[#235531] text-white text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center shadow-2xs"
+                              >
+                                Pesan Unit Ini
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onSelectRoom) onSelectRoom(r, 'survey');
+                                }}
+                                className="py-2 px-3 bg-[#F8FAFC] hover:bg-emerald-50 text-[#2E6F40] border border-[#E2E8F0] hover:border-[#2E6F40] text-[11px] font-bold rounded-xl transition-colors cursor-pointer text-center"
+                                title="Jadwalkan survey untuk unit ini"
+                              >
+                                Survey
+                              </button>
+                            </>
+                          ) : (
+                            <div className="w-full py-2 px-3 bg-slate-100 text-slate-500 rounded-xl text-[11px] font-medium text-center border border-slate-200">
+                              Unit Sedang Terisi
+                            </div>
+                          )}
+                        </div>
+                        {(r.is_airbnb_enabled || r.airbnb_url || resolvedProperty.is_airbnb_enabled || resolvedProperty.airbnb_url) && (
+                          <a
+                            href={r.airbnb_url || resolvedProperty.airbnb_url || 'https://www.airbnb.co.id/users/profile/1469644070216777538?previous_page_name=PdpHomeMarketplace'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full py-2 px-3 bg-[#FFF8F9] hover:bg-[#FF385C] text-[#FF385C] hover:text-white border border-[#FF385C]/30 hover:border-[#FF385C] text-[11px] font-extrabold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+                          >
+                            <span>Pesan via Airbnb</span>
+                            <ExternalLink size={11} />
+                          </a>
                         )}
                       </div>
                     </div>
@@ -1191,9 +1215,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   activeNameLower.includes('atika') ||
                   activeNameLower.includes('kemayoran') ||
                   activeNameLower.includes('putri'));
+              const hasPropertyAirbnb = Boolean(
+                resolvedProperty.is_airbnb_enabled ||
+                resolvedProperty.airbnb_url ||
+                propertyRooms.some((r) => r.is_airbnb_enabled || r.airbnb_url) ||
+                isAtikahActive
+              );
+              const activeAirbnbLink =
+                resolvedProperty.airbnb_url ||
+                propertyRooms.find((r) => r.airbnb_url)?.airbnb_url ||
+                'https://www.airbnb.co.id/users/profile/1469644070216777538?previous_page_name=PdpHomeMarketplace';
               return (
                 <div className="space-y-3">
-                  <div className={`grid gap-3 ${isAtikahActive ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
+                  <div className={`grid gap-3 ${hasPropertyAirbnb ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
                     <div className="bg-[#F8FAFC] p-4 rounded-2xl text-center space-y-1 border border-[#F1F5F9] shadow-2xs">
                       <div className="text-2xl font-black text-[#1E293B] font-display">
                         {(() => {
@@ -1211,9 +1245,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         Rating
                       </div>
                     </div>
-                    {isAtikahActive && (
+                    {hasPropertyAirbnb && (
                       <a
-                        href="https://www.airbnb.co.id/users/profile/1469644070216777538?previous_page_name=PdpHomeMarketplace"
+                        href={activeAirbnbLink}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="bg-[#FFF8F9] hover:bg-[#FFEBEF] border border-[#FF385C]/35 p-4 rounded-2xl text-center flex flex-col items-center justify-center space-y-1 transition-all group cursor-pointer shadow-2xs"
@@ -1232,14 +1266,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     )}
                   </div>
 
-                  {isAtikahActive && (
+                  {hasPropertyAirbnb && (
                     <div className="bg-[#FFF8F9] border border-[#FF385C]/20 rounded-2xl p-3.5 text-left space-y-1">
                       <div className="flex items-center gap-1.5 text-[#FF385C] font-extrabold text-xs">
                         <Sparkles size={13} className="text-[#FF385C] shrink-0" />
-                        <span>Pesan Kamar Harian via Airbnb</span>
+                        <span>Pesan Kamar via Airbnb</span>
                       </div>
                       <p className="text-[#484848] text-[11px] leading-relaxed font-medium">
-                        Khusus Urban hub kos ({resolvedProperty.name}): Menyediakan layanan sewa kamar harian fully furnished (AC, Smart TV, Wi-Fi kencang, & kamar mandi dalam) dengan fasilitas check-in instan mandiri melalui Airbnb.
+                        {renamedCategoryLabel} ({resolvedProperty.name}): Menyediakan layanan pemesanan kamar fully furnished (AC, Smart TV, Wi-Fi kencang, & kamar mandi dalam) dengan fasilitas check-in instan mandiri melalui Airbnb.
                       </p>
                     </div>
                   )}
@@ -1459,6 +1493,18 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 >
                   Lanjutkan Formulir Pemesanan
                 </button>
+
+                {(activeRoom.is_airbnb_enabled || activeRoom.airbnb_url || resolvedProperty.is_airbnb_enabled || resolvedProperty.airbnb_url) && (
+                  <a
+                    href={activeRoom.airbnb_url || resolvedProperty.airbnb_url || 'https://www.airbnb.co.id/users/profile/1469644070216777538?previous_page_name=PdpHomeMarketplace'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2.5 bg-[#FFF8F9] hover:bg-[#FF385C] text-[#FF385C] hover:text-white border border-[#FF385C]/35 hover:border-[#FF385C] text-xs font-black uppercase tracking-wider rounded-xl transition shadow-2xs cursor-pointer flex items-center justify-center gap-1.5 text-center"
+                  >
+                    <span>Pesan Kamar Ini via Airbnb</span>
+                    <ExternalLink size={13} />
+                  </a>
+                )}
 
                 <button
                   type="button"

@@ -111,19 +111,22 @@ export const Owner: React.FC = () => {
     return clearingList.filter(c => !c.property_id || String(c.property_id) === String(selectedPropertyId));
   }, [clearingList, selectedPropertyId]);
 
-  // G9: Server-side dashboard summary RPC integration (falls back to client-side parity calculation)
+  // G9: Server-side dashboard summary RPC integration (debounced to prevent burst calls)
   const [serverDashboardSummary, setServerDashboardSummary] = useState<any | null>(null);
   useEffect(() => {
     let active = true;
-    database.fetchDashboardSummary({ property_id: selectedPropertyId }).then((res) => {
-      if (active && res?.summary) {
-        setServerDashboardSummary(res.summary);
-      }
-    }).catch(() => {});
+    const timer = setTimeout(() => {
+      database.fetchDashboardSummary({ property_id: selectedPropertyId }).then((res) => {
+        if (active && res?.summary) {
+          setServerDashboardSummary(res.summary);
+        }
+      }).catch(() => {});
+    }, 600);
     return () => {
       active = false;
+      clearTimeout(timer);
     };
-  }, [selectedPropertyId, transactions.length, payments.length, bookings.length, rooms.length]);
+  }, [selectedPropertyId, transactions, payments, bookings, rooms, clearingList]);
 
   // Centralized Financial Engine Math (prefers server RPC summary when available)
   const occupancyData = calculateOccupancy(filteredRooms);

@@ -122,7 +122,7 @@ export function useRealtimeTable<T>(
   const dependencyTrigger = typeof dependencyTriggerOrOptions === 'number' ? dependencyTriggerOrOptions : 0;
   const enabled = options.enabled !== false;
   const hasRelations = options.hasRelations ?? DEFAULT_RELATIONAL_TABLES.has(tableName);
-  const debounceMs = Math.max(250, options.debounceMs ?? 350);
+  const debounceMs = Math.max(500, options.debounceMs ?? 800);
   const isCritical = Boolean(options.isCritical);
   
   // Keep the latest fetch function in a ref to avoid stale closure issues in callbacks
@@ -133,10 +133,26 @@ export function useRealtimeTable<T>(
 
   const isFirstLoadRef = useRef(true);
   const debounceTimerRef = useRef<any>(null);
+  const cooldownRetryTimerRef = useRef<any>(null);
   const lastFetchedAt = useRef<number>(0);
+  const MIN_SILENT_REFETCH_INTERVAL_MS = 2500;
 
   const loadData = useCallback(async (isSilent = false, isManual = false) => {
     if (!enabled) return;
+
+    // Cooldown guard for background silent refetches to prevent rapid loop storms
+    if (isSilent && !isFirstLoadRef.current && !isManual) {
+      const elapsed = Date.now() - lastFetchedAt.current;
+      if (elapsed < MIN_SILENT_REFETCH_INTERVAL_MS) {
+        if (!cooldownRetryTimerRef.current) {
+          cooldownRetryTimerRef.current = setTimeout(() => {
+            cooldownRetryTimerRef.current = null;
+            loadData(true, false);
+          }, MIN_SILENT_REFETCH_INTERVAL_MS - elapsed + 50);
+        }
+        return;
+      }
+    }
 
     // E10: Check sliding-window query budget on background silent refetches (never block initial load, manual refetch, or critical flows)
     if (isSilent && !isFirstLoadRef.current && !isManual && !isCritical) {
@@ -154,6 +170,7 @@ export function useRealtimeTable<T>(
       if (!isSilent && isFirstLoadRef.current) {
         setLoading(true);
       }
+      lastFetchedAt.current = Date.now();
       const res = await fetchFnRef.current();
       if (Array.isArray(res)) {
         setData(res);
@@ -214,6 +231,9 @@ export function useRealtimeTable<T>(
       detach();
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
+      }
+      if (cooldownRetryTimerRef.current) {
+        clearTimeout(cooldownRetryTimerRef.current);
       }
     };
   }, [tableName, dependencyTrigger, enabled, hasRelations, debounceMs, loadData, triggerDebouncedRefetch]);

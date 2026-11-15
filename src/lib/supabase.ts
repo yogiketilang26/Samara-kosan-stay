@@ -31,7 +31,9 @@ import {
   sanitizeColumns,
   dedupeInflight,
   queryBudget,
-  getScopedCacheKey
+  getScopedCacheKey,
+  getLastKnownMemoryCache,
+  invalidateMemoryCache
 } from './queryBudget';
 import { todayJakarta } from './dateUtils';
 
@@ -458,6 +460,7 @@ class SupabaseRealtimeManager {
 
       const handlePgChange = (payload: any) => {
         if (payload && payload.table) {
+          invalidateMemoryCache(payload.table);
           try {
             egressGuard.recordRealtimeEvent(payload.table, payload);
           } catch (egressErr) {}
@@ -473,6 +476,7 @@ class SupabaseRealtimeManager {
         .on('broadcast', { event: 'db_mutation' }, (payload: any) => {
           const msg = payload?.payload || payload;
           if (msg && msg.table && msg.sourceTabId !== this.tabId) {
+            invalidateMemoryCache(msg.table);
             try {
               egressGuard.recordRealtimeEvent(msg.table, msg);
             } catch (egressErr) {}
@@ -708,6 +712,7 @@ export const realtimeManager = new SupabaseRealtimeManager();
 
 export function notifyRealtimeMutation(table: string, eventType: 'INSERT' | 'UPDATE' | 'DELETE' = 'UPDATE', data?: any) {
   try {
+    invalidateMemoryCache(table);
     realtimeManager.broadcastMutation(table, eventType, data);
   } catch (e) {
     console.warn('[RealtimeMutation] Broadcast failed:', e);
@@ -919,19 +924,29 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
 
   // Database Constraint Shield: Enforce remote DB CHECK constraints strictly to prevent SQL errors
   if (table === 'rooms') {
+    const roomMetaTags: string[] = [];
     if (activePayload.room_type) {
       const rawRoomType = String(activePayload.room_type).trim();
       if (rawRoomType === 'Premium Plus' || rawRoomType === 'Premium+' || rawRoomType === 'VVIPSuite' || rawRoomType === 'VVIP Suite') {
-        // Remote DB has rooms_room_type_check IN ('Standard', 'Deluxe', 'Premium')
-        // Store 'Premium' in room_type column and persist '__ROOM_TYPE:Premium Plus__' tag in rooms.facilities text[] column
         activePayload.room_type = 'Premium';
-        activePayload.facilities = ['__ROOM_TYPE:Premium Plus__'];
+        roomMetaTags.push('__ROOM_TYPE:Premium Plus__');
       } else {
         const allowedRoomTypes = ['Standard', 'Deluxe', 'Premium'];
         activePayload.room_type = allowedRoomTypes.includes(rawRoomType) ? rawRoomType : 'Premium';
-        activePayload.facilities = [];
       }
     }
+    if (activePayload.is_airbnb_enabled) {
+      roomMetaTags.push('__AIRBNB_ENABLED:true__');
+    }
+    if (activePayload.airbnb_url && String(activePayload.airbnb_url).trim()) {
+      roomMetaTags.push(`__AIRBNB_URL:${String(activePayload.airbnb_url).trim()}__`);
+    }
+    if (activePayload.room_type || activePayload.is_airbnb_enabled !== undefined || activePayload.airbnb_url !== undefined) {
+      activePayload.facilities = roomMetaTags;
+    }
+    delete activePayload.is_airbnb_enabled;
+    delete activePayload.airbnb_url;
+
     if (activePayload.status) {
       const allowedStatuses = ['available', 'occupied', 'maintenance', 'reserved'];
       if (!allowedStatuses.includes(activePayload.status)) {
@@ -947,18 +962,42 @@ export async function safeSupabaseUpsert(table: string, payload: any, id?: any) 
         activePayload.type = 'campur';
       }
     }
-    // Handle deposit_amount: preserve in terms and remove column to avoid schema mismatch
+    // Handle deposit_amount & Airbnb metadata: preserve in terms and remove columns to avoid schema mismatch
+    let termsStr = activePayload.terms || '';
     if (activePayload.deposit_amount !== undefined) {
       if (activePayload.deposit_amount !== null) {
-        let termsStr = activePayload.terms || '';
         if (termsStr.includes('[DEPOSIT:')) {
           termsStr = termsStr.replace(/\[DEPOSIT:\d+\]/, `[DEPOSIT:${activePayload.deposit_amount}]`);
         } else {
           termsStr = termsStr ? `${termsStr}\n[DEPOSIT:${activePayload.deposit_amount}]` : `[DEPOSIT:${activePayload.deposit_amount}]`;
         }
-        activePayload.terms = termsStr;
       }
       delete activePayload.deposit_amount;
+    }
+    if (activePayload.is_airbnb_enabled !== undefined) {
+      const enabledVal = activePayload.is_airbnb_enabled ? 'true' : 'false';
+      if (termsStr.includes('[AIRBNB_ENABLED:')) {
+        termsStr = termsStr.replace(/\[AIRBNB_ENABLED:(true|false)\]/, `[AIRBNB_ENABLED:${enabledVal}]`);
+      } else if (activePayload.is_airbnb_enabled) {
+        termsStr = termsStr ? `${termsStr}\n[AIRBNB_ENABLED:true]` : `[AIRBNB_ENABLED:true]`;
+      }
+      delete activePayload.is_airbnb_enabled;
+    }
+    if (activePayload.airbnb_url !== undefined) {
+      const cleanUrl = String(activePayload.airbnb_url || '').trim();
+      if (termsStr.includes('[AIRBNB_URL:')) {
+        if (cleanUrl) {
+          termsStr = termsStr.replace(/\[AIRBNB_URL:[^\]]*\]/, `[AIRBNB_URL:${cleanUrl}]`);
+        } else {
+          termsStr = termsStr.replace(/\n?\[AIRBNB_URL:[^\]]*\]/g, '');
+        }
+      } else if (cleanUrl) {
+        termsStr = termsStr ? `${termsStr}\n[AIRBNB_URL:${cleanUrl}]` : `[AIRBNB_URL:${cleanUrl}]`;
+      }
+      delete activePayload.airbnb_url;
+    }
+    if (termsStr !== (activePayload.terms || '')) {
+      activePayload.terms = termsStr;
     }
   }
 
@@ -1465,10 +1504,6 @@ export async function fetchTableWithFallback<T>(
   tableName: string,
   options?: { limit?: number; offset?: number; orderCol?: string; orderAsc?: boolean; columns?: string | readonly string[]; isManual?: boolean }
 ): Promise<T[]> {
-  const budgetStatus = queryBudget.check(tableName, { isManual: Boolean(options?.isManual) });
-  if (!budgetStatus.allowed) {
-    console.warn(`[QUERY BUDGET] Fetch rate limit active for table "${tableName}": ${budgetStatus.reason}`);
-  }
   const limit = resolveLimit(tableName, options?.limit);
   const offset = resolveOffset(options?.offset);
   const orderCol = options?.orderCol || (tableName === 'bookings' || tableName === 'surveys' ? 'created_at' : 'id');
@@ -1479,6 +1514,8 @@ export async function fetchTableWithFallback<T>(
 
   return dedupeInflight<T[]>(dedupeKey, async () => {
     const getCachedData = (): T[] => {
+      const mem = getLastKnownMemoryCache<T[]>(dedupeKey);
+      if (Array.isArray(mem) && mem.length > 0) return mem;
       try {
         if (typeof window !== 'undefined') {
           const raw = localStorage.getItem(cacheKey);
@@ -1487,6 +1524,12 @@ export async function fetchTableWithFallback<T>(
       } catch (e) {}
       return [];
     };
+
+    const budgetStatus = queryBudget.check(tableName, { isManual: Boolean(options?.isManual) });
+    if (!budgetStatus.allowed) {
+      console.warn(`[QUERY BUDGET] Fetch rate limit active for table "${tableName}": ${budgetStatus.reason}. Returning cached snapshot.`);
+      return getCachedData();
+    }
 
     const setCachedData = (items: T[]) => {
       try {
@@ -1583,7 +1626,7 @@ export function normalizeFacilityList(rawInput: any, fallbackList: Facility[] = 
 
   rawArray.forEach((item: any, idx: number) => {
     if (item === null || item === undefined) return;
-    if (typeof item === 'string' && item.startsWith('__ROOM_TYPE:')) return;
+    if (typeof item === 'string' && (item.startsWith('__ROOM_TYPE:') || item.startsWith('__AIRBNB_'))) return;
 
     if (typeof item === 'number' || (typeof item === 'string' && /^\d+$/.test(item.trim()))) {
       const idNum = Number(item);
@@ -1662,6 +1705,8 @@ export const database = {
 
     return dedupeInflight<Property[]>(dedupeKey, async () => {
       const getCached = (): Property[] => {
+        const mem = getLastKnownMemoryCache<Property[]>(dedupeKey);
+        if (Array.isArray(mem) && mem.length > 0) return mem;
         try {
           if (typeof window !== 'undefined') {
             const raw = localStorage.getItem(cacheKey);
@@ -1686,6 +1731,12 @@ export const database = {
           }
         } catch (e) {}
       };
+
+      const budgetStatus = queryBudget.check('properties');
+      if (!budgetStatus.allowed) {
+        console.warn(`[QUERY BUDGET] Fetch rate limit active for "properties": ${budgetStatus.reason}. Returning cached snapshot.`);
+        return getCached();
+      }
 
       // 1. Direct Supabase query if configured and not under quota restriction
       if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
@@ -1732,13 +1783,30 @@ export const database = {
                 : (columnFacs.length > 0 ? columnFacs : defaultPropertyFacilities);
               
               let depositVal = p.deposit_amount;
-              if (depositVal === undefined || depositVal === null) {
-                if (p.terms && typeof p.terms === 'string') {
-                  const match = p.terms.match(/\[DEPOSIT:(\d+)\]/);
-                  if (match) {
-                    depositVal = Number(match[1]);
-                  }
+              let isAirbnbEnabled = Boolean(p.is_airbnb_enabled);
+              let airbnbUrl: string | null = p.airbnb_url || null;
+              let cleanTerms = typeof p.terms === 'string' ? p.terms : '';
+
+              if (cleanTerms) {
+                const depMatch = cleanTerms.match(/\[DEPOSIT:(\d+)\]/);
+                if ((depositVal === undefined || depositVal === null) && depMatch) {
+                  depositVal = Number(depMatch[1]);
                 }
+                const airbnbEnabledMatch = cleanTerms.match(/\[AIRBNB_ENABLED:(true|false)\]/);
+                const airbnbUrlMatch = cleanTerms.match(/\[AIRBNB_URL:([^\]]+)\]/);
+                if (airbnbEnabledMatch) {
+                  isAirbnbEnabled = airbnbEnabledMatch[1] === 'true';
+                } else if (airbnbUrlMatch) {
+                  isAirbnbEnabled = true;
+                }
+                if (airbnbUrlMatch) {
+                  airbnbUrl = airbnbUrlMatch[1].trim();
+                }
+                cleanTerms = cleanTerms
+                  .replace(/\n?\[DEPOSIT:\d+\]/g, '')
+                  .replace(/\n?\[AIRBNB_ENABLED:(true|false)\]/g, '')
+                  .replace(/\n?\[AIRBNB_URL:[^\]]*\]/g, '')
+                  .trim();
               }
 
               const coords = sanitizePropertyCoordinates(p);
@@ -1747,12 +1815,16 @@ export const database = {
                 ...p, 
                 lat: coords.lat,
                 lng: coords.lng,
+                terms: cleanTerms,
                 facilities: finalFacilities,
-                deposit_amount: depositVal ?? 500000
+                deposit_amount: depositVal ?? 500000,
+                is_airbnb_enabled: isAirbnbEnabled,
+                airbnb_url: airbnbUrl
               };
               delete cleanProperty.property_facilities;
               return cleanProperty;
             });
+            setCached(mapped as Property[]);
             return mapped as Property[];
           }
         } catch (err) {
@@ -1766,10 +1838,23 @@ export const database = {
         if (resp.ok) {
           const json = await resp.json();
           if (json.success && Array.isArray(json.data)) {
-            const normalizedProps = json.data.map((p: any) => ({
-              ...p,
-              facilities: normalizeFacilityList(p.facilities || p.property_facilities, defaultPropertyFacilities)
-            }));
+            const normalizedProps = json.data.map((p: any) => {
+              let cleanTerms = typeof p.terms === 'string' ? p.terms : '';
+              const airbnbEnabledMatch = cleanTerms.match(/\[AIRBNB_ENABLED:(true|false)\]/);
+              const airbnbUrlMatch = cleanTerms.match(/\[AIRBNB_URL:([^\]]+)\]/);
+              cleanTerms = cleanTerms
+                .replace(/\n?\[DEPOSIT:\d+\]/g, '')
+                .replace(/\n?\[AIRBNB_ENABLED:(true|false)\]/g, '')
+                .replace(/\n?\[AIRBNB_URL:[^\]]*\]/g, '')
+                .trim();
+              return {
+                ...p,
+                terms: cleanTerms,
+                is_airbnb_enabled: p.is_airbnb_enabled ?? (airbnbEnabledMatch ? airbnbEnabledMatch[1] === 'true' : Boolean(airbnbUrlMatch)),
+                airbnb_url: p.airbnb_url ?? (airbnbUrlMatch ? airbnbUrlMatch[1].trim() : null),
+                facilities: normalizeFacilityList(p.facilities || p.property_facilities, defaultPropertyFacilities)
+              };
+            });
             queryBudget.recordRequest('properties', normalizedProps.length);
             return normalizedProps as Property[];
           }
@@ -1942,47 +2027,55 @@ export const database = {
     if (!isSupabaseConfigured) {
       return [];
     }
-    try {
-      let query = supabase
-        .from('nearby_amenities')
-        .select('*')
-        .order('distance_meters', { ascending: true });
-
-      if (propertyId) {
-        query = query.eq('property_id', propertyId);
+    const dedupeKey = `nearby_amenities:${propertyId ?? 'all'}`;
+    return dedupeInflight<NearbyAmenity[]>(dedupeKey, async () => {
+      const budgetStatus = queryBudget.check('nearby_amenities');
+      if (!budgetStatus.allowed) {
+        return getLastKnownMemoryCache<NearbyAmenity[]>(dedupeKey) || [];
       }
+      try {
+        let query = supabase
+          .from('nearby_amenities')
+          .select('*')
+          .order('distance_meters', { ascending: true });
 
-      const { data, error } = await query;
+        if (propertyId) {
+          query = query.eq('property_id', propertyId);
+        }
 
-      if (error) {
-        console.warn('[fetchNearbyAmenities] Query error:', error.message);
+        const { data, error } = await query;
+
+        if (error) {
+          console.warn('[fetchNearbyAmenities] Query error:', error.message);
+          return [];
+        }
+
+        if (!data || data.length === 0) {
+          return [];
+        }
+
+        queryBudget.recordRequest('nearby_amenities', data.length);
+        return (data || []).map((row: any) => ({
+          id: String(row.id),
+          propertyId: Number(row.property_id),
+          name: String(row.name || ''),
+          category: row.category as any,
+          distanceMeters: Number(row.distance_meters || 0),
+          walkingTimeMinutes: Number(row.walking_minutes ?? row.walking_time_minutes ?? 0),
+          drivingTimeMinutes: row.driving_minutes !== undefined && row.driving_minutes !== null 
+            ? Number(row.driving_minutes) 
+            : (row.driving_time_minutes !== undefined && row.driving_time_minutes !== null ? Number(row.driving_time_minutes) : undefined),
+          lat: Number(row.lat || 0),
+          lng: Number(row.lng || 0),
+          description: row.description || '',
+          address: row.address || '',
+          icon: row.icon_name || row.icon || undefined
+        }));
+      } catch (err) {
+        console.warn('[fetchNearbyAmenities] Network/exception:', err);
         return [];
       }
-
-      if (!data || data.length === 0) {
-        return [];
-      }
-
-      return (data || []).map((row: any) => ({
-        id: String(row.id),
-        propertyId: Number(row.property_id),
-        name: String(row.name || ''),
-        category: row.category as any,
-        distanceMeters: Number(row.distance_meters || 0),
-        walkingTimeMinutes: Number(row.walking_minutes ?? row.walking_time_minutes ?? 0),
-        drivingTimeMinutes: row.driving_minutes !== undefined && row.driving_minutes !== null 
-          ? Number(row.driving_minutes) 
-          : (row.driving_time_minutes !== undefined && row.driving_time_minutes !== null ? Number(row.driving_time_minutes) : undefined),
-        lat: Number(row.lat || 0),
-        lng: Number(row.lng || 0),
-        description: row.description || '',
-        address: row.address || '',
-        icon: row.icon_name || row.icon || undefined
-      }));
-    } catch (err) {
-      console.warn('[fetchNearbyAmenities] Network/exception:', err);
-      return [];
-    }
+    }, 5000);
   },
 
   async saveNearbyAmenity(amenity: Partial<NearbyAmenity>): Promise<NearbyAmenity> {
@@ -2190,6 +2283,8 @@ export const database = {
 
     return dedupeInflight<Room[]>(dedupeKey, async () => {
       const getCached = (): Room[] => {
+        const mem = getLastKnownMemoryCache<Room[]>(dedupeKey);
+        if (Array.isArray(mem) && mem.length > 0) return mem;
         try {
           if (typeof window !== 'undefined') {
             const raw = localStorage.getItem(cacheKey);
@@ -2214,6 +2309,12 @@ export const database = {
           }
         } catch (e) {}
       };
+
+      const budgetStatus = queryBudget.check('rooms');
+      if (!budgetStatus.allowed) {
+        console.warn(`[QUERY BUDGET] Fetch rate limit active for "rooms": ${budgetStatus.reason}. Returning cached snapshot.`);
+        return getCached();
+      }
 
       // 1. Direct Supabase query if configured and not under quota restriction
       if (isSupabaseConfigured && !isQuotaRestrictionActive()) {
@@ -2261,6 +2362,15 @@ export const database = {
                 ? 'Premium Plus'
                 : (r.room_type === 'VVIPSuite' || r.room_type === 'VVIP Suite' ? 'Premium Plus' : (r.room_type || 'Standard'));
 
+              const hasAirbnbEnabledTag = rawFacsArray.some(
+                (item: any) => typeof item === 'string' && item === '__AIRBNB_ENABLED:true__'
+              );
+              const airbnbUrlTag = rawFacsArray.find(
+                (item: any) => typeof item === 'string' && item.startsWith('__AIRBNB_URL:') && item.endsWith('__')
+              );
+              const resolvedAirbnbUrl = r.airbnb_url || (airbnbUrlTag ? airbnbUrlTag.slice('__AIRBNB_URL:'.length, -2) : null);
+              const resolvedAirbnbEnabled = Boolean(r.is_airbnb_enabled || hasAirbnbEnabledTag || resolvedAirbnbUrl);
+
               const relationalFacs = normalizeFacilityList(r.room_facilities, []);
               const columnFacs = normalizeFacilityList(rawFacsArray, []);
               const finalFacilities = relationalFacs.length > 0
@@ -2268,22 +2378,21 @@ export const database = {
                 : (columnFacs.length > 0 ? columnFacs : defaultRoomFacilities);
 
               // Business rule: Rooms remain available for other tenants and surveys until officially paid/occupied.
+              // Pure read normalization (never mutate database inside fetchRooms to prevent realtime read-write loops)
               const normalizedStatus = (r.status === 'reserved' || !r.status) ? 'available' : r.status;
-              
-              // Auto-heal any lingering 'reserved' status in Supabase
-              if (r.status === 'reserved') {
-                safeSupabaseUpsert('rooms', { status: 'available' }, r.id).catch(e => console.warn('[Auto-heal Room Status]', e));
-              }
 
               const cleanRoom = { 
                 ...r, 
                 room_type: resolvedRoomType,
                 status: normalizedStatus,
+                is_airbnb_enabled: resolvedAirbnbEnabled,
+                airbnb_url: resolvedAirbnbUrl,
                 facilities: finalFacilities
               };
               delete cleanRoom.room_facilities;
               return cleanRoom;
             });
+            setCached(mapped as Room[]);
             return mapped as Room[];
           }
         } catch (err) {
@@ -2300,9 +2409,14 @@ export const database = {
             const normalizedRooms = json.data.map((r: any) => {
               const rawFacs = Array.isArray(r.facilities) ? r.facilities : [];
               const isPremPlus = rawFacs.some((item: any) => typeof item === 'string' && item === '__ROOM_TYPE:Premium Plus__');
+              const hasAirbnbEnabledTag = rawFacs.some((item: any) => typeof item === 'string' && item === '__AIRBNB_ENABLED:true__');
+              const airbnbUrlTag = rawFacs.find((item: any) => typeof item === 'string' && item.startsWith('__AIRBNB_URL:') && item.endsWith('__'));
+              const resolvedAirbnbUrl = r.airbnb_url || (airbnbUrlTag ? airbnbUrlTag.slice('__AIRBNB_URL:'.length, -2) : null);
               return {
                 ...r,
                 room_type: isPremPlus ? 'Premium Plus' : (r.room_type || 'Standard'),
+                is_airbnb_enabled: Boolean(r.is_airbnb_enabled || hasAirbnbEnabledTag || resolvedAirbnbUrl),
+                airbnb_url: resolvedAirbnbUrl,
                 facilities: normalizeFacilityList(rawFacs, defaultRoomFacilities)
               };
             });
@@ -3395,23 +3509,30 @@ export const database = {
   // --- FACILITIES & ASSIGNMENTS (ID-BASED CRUD) ---
   async fetchFacilities(): Promise<Facility[]> {
     if (!isSupabaseConfigured) return DEFAULT_FACILITIES;
-    try {
-      const { data, error } = await supabase
-        .from('facilities')
-        .select('*')
-        .order('id', { ascending: true });
-      if (error) {
-        logSupabaseError('fetchFacilities', error);
+    return dedupeInflight<Facility[]>('facilities:all', async () => {
+      const budgetStatus = queryBudget.check('facilities');
+      if (!budgetStatus.allowed) {
+        return getLastKnownMemoryCache<Facility[]>('facilities:all') || DEFAULT_FACILITIES;
+      }
+      try {
+        const { data, error } = await supabase
+          .from('facilities')
+          .select('*')
+          .order('id', { ascending: true });
+        if (error) {
+          logSupabaseError('fetchFacilities', error);
+          return DEFAULT_FACILITIES;
+        }
+        if (data && data.length > 0) {
+          queryBudget.recordRequest('facilities', data.length);
+          return data as Facility[];
+        }
+        return DEFAULT_FACILITIES;
+      } catch (err) {
+        logSupabaseError('fetchFacilities', err, true);
         return DEFAULT_FACILITIES;
       }
-      if (data && data.length > 0) {
-        return data as Facility[];
-      }
-      return DEFAULT_FACILITIES;
-    } catch (err) {
-      logSupabaseError('fetchFacilities', err, true);
-      return DEFAULT_FACILITIES;
-    }
+    }, 10000);
   },
 
   async createFacility(name: string, icon: string, category: string, description?: string): Promise<Facility> {

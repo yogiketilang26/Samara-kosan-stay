@@ -49,6 +49,8 @@ export interface Property {
   policies?: string;
   terms?: string;
   regulations?: string;
+  is_airbnb_enabled?: boolean;
+  airbnb_url?: string | null;
 }
 
 export type RoomStatus = 'available' | 'occupied' | 'maintenance' | 'reserved' | 'cleaning';
@@ -74,6 +76,8 @@ export interface Room {
   discount_until?: string | null;
   is_daily_enabled: boolean;
   daily_price: number;
+  is_airbnb_enabled?: boolean;
+  airbnb_url?: string | null;
   created_at?: string;
 }
 

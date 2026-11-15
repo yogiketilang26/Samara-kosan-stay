@@ -176,9 +176,13 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
     };
   }, [activePropId]);
 
+  const activePropLat = activeProperty?.lat;
+  const activePropLng = activeProperty?.lng;
+  const activePropResolvedId = activeProperty?.id;
+
   // 2. Fetch Live POIs from OpenStreetMap Overpass API for active property
   const loadOsmAmenities = useCallback(async (forceRefresh = false) => {
-    if (!activeProperty || !isValidCoordinate(activeProperty.lat, activeProperty.lng)) return;
+    if (!activePropResolvedId || activePropLat === undefined || activePropLng === undefined || !isValidCoordinate(activePropLat, activePropLng)) return;
 
     setIsLoadingOsm(true);
     setOsmFetchError(null);
@@ -186,9 +190,9 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
     try {
       const radiusToScan = Math.max(radiusFilter > 0 ? radiusFilter : 3000, 1500);
       const results = await fetchNearbyAmenitiesFromOSM(
-        activeProperty.id,
-        activeProperty.lat,
-        activeProperty.lng,
+        activePropResolvedId,
+        activePropLat,
+        activePropLng,
         radiusToScan,
         forceRefresh
       );
@@ -205,7 +209,7 @@ export const PropertyMapView: React.FC<PropertyMapViewProps> = ({
     } finally {
       setIsLoadingOsm(false);
     }
-  }, [activeProperty, radiusFilter]);
+  }, [activePropResolvedId, activePropLat, activePropLng, radiusFilter]);
 
   useEffect(() => {
     loadOsmAmenities(false);

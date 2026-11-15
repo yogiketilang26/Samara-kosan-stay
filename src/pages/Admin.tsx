@@ -533,6 +533,8 @@ export default function Admin({}: AdminProps) {
   const [selectedTenantForHistory, setSelectedTenantForHistory] = useState<Tenant | null>(null);
   const [showTenantHistoryModal, setShowTenantHistoryModal] = useState<boolean>(false);
   const extensionPollCtrlRef = React.useRef<ReturnType<typeof pollWithBackoff> | null>(null);
+  const extensionSubmitLockRef = React.useRef<boolean>(false);
+  const ACTIVE_EXTENSION_STORAGE_KEY = 'samara_active_extension_payment';
 
   useEffect(() => {
     if (!showExtensionModal && extensionPollCtrlRef.current) {
@@ -1314,9 +1316,12 @@ export default function Admin({}: AdminProps) {
 
   useEffect(() => {
     if (activeTab === 'midtrans_logs' && !isAnakOwner) {
-      fetchMidtransLogs();
+      const timer = setTimeout(() => {
+        fetchMidtransLogs();
+      }, 400);
+      return () => clearTimeout(timer);
     }
-  }, [activeTab, isAnakOwner]);
+  }, [activeTab, isAnakOwner, paymentsData, bookingsData, surveysData, contractExtensionsData]);
 
   useEffect(() => {
     let interval: any;
@@ -1518,48 +1523,119 @@ export default function Admin({}: AdminProps) {
   const handleProcessExtension = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTenantForExtension) return;
+    if (extensionSubmitLockRef.current || isProcessingExtension) return;
 
     const tenant = selectedTenantForExtension;
     const totalAmount = Number(extensionMonthlyRate) * Number(extensionMonths);
 
+    extensionSubmitLockRef.current = true;
     setIsProcessingExtension(true);
     try {
       const propertyName = properties.find(p => p.id === tenant.property_id)?.name || 'Gedung Kos Samara';
 
       if (extensionPaymentMethod === 'midtrans') {
-        const orderId = `EXT-${tenant.id}-${Date.now()}`;
+        let reusableSession: any = null;
+        try {
+          const rawExt = localStorage.getItem(ACTIVE_EXTENSION_STORAGE_KEY);
+          if (rawExt) {
+            const parsed = JSON.parse(rawExt);
+            const ageMs = Date.now() - Number(parsed?.createdAt || 0);
+            if (
+              parsed?.orderId &&
+              String(parsed?.tenantId) === String(tenant.id) &&
+              Number(parsed?.extensionMonths) === Number(extensionMonths) &&
+              Number(parsed?.totalAmount) === Number(totalAmount) &&
+              ageMs > 0 &&
+              ageMs < 15 * 60 * 1000
+            ) {
+              const checkRes = await fetch(`/api/midtrans/status/${encodeURIComponent(parsed.orderId)}`);
+              if (checkRes.ok) {
+                const checkData = await checkRes.json();
+                if (checkData?.settled === true) {
+                  localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+                  setShowExtensionModal(false);
+                  const exts = await database.fetchContractExtensions({ tenant_id: tenant.id, limit: 20 });
+                  const updatedExt = exts.find(ext => (ext as any).midtrans_order_id === parsed.orderId) || exts[0];
+                  await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+                  if (updatedExt) {
+                    setSelectedExtensionProof(updatedExt as ContractExtension);
+                    setShowExtensionProofModal(true);
+                  }
+                  showToast('Perpanjangan kontrak sudah lunas dan berhasil dikonfirmasi!');
+                  return;
+                }
+                if (checkData?.rejected === true) {
+                  localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+                } else if (parsed.snapToken) {
+                  reusableSession = parsed;
+                }
+              }
+            }
+          }
+        } catch {}
 
-        await database.saveContractExtension({
-          tenant_id: tenant.id,
-          tenant_name: tenant.full_name,
-          property_id: tenant.property_id,
-          property_name: propertyName,
-          room_number: tenant.room_number,
-          old_start_date: tenant.start_date,
-          old_duration_months: tenant.duration_months,
-          extension_months: Number(extensionMonths),
-          monthly_rate: Number(extensionMonthlyRate),
-          total_amount: totalAmount,
-          payment_method: 'Midtrans SNAP',
-          status: 'pending',
-          midtrans_order_id: orderId,
-          notes: extensionNotes || `Perpanjangan kontrak ${extensionMonths} Bulan - Kamar ${tenant.room_number}`
-        });
+        const orderId = reusableSession?.orderId || `EXT-${tenant.id}-${Date.now()}`;
+
+        if (!reusableSession) {
+          await database.saveContractExtension({
+            tenant_id: tenant.id,
+            tenant_name: tenant.full_name,
+            property_id: tenant.property_id,
+            property_name: propertyName,
+            room_number: tenant.room_number,
+            old_start_date: tenant.start_date,
+            old_duration_months: tenant.duration_months,
+            extension_months: Number(extensionMonths),
+            monthly_rate: Number(extensionMonthlyRate),
+            total_amount: totalAmount,
+            payment_method: 'Midtrans SNAP',
+            status: 'pending',
+            midtrans_order_id: orderId,
+            notes: extensionNotes || `Perpanjangan kontrak ${extensionMonths} Bulan - Kamar ${tenant.room_number}`
+          });
+        }
 
         await loadMidtransSnapScript();
 
-        const snapRes = await requestSnapTokenFromServer({
-          orderId,
-          grossAmount: totalAmount,
-          description: `Perpanjangan Kontrak Kos Kamar ${tenant.room_number} (${extensionMonths} Bulan) - ${tenant.full_name}`,
-          customerDetails: {
-            name: tenant.full_name,
-            email: tenant.email || 'tenant@samarastay.com',
-            phone: tenant.phone
+        const snapRes = reusableSession?.snapToken
+          ? { token: reusableSession.snapToken, already_paid: false, settled: false }
+          : await requestSnapTokenFromServer({
+              orderId,
+              grossAmount: totalAmount,
+              description: `Perpanjangan Kontrak Kos Kamar ${tenant.room_number} (${extensionMonths} Bulan) - ${tenant.full_name}`,
+              customerDetails: {
+                name: tenant.full_name,
+                email: tenant.email || 'tenant@samarastay.com',
+                phone: tenant.phone
+              }
+            });
+
+        if (snapRes?.already_paid === true || snapRes?.settled === true) {
+          localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+          setShowExtensionModal(false);
+          const exts = await database.fetchContractExtensions({ tenant_id: tenant.id, limit: 20 });
+          const updatedExt = exts.find(ext => (ext as any).midtrans_order_id === orderId) || exts[0];
+          await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+          if (updatedExt) {
+            setSelectedExtensionProof(updatedExt as ContractExtension);
+            setShowExtensionProofModal(true);
           }
-        });
+          showToast('Perpanjangan kontrak sudah lunas dan berhasil dikonfirmasi!');
+          return;
+        }
 
         if (snapRes && snapRes.token && (window as any).snap) {
+          try {
+            localStorage.setItem(ACTIVE_EXTENSION_STORAGE_KEY, JSON.stringify({
+              orderId,
+              tenantId: tenant.id,
+              extensionMonths: Number(extensionMonths),
+              totalAmount,
+              snapToken: snapRes.token,
+              createdAt: reusableSession?.createdAt || Date.now()
+            }));
+          } catch {}
+
           (window as any).snap.pay(snapRes.token, {
             onSuccess: async (result: any) => {
               console.log('[Midtrans Snap Extension Success]', result);
@@ -1571,6 +1647,7 @@ export default function Admin({}: AdminProps) {
 
               const maxAttempts = 10;
               let isSettled = false;
+              let isRejected = false;
               const pollCtrl = pollWithBackoff({
                 baseIntervalMs: 2000,
                 maxIntervalMs: 6000,
@@ -1591,6 +1668,10 @@ export default function Admin({}: AdminProps) {
                     isSettled = true;
                     return true;
                   }
+                  if (statusData?.rejected === true) {
+                    isRejected = true;
+                    return true;
+                  }
                   return false;
                 },
                 isTerminal: (done) => Boolean(done)
@@ -1602,6 +1683,7 @@ export default function Admin({}: AdminProps) {
               setShowExtensionModal(false);
 
               if (isSettled) {
+                try { localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY); } catch {}
                 // G4: Single scoped fetchContractExtensions ONLY after settled === true
                 const exts = await database.fetchContractExtensions({
                   tenant_id: tenant.id,
@@ -1618,22 +1700,49 @@ export default function Admin({}: AdminProps) {
                   setShowExtensionProofModal(true);
                 }
                 showToast('Perpanjangan kontrak berhasil dikonfirmasi!');
+              } else if (isRejected) {
+                try { localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY); } catch {}
+                showToast('Pembayaran perpanjangan ditolak atau dibatalkan oleh Midtrans.', 'error');
+                await refetchContractExtensions();
               } else {
                 showToast('Pembayaran diterima, tapi konfirmasi server memerlukan waktu lebih lama. Cek kembali di daftar Perpanjangan Kontrak dalam beberapa saat.', 'error');
                 startModuleRefresh('tenants');
                 await refetchContractExtensions();
               }
             },
-            onPending: async (result: any) => {
-              showToast('Transaksi perpanjangan menunggu pembayaran Midtrans.', 'error');
+            onPending: async () => {
+              showToast('Transaksi perpanjangan menunggu pembayaran Midtrans. Jika sudah dibayar, data akan otomatis tersimpan meskipun halaman di-refresh.', 'error');
               await refetchContractExtensions();
               setShowExtensionModal(false);
             },
-            onError: (err: any) => {
+            onError: async (err: any) => {
               console.error('[Midtrans Snap Extension Error]', err);
-              showToast('Gagal memproses pembayaran via Midtrans.', 'error');
+              try {
+                localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+                await fetch(`/api/midtrans/status/${encodeURIComponent(orderId)}`);
+              } catch {}
+              showToast('Pembayaran perpanjangan gagal atau ditolak oleh Midtrans.', 'error');
             },
-            onClose: () => {
+            onClose: async () => {
+              try {
+                const resp = await fetch(`/api/midtrans/status/${encodeURIComponent(orderId)}`);
+                if (resp.ok) {
+                  const statusData = await resp.json();
+                  if (statusData?.settled === true) {
+                    localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+                    setShowExtensionModal(false);
+                    const exts = await database.fetchContractExtensions({ tenant_id: tenant.id, limit: 20 });
+                    const updatedExt = exts.find(e => (e as any).midtrans_order_id === orderId) || exts[0];
+                    await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+                    if (updatedExt) {
+                      setSelectedExtensionProof(updatedExt as ContractExtension);
+                      setShowExtensionProofModal(true);
+                    }
+                    showToast('Perpanjangan kontrak berhasil dikonfirmasi!');
+                    return;
+                  }
+                }
+              } catch {}
               showToast('Pop-up pembayaran Midtrans ditutup.');
             }
           });
@@ -1685,9 +1794,47 @@ export default function Admin({}: AdminProps) {
       console.error('Error processing contract extension:', err);
       showToast(err.message || 'Gagal memperpanjang kontrak.', 'error');
     } finally {
+      extensionSubmitLockRef.current = false;
       setIsProcessingExtension(false);
     }
   };
+
+  // Post-Refresh Auto-Recovery for Midtrans Contract Extension payments
+  useEffect(() => {
+    let isCancelled = false;
+    const recoverExtensionPayment = async () => {
+      try {
+        const raw = localStorage.getItem(ACTIVE_EXTENSION_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed?.orderId) return;
+        if (parsed.createdAt && Date.now() - Number(parsed.createdAt) > 24 * 60 * 60 * 1000) {
+          localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+          return;
+        }
+        const resp = await fetch(`/api/midtrans/status/${encodeURIComponent(parsed.orderId)}`);
+        if (!resp.ok || isCancelled) return;
+        const resData = await resp.json();
+        if (resData?.settled === true) {
+          localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+          const exts = await database.fetchContractExtensions({ tenant_id: parsed.tenantId, limit: 20 });
+          const updatedExt = exts.find(e => (e as any).midtrans_order_id === parsed.orderId) || exts[0];
+          await Promise.all([refetchTenants(), refetchPayments(), refetchTransactions(), refetchContractExtensions()]);
+          if (updatedExt && !isCancelled) {
+            setSelectedExtensionProof(updatedExt as ContractExtension);
+            setShowExtensionProofModal(true);
+          }
+          showToast('Pembayaran perpanjangan kontrak telah terverifikasi dan disimpan otomatis!');
+        } else if (resData?.rejected === true) {
+          localStorage.removeItem(ACTIVE_EXTENSION_STORAGE_KEY);
+        }
+      } catch (e) {
+        console.warn('Extension payment recovery check warning:', e);
+      }
+    };
+    recoverExtensionPayment();
+    return () => { isCancelled = true; };
+  }, []);
 
   const handleToggleFacilityHomepage = async (fac: { id?: number, icon: string, title: string, subtitle?: string }, targetState?: boolean) => {
     const currentlyOn = isFacilityOnHomepage(fac);
@@ -2969,17 +3116,20 @@ export default function Admin({}: AdminProps) {
     );
   };
 
-  // G9: Server-side dashboard summary RPC integration (falls back to client-side parity calculation)
+  // G9: Server-side dashboard summary RPC integration (debounced to prevent burst calls)
   const [serverDashboardSummary, setServerDashboardSummary] = useState<any | null>(null);
   useEffect(() => {
     let active = true;
-    database.fetchDashboardSummary({ property_id: 'all' }).then((res) => {
-      if (active && res?.summary) {
-        setServerDashboardSummary(res.summary);
-      }
-    }).catch(() => {});
+    const timer = setTimeout(() => {
+      database.fetchDashboardSummary({ property_id: 'all' }).then((res) => {
+        if (active && res?.summary) {
+          setServerDashboardSummary(res.summary);
+        }
+      }).catch(() => {});
+    }, 600);
     return () => {
       active = false;
+      clearTimeout(timer);
     };
   }, [transactions.length, payments.length, bookings.length, rooms.length]);
 
@@ -3277,13 +3427,49 @@ export default function Admin({}: AdminProps) {
 
             <div className="space-y-3">
               {properties.length > 0 ? (
-                properties.map(p => (
+                properties.map(p => {
+                  const pRooms = rooms.filter(r => r.property_id === p.id);
+                  const airbnbRooms = pRooms.filter(r => r.is_airbnb_enabled || r.airbnb_url);
+                  const effectiveAirbnbUrl = p.airbnb_url || airbnbRooms.find(r => r.airbnb_url)?.airbnb_url || '';
+                  const hasAirbnb = Boolean(p.is_airbnb_enabled || p.airbnb_url || airbnbRooms.length > 0);
+                  return (
                   <div key={p.id} className="bg-white border border-[#E2E8F0] p-5 rounded-[20px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs shadow-xs hover:border-[#0D9488] transition-all text-left">
-                    <div>
-                      <h4 className="font-extrabold text-[#3A444D] font-sans text-sm">{p.name}</h4>
-                      <span className="text-[11px] text-[#64748B] font-mono italic">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln | Deposit Gedung: {formatRupiah(p.deposit_amount ?? 500000)}</span>
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="font-extrabold text-[#3A444D] font-sans text-sm">{p.name}</h4>
+                        {hasAirbnb && (
+                          effectiveAirbnbUrl ? (
+                            <a
+                              href={effectiveAirbnbUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 bg-[#FFF8F9] hover:bg-[#FFEBEF] text-[#FF385C] border border-[#FF385C]/30 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase tracking-wider transition-colors"
+                              title="Buka link pemesanan Airbnb"
+                            >
+                              <span>Airbnb {airbnbRooms.length > 0 ? `(${airbnbRooms.length} Kamar)` : 'Aktif'} ↗</span>
+                            </a>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 bg-[#FFF8F9] text-[#FF385C] border border-[#FF385C]/30 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase tracking-wider">
+                              Airbnb {airbnbRooms.length > 0 ? `(${airbnbRooms.length} Kamar)` : 'Aktif'}
+                            </span>
+                          )
+                        )}
+                      </div>
+                      <span className="text-[11px] text-[#64748B] font-mono italic block">Gender: {p.type} | Tarif: {formatRupiah(p.price)}/bln | Deposit Gedung: {formatRupiah(p.deposit_amount ?? 500000)} | Total Kamar: {pRooms.length} Unit</span>
                     </div>
-                    <div className="flex gap-2 w-full sm:w-auto">
+                    <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveRoomEdit({ property_id: p.id } as any);
+                          setShowRoomModal(true);
+                        }}
+                        className="flex-1 sm:flex-none p-2 px-3.5 bg-[#F0FDFA] hover:bg-[#0D9488] text-[#0D9488] hover:text-white rounded-xl border border-[#CCFBF1] hover:border-[#0D9488] transition cursor-pointer text-xs flex items-center justify-center gap-1.5 font-bold"
+                        title="Tambah unit kamar baru (termasuk opsi link Airbnb) ke properti ini"
+                      >
+                        <Plus size={12} />
+                        Tambah Kamar
+                      </button>
                       <button 
                         onClick={() => {
                           setActivePropertyEdit(p);
@@ -3309,7 +3495,8 @@ export default function Admin({}: AdminProps) {
                       </button>
                     </div>
                   </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="bg-white border border-dashed border-amber-300 rounded-[20px] p-8 text-center space-y-4">
                   <div className="mx-auto w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-500">
@@ -8729,7 +8916,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
       <Modal
         isOpen={showRoomModal}
         onClose={() => setShowRoomModal(false)}
-        title={activeRoomEdit ? 'Sesuaikan Klasifikasi Unit' : 'Tambahkan Kamar Baru'}
+        title={activeRoomEdit && activeRoomEdit.id ? 'Sesuaikan Klasifikasi Unit' : 'Tambahkan Kamar Baru'}
       >
         <RoomForm 
           room={activeRoomEdit}

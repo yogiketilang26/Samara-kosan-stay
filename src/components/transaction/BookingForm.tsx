@@ -66,6 +66,7 @@ interface BookingFormProps {
   setIsAgreed: (agreed: boolean) => void;
   signatureUrl: string;
   setSignatureUrl: (url: string) => void;
+  isSubmitting?: boolean;
 }
 
 export const BookingForm: React.FC<BookingFormProps> = ({
@@ -92,12 +93,15 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   isAgreed,
   setIsAgreed,
   signatureUrl,
-  setSignatureUrl
+  setSignatureUrl,
+  isSubmitting = false
 }) => {
   const [sigError, setSigError] = useState('');
   const [isUploadingCert, setIsUploadingCert] = useState(false);
   const [certUploadError, setCertUploadError] = useState('');
   const [previewCertModal, setPreviewCertModal] = useState(false);
+  const [localSubmitLock, setLocalSubmitLock] = useState(false);
+  const lastSubmitAtRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Check if a specific time slot is already locked/booked by another active survey
@@ -225,6 +229,11 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting || localSubmitLock) return;
+    const now = Date.now();
+    if (now - lastSubmitAtRef.current < 3500) {
+      return; // Anti-double-click guard during lag
+    }
     setSigError('');
 
     if (checkoutFlow === 'survey' && isSlotLocked(surveyForm.slot)) {
@@ -259,6 +268,12 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       setSigError('Mohon bubuhkan Tanda Tangan Digital Anda (pada layar atau upload gambar file).');
       return;
     }
+
+    lastSubmitAtRef.current = now;
+    setLocalSubmitLock(true);
+    setTimeout(() => {
+      setLocalSubmitLock(false);
+    }, 3500);
 
     onProceedToPayment(calcs.total);
   };
@@ -957,11 +972,23 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
       <button
         type="submit"
-        className="w-full py-3 bg-[#2E6F40] hover:bg-[#1f4b2b] text-white font-black uppercase text-[11px] rounded-2xl shadow-sm transition-all tracking-wider cursor-pointer text-center"
+        disabled={isSubmitting || localSubmitLock || isUploadingCert}
+        className={`w-full py-3 font-black uppercase text-[11px] rounded-2xl shadow-sm transition-all tracking-wider text-center flex items-center justify-center gap-2 ${
+          isSubmitting || localSubmitLock || isUploadingCert
+            ? 'bg-slate-400 text-white cursor-not-allowed opacity-80'
+            : 'bg-[#2E6F40] hover:bg-[#1f4b2b] text-white cursor-pointer'
+        }`}
       >
-        {checkoutFlow === 'survey' && surveyForm.isWithoutDp 
-          ? 'Konfirmasi Jadwal Survey Gratis' 
-          : 'Bayar Online Sekarang via Midtrans SNAP'}
+        {isSubmitting || localSubmitLock ? (
+          <>
+            <RefreshCw size={14} className="animate-spin" />
+            <span>Memproses & Mengamankan Pembayaran...</span>
+          </>
+        ) : checkoutFlow === 'survey' && surveyForm.isWithoutDp ? (
+          'Konfirmasi Jadwal Survey Gratis'
+        ) : (
+          'Bayar Online Sekarang via Midtrans SNAP'
+        )}
       </button>
 
       {/* Lightbox / Preview Modal for Marriage Certificate */}

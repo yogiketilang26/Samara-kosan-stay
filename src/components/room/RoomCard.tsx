@@ -49,11 +49,18 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect, onViewDetail
           <p className="text-[10px] text-slate-400 font-mono mt-1 truncate">Kelas: {room.room_type}</p>
         </div>
         
-        {room.is_daily_enabled && (
-          <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md text-[8px] font-extrabold uppercase font-mono tracking-wider shrink-0">
-            BISA HARIAN
-          </span>
-        )}
+        <div className="flex flex-wrap gap-1 justify-end shrink-0">
+          {(room.is_airbnb_enabled || room.airbnb_url) && (
+            <span className="bg-[#FF385C]/15 text-[#FF385C] border border-[#FF385C]/30 px-2 py-0.5 rounded-md text-[8px] font-extrabold uppercase font-mono tracking-wider shrink-0">
+              AIRBNB
+            </span>
+          )}
+          {room.is_daily_enabled && (
+            <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md text-[8px] font-extrabold uppercase font-mono tracking-wider shrink-0">
+              BISA HARIAN
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 border-y border-slate-850 py-2 text-[10px] text-slate-400 font-mono">
@@ -85,6 +92,17 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, onSelect, onViewDetail
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {(room.is_airbnb_enabled || room.airbnb_url) && (
+            <a
+              href={room.airbnb_url || 'https://www.airbnb.co.id/users/profile/1469644070216777538?previous_page_name=PdpHomeMarketplace'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-2.5 py-1.5 rounded-xl font-bold uppercase text-[9px] tracking-wider transition-all cursor-pointer bg-[#FF385C]/15 hover:bg-[#FF385C] text-[#FF385C] hover:text-white border border-[#FF385C]/30"
+              title="Pesan via Airbnb"
+            >
+              Airbnb ↗
+            </a>
+          )}
           {onViewDetail && (
             <button
               onClick={onViewDetail}

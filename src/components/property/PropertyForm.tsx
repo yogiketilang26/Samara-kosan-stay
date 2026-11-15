@@ -43,7 +43,9 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
     additional_rules: '',
     policies: '',
     terms: '',
-    regulations: ''
+    regulations: '',
+    is_airbnb_enabled: false,
+    airbnb_url: ''
   });
 
   const [masterFacilities, setMasterFacilities] = useState<any[]>([]);
@@ -81,7 +83,9 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
         additional_rules: property.additional_rules || '',
         policies: property.policies || '',
         terms: property.terms || '',
-        regulations: property.regulations || ''
+        regulations: property.regulations || '',
+        is_airbnb_enabled: Boolean(property.is_airbnb_enabled || property.airbnb_url),
+        airbnb_url: property.airbnb_url || ''
       });
       setSelectedFacilityIds((property.facilities || []).map((f: any) => typeof f === 'number' ? f : (f?.id || f?.facility_id)).filter(Boolean));
     } else {
@@ -441,7 +445,9 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
       additional_rules: formData.additional_rules,
       policies: formData.policies,
       terms: formData.terms,
-      regulations: formData.regulations
+      regulations: formData.regulations,
+      is_airbnb_enabled: Boolean(formData.is_airbnb_enabled || formData.airbnb_url.trim()),
+      airbnb_url: formData.airbnb_url.trim() || null
     });
   };
 
@@ -825,6 +831,65 @@ export const PropertyForm: React.FC<PropertyFormProps> = ({
               placeholder="Tata tertib jam malam, fasilitas..."
               rows={3}
               className="w-full bg-slate-950 border border-slate-800 p-2 rounded-xl text-slate-200 outline-none focus:border-amber-500 text-[10px] leading-relaxed resize-none"
+            />
+          </div>
+        </div>
+
+        {/* Pemesanan ke Airbnb & Link Airbnb Properti / Kamar */}
+        <div className="bg-[#FF385C]/10 p-4 rounded-2xl border border-[#FF385C]/30 space-y-3 mt-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <div className="w-7 h-7 rounded-xl bg-[#FF385C] text-white flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+                <svg className="w-4 h-4 fill-current" viewBox="0 0 32 32">
+                  <path d="M16 1c2.008 0 3.463.963 4.751 3.269l.533 1.025c1.954 3.83 6.114 12.54 7.1 14.836l.145.353c.667 1.591.91 2.472.96 3.396l.011.315c0 4.298-3.322 7.806-7.5 7.806-3.13 0-5.836-1.956-6.953-4.758l-.147-.384-.131-.383C13.782 29.28 11.027 31.25 7.8 31.25 3.522 31.25.2 27.742.2 23.444c0-1.127.283-2.222.844-3.332l.272-.505c1.036-1.84 5.37-10.824 7.382-14.814l.551-1.058C10.537 1.963 11.992 1 14 1zm0 2c-1.11 0-2.072.585-3.082 2.387l-.46.884c-1.97 3.908-6.241 12.782-7.243 14.562l-.213.394c-.426.84-.602 1.623-.602 2.217 0 3.197 2.483 5.806 5.6 5.806 2.502 0 4.678-1.637 5.385-4.084l.113-.424.113-.424C12.392 20.355 13.9 18.5 16 18.5s3.608 1.855 4.194 5.815l.113.424.113.424c.707 2.447 2.883 4.084 5.385 4.084 3.117 0 5.6-2.609 5.6-5.806 0-.594-.176-1.377-.602-2.217l-.213-.394c-1.002-1.78-5.273-10.654-7.243-14.562l-.46-.884C21.072 3.585 20.11 3 19 3zm0 17.5c-1.105 0-2 .895-2 2s.895 2 2 2 2-.895 2-2-.895-2-2-2z" />
+                </svg>
+              </div>
+              <div>
+                <h4 className="text-[11px] font-extrabold text-white uppercase font-mono tracking-wide">
+                  Pemesanan ke Airbnb (Properti & Default Kamar)
+                </h4>
+                <p className="text-[9px] text-slate-300 mt-0.5 leading-relaxed">
+                  Aktifkan jika properti kos ini menyediakan opsi pemesanan via Airbnb. Anda juga dapat mengatur link Airbnb spesifik per kamar di menu Manajemen Kamar.
+                </p>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={formData.is_airbnb_enabled}
+              onChange={(e) => setFormData({ ...formData, is_airbnb_enabled: e.target.checked })}
+              className="w-4 h-4 accent-[#FF385C] cursor-pointer shrink-0"
+            />
+          </div>
+
+          <div className="space-y-1.5 pt-1">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-rose-300 font-mono">
+                Link Airbnb Properti / Profil Host (URL)
+              </label>
+              {formData.airbnb_url.trim() && (
+                <a
+                  href={formData.airbnb_url.trim().startsWith('http') ? formData.airbnb_url.trim() : `https://${formData.airbnb_url.trim()}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[9px] font-bold text-[#FF385C] hover:underline flex items-center gap-1 font-mono"
+                >
+                  <span>Tes Buka Link Airbnb ↗</span>
+                </a>
+              )}
+            </div>
+            <input
+              type="url"
+              value={formData.airbnb_url}
+              onChange={(e) => {
+                const val = e.target.value;
+                setFormData(prev => ({
+                  ...prev,
+                  airbnb_url: val,
+                  is_airbnb_enabled: val.trim() ? true : prev.is_airbnb_enabled
+                }));
+              }}
+              placeholder="https://www.airbnb.co.id/rooms/... atau https://www.airbnb.co.id/users/profile/..."
+              className="w-full bg-slate-950 border border-[#FF385C]/40 focus:border-[#FF385C] p-2.5 rounded-xl text-slate-100 placeholder-slate-500 outline-none font-mono text-[11px]"
             />
           </div>
         </div>

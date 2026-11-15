@@ -261,19 +261,79 @@ export function sanitizeColumns(
 }
 
 // ============================================================================
-// E9: IN-FLIGHT REQUEST DEDUPLICATION
+// E9: IN-FLIGHT REQUEST DEDUPLICATION & SHORT-TTL MEMORY CACHE GUARD
 // ============================================================================
 const inflightPromises = new Map<string, Promise<any>>();
+const memoryResponseCache = new Map<string, { data: any; timestamp: number }>();
+const DEFAULT_MEMORY_TTL_MS = 2500; // 2.5s burst protection across components
 
-export function dedupeInflight<T>(key: string, factory: () => Promise<T>): Promise<T> {
+export function getMemoryCache<T>(key: string, maxAgeMs: number = DEFAULT_MEMORY_TTL_MS): T | undefined {
+  const entry = memoryResponseCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.timestamp <= maxAgeMs) {
+    return entry.data as T;
+  }
+  return undefined;
+}
+
+export function getLastKnownMemoryCache<T>(key: string): T | undefined {
+  const entry = memoryResponseCache.get(key);
+  return entry ? (entry.data as T) : undefined;
+}
+
+export function setMemoryCache<T>(key: string, data: T): void {
+  if (data !== undefined && data !== null) {
+    memoryResponseCache.set(key, { data, timestamp: Date.now() });
+  }
+}
+
+export function invalidateMemoryCache(tableOrPrefix?: string): void {
+  if (!tableOrPrefix) {
+    memoryResponseCache.clear();
+    return;
+  }
+  const clean = String(tableOrPrefix).trim().toLowerCase();
+  const keysToDelete: string[] = [];
+  memoryResponseCache.forEach((_, k) => {
+    const lowerKey = k.toLowerCase();
+    if (
+      lowerKey === clean ||
+      lowerKey.startsWith(`${clean}:`) ||
+      lowerKey.startsWith('dashboard_summary:')
+    ) {
+      keysToDelete.push(k);
+    }
+  });
+  keysToDelete.forEach((k) => memoryResponseCache.delete(k));
+}
+
+export function dedupeInflight<T>(
+  key: string,
+  factory: () => Promise<T>,
+  ttlMs: number = DEFAULT_MEMORY_TTL_MS
+): Promise<T> {
   const existing = inflightPromises.get(key);
   if (existing) {
     queryBudget.recordDeduped(key);
     return existing as Promise<T>;
   }
 
+  if (ttlMs > 0) {
+    const cached = getMemoryCache<T>(key, ttlMs);
+    if (cached !== undefined) {
+      queryBudget.recordDeduped(key);
+      return Promise.resolve(cached);
+    }
+  }
+
   const promise = Promise.resolve()
     .then(() => factory())
+    .then((result) => {
+      if (result !== undefined && result !== null) {
+        setMemoryCache(key, result);
+      }
+      return result;
+    })
     .finally(() => {
       inflightPromises.delete(key);
     });
@@ -546,6 +606,7 @@ class QueryBudgetManager {
     this.blockedBackgroundRefetches = 0;
     this.updatesLimited = false;
     this.tableMetrics.clear();
+    invalidateMemoryCache();
   }
 }
 

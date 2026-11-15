@@ -71,69 +71,92 @@ export interface ChargeResponse {
   token: string;
   redirect_url: string;
   mode: 'production' | 'sandbox';
+  already_paid?: boolean;
+  settled?: boolean;
+  order_id?: string;
   error?: string;
 }
+
+const inflightChargeRequests = new Map<string, Promise<ChargeResponse>>();
 
 export const requestSnapTokenFromServer = async (
   transaction: MidtransTransaction
 ): Promise<ChargeResponse> => {
-  try {
-    const response = await fetch('/api/midtrans/charge', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        order_id: transaction.orderId,
-        gross_amount: transaction.grossAmount,
-        room_id: transaction.room_id,
-        property_id: transaction.property_id,
-        booking_type: transaction.booking_type,
-        duration_months: transaction.duration_months,
-        duration_days: transaction.duration_days,
-        coupon_code: transaction.coupon_code,
-        is_dp: transaction.is_dp,
-        customer_details: {
-          first_name: transaction.customerDetails.name,
-          email: transaction.customerDetails.email,
-          phone: transaction.customerDetails.phone,
-        },
-        item_details: [
-          {
-            id: 'ROOM_BOOK',
-            price: transaction.grossAmount,
-            quantity: 1,
-            name: transaction.description.substring(0, 50),
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      let errMessage = 'Unknown error';
-      try {
-        const errJson = await response.json();
-        errMessage = errJson.error || JSON.stringify(errJson);
-      } catch {
-        errMessage = await response.text();
-      }
-      
-      console.warn('[MIDTRANS SDK BRIDGE NOTICE] Charge request rejected by server-side bridge API:', {
-        status: response.status,
-        message: errMessage
-      });
-      throw new Error(errMessage || `Connection error to local Midtrans API (Status: ${response.status})`);
-    }
-
-    const data = await response.json();
-    console.log('[MIDTRANS SDK BRIDGE SUCCESS] Obtained Snap token successfully from bridge API:', {
-      mode: data.mode,
-      token: data.token,
-      url: data.redirect_url
-    });
-    return data;
-  } catch (error: any) {
-    console.error('[MIDTRANS SDK BRIDGE ERROR] Failed to obtain Snap token:', error);
-    throw error;
+  const cleanOrderId = String(transaction.orderId || '').trim();
+  if (cleanOrderId && inflightChargeRequests.has(cleanOrderId)) {
+    console.log(`[MIDTRANS SDK] Reusing in-flight charge request for order: ${cleanOrderId}`);
+    return inflightChargeRequests.get(cleanOrderId)!;
   }
+
+  const chargePromise = (async (): Promise<ChargeResponse> => {
+    try {
+      const response = await fetch('/api/midtrans/charge', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          order_id: transaction.orderId,
+          gross_amount: transaction.grossAmount,
+          room_id: transaction.room_id,
+          property_id: transaction.property_id,
+          booking_type: transaction.booking_type,
+          duration_months: transaction.duration_months,
+          duration_days: transaction.duration_days,
+          coupon_code: transaction.coupon_code,
+          is_dp: transaction.is_dp,
+          customer_details: {
+            first_name: transaction.customerDetails.name,
+            email: transaction.customerDetails.email,
+            phone: transaction.customerDetails.phone,
+          },
+          item_details: [
+            {
+              id: 'ROOM_BOOK',
+              price: transaction.grossAmount,
+              quantity: 1,
+              name: transaction.description.substring(0, 50),
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        let errMessage = 'Unknown error';
+        try {
+          const errJson = await response.json();
+          errMessage = errJson.error || JSON.stringify(errJson);
+        } catch {
+          errMessage = await response.text();
+        }
+        
+        console.warn('[MIDTRANS SDK BRIDGE NOTICE] Charge request rejected by server-side bridge API:', {
+          status: response.status,
+          message: errMessage
+        });
+        throw new Error(errMessage || `Connection error to local Midtrans API (Status: ${response.status})`);
+      }
+
+      const data = await response.json();
+      console.log('[MIDTRANS SDK BRIDGE SUCCESS] Obtained Snap response from bridge API:', {
+        mode: data.mode,
+        token: data.token,
+        already_paid: data.already_paid,
+        url: data.redirect_url
+      });
+      return data;
+    } catch (error: any) {
+      console.error('[MIDTRANS SDK BRIDGE ERROR] Failed to obtain Snap token:', error);
+      throw error;
+    } finally {
+      if (cleanOrderId) {
+        inflightChargeRequests.delete(cleanOrderId);
+      }
+    }
+  })();
+
+  if (cleanOrderId) {
+    inflightChargeRequests.set(cleanOrderId, chargePromise);
+  }
+  return chargePromise;
 };
