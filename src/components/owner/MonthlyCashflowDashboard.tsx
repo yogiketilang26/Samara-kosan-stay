@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { FinancialTransaction, PaymentInvoice, Booking, Property } from '../../types';
 import { formatRupiah } from '../../utils/formatCurrency';
+import { isRealRevenueTx, isRealExpenseTx, isPaidPaymentRow } from '../../lib/financialMetrics';
 
 export interface MonthlyCashflowDashboardProps {
   transactions: FinancialTransaction[];
@@ -107,9 +108,18 @@ export const MonthlyCashflowDashboard: React.FC<MonthlyCashflowDashboardProps> =
 
     // Track if we have any dated transactions matching buckets
     const recordedOrderIds = new Set<string>();
+    const hasAnyRealIncomeTx = transactions.some(isRealRevenueTx);
 
-    // 1. Aggregate Financial Transactions from Supabase
+    // 1. Aggregate Financial Transactions from Supabase using SSOT rules
     transactions.forEach((tx) => {
+      if (tx.reference_id) recordedOrderIds.add(String(tx.reference_id).trim().toUpperCase());
+      if (tx.transaction_no) recordedOrderIds.add(String(tx.transaction_no).trim().toUpperCase());
+      const desc = String(tx.description || '');
+      const match = desc.match(/\b(BOOK-\S+|BOOKING-\S+|EXT-\S+|EXTEND-\S+|INV-\S+|PAY-\S+)\b/i);
+      if (match?.[1]) {
+        recordedOrderIds.add(match[1].replace(/[),.;]+$/, '').toUpperCase());
+      }
+
       const rawDate = tx.transaction_date || tx.date || tx.created_at;
       if (!rawDate) return;
       const parsed = new Date(rawDate);
@@ -122,11 +132,10 @@ export const MonthlyCashflowDashboard: React.FC<MonthlyCashflowDashboardProps> =
       const amt = Number(tx.amount) || 0;
       if (amt <= 0) return;
 
-      if (tx.type === 'income' || tx.type === 'dp_booking') {
+      if (isRealRevenueTx(tx)) {
         bucket.pemasukan += amt;
         bucket.txCount += 1;
-        if (tx.reference_id) recordedOrderIds.add(String(tx.reference_id));
-      } else if (tx.type === 'expense') {
+      } else if (isRealExpenseTx(tx)) {
         bucket.pengeluaran += amt;
         bucket.txCount += 1;
       } else if (tx.type === 'expense_reversal') {
@@ -136,9 +145,14 @@ export const MonthlyCashflowDashboard: React.FC<MonthlyCashflowDashboardProps> =
 
     // 2. Supplement with settled Payments not yet duplicated in financial_transactions
     payments.forEach((pay) => {
-      if (pay.status !== 'paid') return;
-      if (pay.id && recordedOrderIds.has(String(pay.id))) return;
-      if (pay.midtrans_order_id && recordedOrderIds.has(String(pay.midtrans_order_id))) return;
+      if (!isPaidPaymentRow(pay)) return;
+      const oid = String(pay.midtrans_order_id || pay.id || '').trim().toUpperCase();
+      if (oid.startsWith('SRV-')) return;
+      const pid = pay.id ? String(pay.id).trim().toUpperCase() : '';
+      const moid = pay.midtrans_order_id ? String(pay.midtrans_order_id).trim().toUpperCase() : '';
+      if (pid && recordedOrderIds.has(pid)) return;
+      if (moid && recordedOrderIds.has(moid)) return;
+      if (hasAnyRealIncomeTx && !pid && !moid) return;
 
       const rawDate = pay.payment_date || pay.settlement_time || pay.created_at;
       if (!rawDate) return;

@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  Building2, TrendingUp, DollarSign, CreditCard, 
-  Scale, ShieldAlert, Clock, RefreshCw, Printer, 
-  BedDouble, CheckCircle2, AlertCircle, MapPin, PenTool, FileCheck, Users, Box, Wrench, BarChart3
+  Building2, CreditCard, 
+  Scale, ShieldAlert, Clock, 
+  PenTool, Users, Box, BarChart3, FileSpreadsheet
 } from 'lucide-react';
-import { database, isSupabaseConfigured } from '../lib/supabase';
+import { database } from '../lib/supabase';
 import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import {
   LIST_COLUMNS_BOOKINGS,
@@ -14,12 +14,10 @@ import {
   LIST_COLUMNS_MIDTRANS_CLEARING
 } from '../lib/queryBudget';
 import { 
-  calculateOccupancy, 
-  calculateTotalInflow, 
-  calculateTotalExpenses, 
-  calculateNOI, 
-  calculateGrossPipeline,
-  calculateDetailedCOAExpenseBreakdown
+  buildUniformKosanFinancialReport,
+  getSharedFinanceFilterState,
+  setSharedFinanceFilterState,
+  FinancialReportPeriod
 } from '../lib/financialMetrics';
 import { 
   Property, Room, Tenant, Booking, FinancialTransaction, 
@@ -37,13 +35,41 @@ import { OwnerSignatureManager } from '../components/owner/OwnerSignatureManager
 import { StaffOperationsSection } from '../components/owner/StaffOperationsSection';
 import { MonthlyCashflowDashboard } from '../components/owner/MonthlyCashflowDashboard';
 import { AssetManagementSection } from '../components/AssetManagementSection';
+import { KosanFinancialReportSuite } from '../components/finance/KosanFinancialReportSuite';
 import Loader from '../components/common/Loader';
-import { formatRupiah } from '../utils/formatCurrency';
 
 export const Owner: React.FC = () => {
-  const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
-  const [selectedPeriod, setSelectedPeriod] = useState<'this_month' | 'last_month' | 'this_quarter' | 'ytd'>('this_month');
-  const [activeTab, setActiveTab] = useState<'overview' | 'cashflow' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops' | 'assets'>('overview');
+  const initialFilter = getSharedFinanceFilterState();
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string>(initialFilter.propertyId);
+  const [selectedPeriod, setSelectedPeriod] = useState<FinancialReportPeriod>(initialFilter.period);
+  const [activeTab, setActiveTab] = useState<'overview' | 'laporan_keuangan' | 'cashflow' | 'midtrans' | 'pnl' | 'expenses' | 'leases' | 'signature' | 'staff_ops' | 'assets'>('overview');
+
+  // Synchronize filter state across portals (Owner <-> Admin <-> Anak Owner)
+  useEffect(() => {
+    const onFilterSync = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail) {
+        if (detail.propertyId && detail.propertyId !== selectedPropertyId) {
+          setSelectedPropertyId(detail.propertyId);
+        }
+        if (detail.period && detail.period !== selectedPeriod) {
+          setSelectedPeriod(detail.period);
+        }
+      }
+    };
+    window.addEventListener('samara-finance-filter-sync', onFilterSync);
+    return () => window.removeEventListener('samara-finance-filter-sync', onFilterSync);
+  }, [selectedPropertyId, selectedPeriod]);
+
+  const handleSelectProperty = (propId: string) => {
+    setSelectedPropertyId(propId);
+    setSharedFinanceFilterState({ propertyId: propId });
+  };
+
+  const handleSelectPeriod = (period: FinancialReportPeriod) => {
+    setSelectedPeriod(period);
+    setSharedFinanceFilterState({ period });
+  };
 
   // Realtime Data Subscriptions with G10 column projections for list views
   const { data: properties = [], loading: loadingProps, refetch: refetchProps } = useRealtimeTable<Property>('properties', () => database.fetchProperties());
@@ -80,174 +106,78 @@ export const Owner: React.FC = () => {
 
   const isLoading = loadingProps || loadingRooms || loadingTenants || loadingBookings || loadingTx || loadingPayments;
 
-  // Filtered datasets based on selected property
-  const filteredRooms = useMemo(() => {
-    if (selectedPropertyId === 'all') return rooms;
-    return rooms.filter(r => String(r.property_id) === String(selectedPropertyId));
-  }, [rooms, selectedPropertyId]);
+  // SINGLE SOURCE OF TRUTH (SSOT): 100% Identical Calculation Engine across Owner, Super Admin, Anak Owner, Admin & Finance
+  const uniformReport = useMemo(() => {
+    return buildUniformKosanFinancialReport({
+      properties,
+      rooms,
+      tenants,
+      bookings,
+      payments,
+      transactions,
+      accounts,
+      clearingList,
+      maintenanceList,
+      selectedPropertyId,
+      selectedPeriod
+    });
+  }, [
+    properties,
+    rooms,
+    tenants,
+    bookings,
+    payments,
+    transactions,
+    accounts,
+    clearingList,
+    maintenanceList,
+    selectedPropertyId,
+    selectedPeriod
+  ]);
 
-  const filteredTenants = useMemo(() => {
-    if (selectedPropertyId === 'all') return tenants;
-    return tenants.filter(t => String(t.property_id) === String(selectedPropertyId));
-  }, [tenants, selectedPropertyId]);
+  const filteredRooms = uniformReport.filteredDatasets.rooms;
+  const filteredTenants = uniformReport.filteredDatasets.tenants;
+  const filteredBookings = uniformReport.filteredDatasets.bookings;
+  const filteredTransactions = uniformReport.filteredDatasets.transactions;
+  const filteredPayments = uniformReport.filteredDatasets.payments;
+  const filteredClearing = uniformReport.filteredDatasets.clearing;
 
-  const filteredBookings = useMemo(() => {
-    if (selectedPropertyId === 'all') return bookings;
-    return bookings.filter(b => String(b.property_id) === String(selectedPropertyId));
-  }, [bookings, selectedPropertyId]);
+  const totalRooms = uniformReport.occupancy.totalRooms;
+  const occupiedRooms = uniformReport.occupancy.occupiedRooms;
+  const occupancyRate = uniformReport.occupancy.ratePercentage;
 
-  const filteredTransactions = useMemo(() => {
-    if (selectedPropertyId === 'all') return transactions;
-    return transactions.filter(t => !t.property_id || String(t.property_id) === String(selectedPropertyId));
-  }, [transactions, selectedPropertyId]);
+  const totalContractRevenue = uniformReport.revenue.contractPipeline;
+  const grossRevenue = uniformReport.revenue.effectiveGrossRevenue;
+  const totalExpenses = uniformReport.expenses.totalExpenses;
+  const netOperatingIncome = uniformReport.profitability.netOperatingIncome;
+  const distributableDividend = uniformReport.profitability.distributableDividend85;
+  const avgRevenuePerRoom = uniformReport.profitability.revPar;
 
-  const filteredPayments = useMemo(() => {
-    if (selectedPropertyId === 'all') return payments;
-    return payments.filter(p => !p.property_id || String(p.property_id) === String(selectedPropertyId));
-  }, [payments, selectedPropertyId]);
+  const totalGrossSettled = uniformReport.treasuryAndClearing.midtransGrossSettled;
+  const totalMdrFee = uniformReport.treasuryAndClearing.midtransMdrFee;
+  const totalNetSettled = uniformReport.treasuryAndClearing.midtransNetSettled;
+  const unreconciledEscrow = uniformReport.treasuryAndClearing.midtransUnreconciledEscrow;
 
-  const filteredClearing = useMemo(() => {
-    if (selectedPropertyId === 'all') return clearingList;
-    return clearingList.filter(c => !c.property_id || String(c.property_id) === String(selectedPropertyId));
-  }, [clearingList, selectedPropertyId]);
+  const revenueBreakdown = uniformReport.revenue.breakdown;
+  const expenseBreakdown = uniformReport.expenses.breakdown;
 
-  // G9: Server-side dashboard summary RPC integration (debounced to prevent burst calls)
-  const [serverDashboardSummary, setServerDashboardSummary] = useState<any | null>(null);
-  useEffect(() => {
-    let active = true;
-    const timer = setTimeout(() => {
-      database.fetchDashboardSummary({ property_id: selectedPropertyId }).then((res) => {
-        if (active && res?.summary) {
-          setServerDashboardSummary(res.summary);
-        }
-      }).catch(() => {});
-    }, 600);
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [selectedPropertyId, transactions, payments, bookings, rooms, clearingList]);
-
-  // Centralized Financial Engine Math (prefers server RPC summary when available)
-  const occupancyData = calculateOccupancy(filteredRooms);
-  const totalRooms = serverDashboardSummary?.occupancy?.totalRooms ?? occupancyData.totalRooms;
-  const occupiedRooms = serverDashboardSummary?.occupancy?.occupiedRooms ?? occupancyData.occupiedRooms;
-  const occupancyRate = serverDashboardSummary?.occupancy?.occupancyRate ?? occupancyData.ratePercentage;
-
-  // 1. Total Inflow (Arus Kas Masuk Transaksi Riil Supabase / Midtrans / Pelunasan)
-  const totalInflow = serverDashboardSummary?.totalInflow ?? calculateTotalInflow(filteredTransactions, filteredPayments);
-
-  // 2. Estimasi Nilai Kontrak Sewa (Approved Bookings Pipeline)
-  const totalContractRevenue = serverDashboardSummary?.grossPipeline ?? calculateGrossPipeline(filteredBookings.filter(b => b.status === 'approved'));
-
-  // 3. Gross Revenue (Realized Inflow with fallback to Approved Pipeline)
-  const grossRevenue = totalInflow > 0 ? totalInflow : totalContractRevenue;
-
-  // 4. Biaya Operasional (Outflow Pengeluaran Riil Supabase)
-  const totalExpenses = serverDashboardSummary?.totalExpenses ?? calculateTotalExpenses(filteredTransactions);
-
-  // 5. Net Operating Income (NOI / Laba Bersih)
-  const netOperatingIncome = serverDashboardSummary?.noi ?? calculateNOI(grossRevenue, totalExpenses);
-  const distributableDividend = Math.max(0, netOperatingIncome * 0.85); // 85% payout pool
-  const avgRevenuePerRoom = totalRooms > 0 ? grossRevenue / totalRooms : 0;
-
-  // 6. Midtrans Clearing Metrics (Real-time COA 1200 / clearing transactions)
-  const totalGrossSettled = useMemo(() => {
-    const fromClearing = filteredClearing.reduce((sum, c) => sum + Number(c.gross_amount || 0), 0);
-    return fromClearing > 0 ? fromClearing : grossRevenue;
-  }, [filteredClearing, grossRevenue]);
-
-  const totalMdrFee = useMemo(() => {
-    const fromClearingFee = filteredClearing.reduce((sum, c) => sum + Number(c.fee_amount || 0), 0);
-    return fromClearingFee;
-  }, [filteredClearing]);
-
-  const totalNetSettled = totalGrossSettled - totalMdrFee;
-  
-  const unreconciledEscrow = useMemo(() => {
-    const pendingClearing = filteredClearing
-      .filter(c => c.clearing_status === 'pending' || c.clearing_status === 'cleared')
-      .reduce((sum, c) => sum + Number(c.outstanding_amount || c.net_amount || c.gross_amount || 0), 0);
-    return pendingClearing;
-  }, [filteredClearing]);
-
-  // P&L Breakdown strictly from Real Supabase Ledger Data
-  const revenueBreakdown = useMemo(() => {
-    const realRent = filteredTransactions
-      .filter(t => t.type === 'income')
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-    const realDp = filteredTransactions
-      .filter(t => t.type === 'dp_booking')
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-    return [
-      { 
-        code: '4000', 
-        name: 'Pendapatan Sewa Kamar Kos (Inflow Bulanan)', 
-        amount: realRent > 0 ? realRent : (realDp === 0 ? grossRevenue : 0),
-        isEstimated: false
-      },
-      { 
-        code: '4200', 
-        name: 'Pendapatan Jaminan DP Survey & Booking', 
-        amount: realDp,
-        isEstimated: false
-      },
-      { code: '4100', name: 'Pendapatan Denda & Keterlambatan Sewa', amount: 0, isEstimated: false },
-      { code: '4300', name: 'Pendapatan Layanan Tambahan (Laundry/Parkir)', amount: 0, isEstimated: false },
-    ];
-  }, [filteredTransactions, grossRevenue]);
-
-  const expenseBreakdown = useMemo(() => {
-    const maintenanceCost = maintenanceList.reduce((sum, m) => sum + (Number(m.cost) || 0), 0);
-    return calculateDetailedCOAExpenseBreakdown(
-      filteredTransactions,
-      totalExpenses,
-      totalMdrFee,
-      maintenanceCost
-    );
-  }, [totalExpenses, totalMdrFee, maintenanceList, filteredTransactions]);
-
-  // Branch Performance Comparison Data (Calculated per Branch strictly from Supabase)
   const branchMetrics = useMemo(() => {
-    return properties.map((prop) => {
-      const propRooms = rooms.filter(r => r.property_id === prop.id);
-      const propOccupied = propRooms.filter(r => r.status === 'occupied').length;
-      const propOccRate = propRooms.length > 0 ? (propOccupied / propRooms.length) * 100 : 0;
-      
-      // Calculate revenue per branch from transactions, payments, or bookings in Supabase
-      const propTxRevenue = transactions
-        .filter(t => t.property_id === prop.id && (t.type === 'income' || t.type === 'dp_booking'))
-        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-      const propPaymentsRevenue = payments
-        .filter(p => p.property_id === prop.id && p.status === 'paid')
-        .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-      
-      const propBookingRevenue = bookings
-        .filter(b => b.property_id === prop.id && b.status === 'approved')
-        .reduce((sum, b) => sum + Number(b.total_price || 0), 0);
-
-      const propInflow = propTxRevenue > 0 ? propTxRevenue : propPaymentsRevenue;
-      const propRev = propInflow > 0 ? propInflow : propBookingRevenue;
-      const propExp = transactions
-        .filter(t => t.property_id === prop.id && t.type === 'expense')
-        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
+    return uniformReport.branchBreakdown.map(b => {
+      const propObj = properties.find(p => Number(p.id) === b.propertyId) || ({ id: b.propertyId, name: b.propertyName, type: b.propertyType.toLowerCase() } as any);
       return {
-        property: prop,
-        totalRooms: propRooms.length || prop.total_rooms || 0,
-        occupiedRooms: propOccupied,
-        occupancyRate: propOccRate,
-        totalRevenue: propRev,
-        totalExpenses: propExp,
-        netIncome: propRev - propExp,
-        revPar: propRooms.length > 0 ? propRev / propRooms.length : 0
+        property: propObj,
+        totalRooms: b.totalRooms,
+        occupiedRooms: b.occupiedRooms,
+        occupancyRate: b.occupancyRate,
+        totalRevenue: b.effectiveRevenue,
+        totalExpenses: b.totalExpenses,
+        netIncome: b.netOperatingIncome,
+        revPar: b.revPar
       };
     });
-  }, [properties, rooms, transactions, payments, bookings]);
+  }, [uniformReport.branchBreakdown, properties]);
 
-  const totalMaintenanceCost = maintenanceList.reduce((sum, m) => sum + (Number(m.cost) || 0), 0);
+  const totalMaintenanceCost = uniformReport.expenses.maintenancePostedCost;
 
   const pendingSignatureCount = useMemo(() => {
     return bookings.filter(b => !b.owner_signed_at && b.status !== 'rejected').length;
@@ -268,13 +198,13 @@ export const Owner: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#3A444D] font-sans pb-16">
       
-      {/* 1. Header with Filters & Actions */}
+      {/* 1. Header with Synchronized Filters & Actions */}
       <OwnerHeader 
         properties={properties}
         selectedPropertyId={selectedPropertyId}
-        onSelectProperty={setSelectedPropertyId}
+        onSelectProperty={handleSelectProperty}
         selectedPeriod={selectedPeriod}
-        onSelectPeriod={setSelectedPeriod}
+        onSelectPeriod={handleSelectPeriod}
         onRefresh={handleRefreshPortfolio}
         isLoading={isLoading}
         onPrint={handlePrint}
@@ -284,7 +214,7 @@ export const Owner: React.FC = () => {
 
       <div className="max-w-7xl mx-auto px-4 md:px-8 mt-6 space-y-6">
         
-        {/* 2. Executive KPI Cards */}
+        {/* 2. Executive KPI Cards (Powered by SSOT Uniform Financial Report) */}
         <ExecutiveKpiCards 
           grossRevenue={grossRevenue}
           totalContractRevenue={totalContractRevenue}
@@ -309,7 +239,19 @@ export const Owner: React.FC = () => {
             }`}
           >
             <Building2 size={14} className="shrink-0" />
-            <span>Ringkasan & Komparasi Cabang</span>
+            <span>Laporan Keuangan Kosan Terpadu (SSOT)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('pnl')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
+              activeTab === 'pnl'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Scale size={14} className="shrink-0" />
+            <span>Laba Rugi & Dividen</span>
           </button>
 
           <button
@@ -325,18 +267,6 @@ export const Owner: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab('signature')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
-              activeTab === 'signature'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <PenTool size={14} className={`shrink-0 ${activeTab === 'signature' ? 'text-emerald-400' : ''}`} />
-            <span>Master TTD & Stempel Resmi</span>
-          </button>
-
-          <button
             onClick={() => setActiveTab('midtrans')}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'midtrans'
@@ -349,15 +279,15 @@ export const Owner: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab('pnl')}
+            onClick={() => setActiveTab('signature')}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
-              activeTab === 'pnl'
+              activeTab === 'signature'
                 ? 'bg-slate-900 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Scale size={14} className="shrink-0" />
-            <span>Laba Rugi & Dividen</span>
+            <PenTool size={14} className={`shrink-0 ${activeTab === 'signature' ? 'text-emerald-400' : ''}`} />
+            <span>Master TTD & Stempel Resmi</span>
           </button>
 
           <button
@@ -420,26 +350,27 @@ export const Owner: React.FC = () => {
             tenants={filteredTenants}
             bookings={filteredBookings}
             selectedPropertyId={selectedPropertyId}
-            onSelectProperty={setSelectedPropertyId}
+            onSelectProperty={handleSelectProperty}
           />
         )}
 
-        {/* 4. Tab Contents */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
-            <MonthlyCashflowDashboard
-              transactions={filteredTransactions}
-              payments={filteredPayments}
-              bookings={filteredBookings}
+            <KosanFinancialReportSuite
+              report={uniformReport}
               properties={properties}
               selectedPropertyId={selectedPropertyId}
-              grossRevenue={grossRevenue}
-              totalExpenses={totalExpenses}
-              theme="light"
+              onSelectPropertyId={handleSelectProperty}
+              selectedPeriod={selectedPeriod}
+              onSelectPeriod={handleSelectPeriod}
+              onRefresh={handleRefreshPortfolio}
+              isLoading={isLoading}
+              viewerRoleLabel="Owner / Executive Investor"
+              defaultSubTab="ringkasan"
             />
             <BranchComparisonSection 
               branchMetrics={branchMetrics}
-              onSelectBranch={setSelectedPropertyId}
+              onSelectBranch={handleSelectProperty}
             />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <MidtransCashflowCard 
@@ -482,15 +413,18 @@ export const Owner: React.FC = () => {
 
         {activeTab === 'pnl' && (
           <div className="space-y-6">
-            <MonthlyCashflowDashboard
-              transactions={filteredTransactions}
-              payments={filteredPayments}
-              bookings={filteredBookings}
+            <KosanFinancialReportSuite
+              report={uniformReport}
               properties={properties}
               selectedPropertyId={selectedPropertyId}
-              grossRevenue={grossRevenue}
-              totalExpenses={totalExpenses}
-              theme="light"
+              onSelectPropertyId={handleSelectProperty}
+              selectedPeriod={selectedPeriod}
+              onSelectPeriod={handleSelectPeriod}
+              onRefresh={handleRefreshPortfolio}
+              isLoading={isLoading}
+              viewerRoleLabel="Owner / Executive Investor"
+              defaultSubTab="laba_rugi"
+              compactMode={true}
             />
             <ProfitLossDividendCard 
               accounts={accounts}
@@ -505,7 +439,7 @@ export const Owner: React.FC = () => {
 
         {activeTab === 'expenses' && (
           <ExpenseAuditSection 
-            maintenanceList={maintenanceList}
+            maintenanceList={ uniformReport.filteredDatasets.maintenance }
             pettyCashList={pettyCashList}
             purchaseOrders={purchaseOrders}
             totalMaintenanceCost={totalMaintenanceCost}

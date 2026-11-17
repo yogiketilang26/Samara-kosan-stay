@@ -1,7 +1,13 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Property } from '../../types';
 import { PenTool, Upload, RefreshCw, CheckCircle2, ShieldCheck, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
-import { uploadSignatureCanvas, uploadToSupabaseStorage } from '../../utils/storageUploader';
+import {
+  uploadSignatureCanvas,
+  uploadToSupabaseStorage,
+  cacheRealtimeSignaturePreview,
+  getRealtimeSignaturePreview,
+  resolveDocumentSignedUrl
+} from '../../utils/storageUploader';
 
 interface SignaturePadProps {
   property: Property;
@@ -27,6 +33,33 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasDrawn, setHasDrawn] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [livePreviewSrc, setLivePreviewSrc] = useState<string>(() =>
+    getRealtimeSignaturePreview(signatureUrl, 'tenant')
+  );
+
+  // Keep livePreviewSrc synchronized with signatureUrl and real-time signature cache
+  useEffect(() => {
+    if (!signatureUrl) {
+      setLivePreviewSrc('');
+      return;
+    }
+    const cached = getRealtimeSignaturePreview(signatureUrl, 'tenant');
+    if (cached) {
+      setLivePreviewSrc(cached);
+      return;
+    }
+    if (signatureUrl.startsWith('data:image/') || signatureUrl.startsWith('blob:')) {
+      setLivePreviewSrc(signatureUrl);
+      return;
+    }
+    let active = true;
+    resolveDocumentSignedUrl(signatureUrl).then((resolved) => {
+      if (active && resolved) setLivePreviewSrc(resolved);
+    });
+    return () => {
+      active = false;
+    };
+  }, [signatureUrl]);
 
   // Initialize canvas context
   useEffect(() => {
@@ -103,14 +136,17 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     setIsDrawing(false);
     
     if (canvasRef.current && hasDrawn) {
-      // Set instant base64 data URL first for seamless continuous drawing
+      // Set instant base64 data URL first for seamless continuous real-time preview
       const dataUrl = canvasRef.current.toDataURL('image/png');
+      cacheRealtimeSignaturePreview(dataUrl, dataUrl, 'tenant');
+      setLivePreviewSrc(dataUrl);
       setSignatureUrl(dataUrl);
 
-      // Silently sync to Supabase storage in background without blocking canvas UI
+      // Silently sync to Supabase storage in background without losing real-time PNG preview
       try {
         const storageUrl = await uploadSignatureCanvas(canvasRef.current, tenantName || 'tenant');
         if (storageUrl) {
+          cacheRealtimeSignaturePreview(storageUrl, dataUrl, 'tenant');
           setSignatureUrl(storageUrl);
         }
       } catch (err) {
@@ -129,6 +165,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     }
     setHasDrawn(false);
     setIsSubmitted(false);
+    setLivePreviewSrc('');
     setSignatureUrl('');
   };
 
@@ -139,6 +176,17 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
         alert('Ukuran file gambar TTD terlalu besar (maksimal 20MB).');
         return;
       }
+      // Read instant local preview first so UI updates in real-time
+      const localDataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => resolve(typeof ev.target?.result === 'string' ? ev.target.result : '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
+      });
+      if (localDataUrl) {
+        cacheRealtimeSignaturePreview(localDataUrl, localDataUrl, 'tenant');
+        setLivePreviewSrc(localDataUrl);
+      }
       try {
         setIsUploading(true);
         const result = await uploadToSupabaseStorage(
@@ -147,17 +195,15 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
           `tenant_${tenantName || 'user'}`,
           { forcePNG: true, maxLongestSide: 800 }
         );
+        if (localDataUrl && result.publicUrl) {
+          cacheRealtimeSignaturePreview(result.publicUrl, localDataUrl, 'tenant');
+        }
         setSignatureUrl(result.publicUrl);
       } catch (err: any) {
         console.error('[SignaturePad] File upload error:', err);
-        // Fallback to local Data URL if network/storage is unavailable
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (event.target?.result) {
-            setSignatureUrl(event.target.result as string);
-          }
-        };
-        reader.readAsDataURL(file);
+        if (localDataUrl) {
+          setSignatureUrl(localDataUrl);
+        }
       } finally {
         setIsUploading(false);
       }
@@ -298,16 +344,33 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
             </div>
 
             {(hasDrawn || signatureUrl) && (
-              <div className="pt-2">
+              <div className="pt-2 space-y-2">
+                {livePreviewSrc && (
+                  <div className="bg-white border border-emerald-200 rounded-xl px-3 py-1.5 flex items-center justify-between">
+                    <span className="text-[9px] font-mono font-bold text-emerald-700 uppercase">
+                      Pratinjau TTD Real-Time:
+                    </span>
+                    <img
+                      src={livePreviewSrc}
+                      alt="Pratinjau TTD Penyewa"
+                      className="h-8 max-w-[130px] object-contain"
+                    />
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={async () => {
                     if (canvasRef.current && hasDrawn) {
                       const dataUrl = canvasRef.current.toDataURL('image/png');
+                      cacheRealtimeSignaturePreview(dataUrl, dataUrl, 'tenant');
+                      setLivePreviewSrc(dataUrl);
                       setSignatureUrl(dataUrl);
                       try {
                         const storageUrl = await uploadSignatureCanvas(canvasRef.current, tenantName || 'tenant');
-                        if (storageUrl) setSignatureUrl(storageUrl);
+                        if (storageUrl) {
+                          cacheRealtimeSignaturePreview(storageUrl, dataUrl, 'tenant');
+                          setSignatureUrl(storageUrl);
+                        }
                       } catch (err) {
                         console.warn('[SignaturePad] Storage upload fallback to dataUrl:', err);
                       }
@@ -346,14 +409,17 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
             {signatureUrl && signatureUrl.trim() !== '' && signatureMode === 'upload' && (
               <div className="bg-white border border-slate-200 rounded-xl p-2 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <img src={signatureUrl} alt="TTD Preview" className="h-10 max-w-[120px] object-contain border border-slate-100 rounded p-1 bg-slate-50" />
+                  <img src={livePreviewSrc || signatureUrl} alt="TTD Preview" className="h-10 max-w-[120px] object-contain border border-slate-100 rounded p-1 bg-slate-50" />
                   <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
                     <CheckCircle2 size={11} /> Gambar Berhasil Dimuat
                   </span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setSignatureUrl('')}
+                  onClick={() => {
+                    setLivePreviewSrc('');
+                    setSignatureUrl('');
+                  }}
                   className="text-[9px] text-red-500 hover:underline cursor-pointer"
                 >
                   Hapus

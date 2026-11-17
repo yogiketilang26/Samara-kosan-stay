@@ -99,6 +99,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   const [sigError, setSigError] = useState('');
   const [isUploadingCert, setIsUploadingCert] = useState(false);
   const [certUploadError, setCertUploadError] = useState('');
+  const [certPreviewUrl, setCertPreviewUrl] = useState('');
   const [previewCertModal, setPreviewCertModal] = useState(false);
   const [localSubmitLock, setLocalSubmitLock] = useState(false);
   const lastSubmitAtRef = useRef<number>(0);
@@ -116,7 +117,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
     );
   };
 
-  // Upload handler for marriage book/card proof
+  // Upload handler for marriage book/card proof (R17: stores private bucket path in DB, never Base64)
   const handleCertFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -140,33 +141,21 @@ export const BookingForm: React.FC<BookingFormProps> = ({
         { maxFileSizeMB: 15 }
       );
 
-      if (uploadResult && uploadResult.publicUrl) {
+      const storedPath = uploadResult?.storagePath || uploadResult?.publicUrl || '';
+      if (storedPath && !storedPath.startsWith('data:')) {
+        const previewHref = uploadResult?.signedUrl || URL.createObjectURL(file);
+        setCertPreviewUrl(previewHref);
         setBookingForm({
           ...bookingForm,
-          marriageCertificateUrl: uploadResult.publicUrl
+          marriageCertificateUrl: storedPath
         });
       } else {
-        throw new Error('Gagal mendapatkan tautan berkas dokumen.');
+        throw new Error('Gagal mendapatkan path berkas dari Storage privat.');
       }
     } catch (err: any) {
       console.error('[BookingForm] Upload buku nikah failed:', err);
-      // Fallback: convert file to data URL so the user is never blocked
-      try {
-        const reader = new FileReader();
-        reader.onload = (loadEvt) => {
-          const dataUrl = loadEvt.target?.result as string;
-          if (dataUrl) {
-            setBookingForm({
-              ...bookingForm,
-              marriageCertificateUrl: dataUrl
-            });
-            setCertUploadError('');
-          }
-        };
-        reader.readAsDataURL(file);
-      } catch (readErr) {
-        setCertUploadError('Gagal mengunggah berkas. Mohon coba file lain.');
-      }
+      // R17: Never fall back to storing Base64 in database columns
+      setCertUploadError(err?.message || 'Gagal mengunggah berkas ke Storage privat. Mohon periksa koneksi dan coba lagi.');
     } finally {
       setIsUploadingCert(false);
       if (fileInputRef.current) {
@@ -176,6 +165,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   };
 
   const handleRemoveCert = () => {
+    setCertPreviewUrl('');
     setBookingForm({
       ...bookingForm,
       marriageCertificateUrl: ''
@@ -496,12 +486,14 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Tenant Utama</label>
+              <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">
+                {bookingForm.isForOther ? 'Nama Pemesan (Pihak Ketiga / Pembayar)' : 'Nama Tenant Utama (Penyewa)'}
+              </label>
               <input 
                 type="text" required
                 value={bookingForm.fullName}
                 onChange={(e) => setBookingForm({ ...bookingForm, fullName: e.target.value })}
-                placeholder="Nama sesuai identitas"
+                placeholder={bookingForm.isForOther ? 'Nama pemesan pihak ketiga' : 'Nama sesuai identitas'}
                 className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 outline-none capitalize transition-all"
               />
             </div>
@@ -559,52 +551,64 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             {bookingForm.isForOther && (
               <div className="pt-2.5 border-t border-[#E2E8F0] space-y-3">
                 <div className="bg-amber-50 text-amber-800 p-2.5 rounded-xl text-[10px] leading-relaxed border border-amber-200/50">
-                  <strong>Catatan Pemesanan Pihak Ketiga:</strong> Masukkan data lengkap orang yang akan menempati kamar (Si B). Kamar akan otomatis terbooking lunas aman di sistem setelah pembayaran selesai. Admin akan memverifikasi NIK KTP mereka saat kedatangan/check-in.
+                  <strong>Catatan Pemesanan Pihak Ketiga:</strong> Masukkan data lengkap orang yang akan menempati kamar (Penyewa/Penghuni). Nama Pemesan dan Nama Penyewa akan tertera secara resmi dan real-time pada Invoice, Kontrak, serta PDF.
                 </div>
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap Penghuni</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Nama Lengkap Penyewa / Penghuni <span className="text-red-500">*</span></label>
                     <input 
                       type="text" required={bookingForm.isForOther}
                       value={bookingForm.occupantName || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantName: e.target.value })}
-                      placeholder="Nama lengkap penghuni"
-                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 outline-none capitalize transition-all"
+                      placeholder="Nama lengkap penyewa yang menghuni"
+                      className="w-full bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 outline-none capitalize transition-all"
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">No. WhatsApp Penghuni</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">No. WhatsApp Penyewa <span className="text-red-500">*</span></label>
                     <input 
                       type="tel" required={bookingForm.isForOther}
                       value={bookingForm.occupantPhone || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantPhone: e.target.value })}
                       placeholder="Contoh: 0812..."
-                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
+                      className="w-full bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Email Penghuni</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">Email Penyewa <span className="text-red-500">*</span></label>
                     <input 
                       type="email" required={bookingForm.isForOther}
                       value={bookingForm.occupantEmail || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantEmail: e.target.value })}
                       placeholder="email.penghuni@gmail.com"
-                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
+                      className="w-full bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">NIK KTP Penghuni (16 digit)</label>
+                    <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">NIK KTP Penyewa (16 digit) <span className="text-red-500">*</span></label>
                     <input 
                       type="text" required={bookingForm.isForOther} maxLength={16}
                       value={bookingForm.occupantNik || ''}
                       onChange={(e) => setBookingForm({ ...bookingForm, occupantNik: e.target.value })}
-                      placeholder="NIK KTP Penghuni"
-                      className="w-full bg-slate-50/50 border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
+                      placeholder="NIK KTP Penyewa"
+                      className="w-full bg-white border border-[#E2E8F0] p-2.5 rounded-xl text-[#1E293B] font-mono outline-none focus:border-[#2E6F40] focus:bg-white focus:ring-1 focus:ring-[#2E6F40]/20 transition-all"
                     />
+                  </div>
+                </div>
+
+                {/* Real-time preview of Third-Party Booker vs Occupant */}
+                <div className="bg-white border border-emerald-200 rounded-xl p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[10px]">
+                  <div>
+                    <span className="text-[9px] font-mono uppercase text-slate-400 block">Pemesan (Pihak Ketiga):</span>
+                    <strong className="text-slate-800 capitalize">{bookingForm.fullName || 'Belum diisi'}</strong>
+                  </div>
+                  <div className="sm:text-right">
+                    <span className="text-[9px] font-mono uppercase text-emerald-700 font-bold block">Nama Penyewa (Penghuni Kamar):</span>
+                    <strong className="text-[#2E6F40] capitalize">{bookingForm.occupantName || 'Belum diisi'}</strong>
                   </div>
                 </div>
               </div>
@@ -650,7 +654,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                   <Heart size={14} className="shrink-0 text-emerald-700 mt-0.5" />
                   <div>
                     <strong className="block font-bold text-emerald-900 mb-0.5">Kebijakan Hunian Pasutri Resmi:</strong>
-                    <span>Untuk menjaga kenyamanan, keamanan, dan ketertiban seluruh penghuni, data pasangan dan bukti buku/kartu nikah akan diverifikasi oleh Admin/Owner secara tertutup dan aman.</span>
+                    <span>Nama Suami dan Nama Istri akan tercantum secara otomatis dan real-time pada Invoice, Kontrak Sewa, serta PDF resmi.</span>
                   </div>
                 </div>
 
@@ -669,7 +673,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                           : 'bg-white border-[#E2E8F0] text-[#64748B] hover:bg-slate-100'
                       }`}
                     >
-                      👰 Istri Pemesan
+                      👰 Pasangan Adalah Istri
                     </button>
                     <button
                       type="button"
@@ -680,7 +684,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                           : 'bg-white border-[#E2E8F0] text-[#64748B] hover:bg-slate-100'
                       }`}
                     >
-                      🤵 Suami Pemesan
+                      🤵 Pasangan Adalah Suami
                     </button>
                   </div>
                 </div>
@@ -688,7 +692,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-[9px] uppercase font-bold text-[#64748B] font-mono">
-                      Nama Lengkap Pasangan <span className="text-red-500">*</span>
+                      {bookingForm.spouseRelation === 'suami' ? 'Nama Lengkap Suami' : 'Nama Lengkap Istri'} <span className="text-red-500">*</span>
                     </label>
                     <input 
                       type="text" required={bookingForm.isMarried}
@@ -725,6 +729,26 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                   />
                 </div>
 
+                {/* Real-time preview of Husband & Wife names */}
+                <div className="bg-white border border-emerald-200 rounded-xl p-2.5 grid grid-cols-2 gap-2 text-[10px]">
+                  <div>
+                    <span className="text-[9px] font-mono uppercase text-emerald-700 font-bold block">🤵 Nama Suami:</span>
+                    <strong className="text-slate-900 capitalize">
+                      {(bookingForm.spouseRelation === 'suami'
+                        ? bookingForm.spouseName
+                        : (bookingForm.isForOther ? bookingForm.occupantName : bookingForm.fullName)) || 'Belum diisi'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-mono uppercase text-emerald-700 font-bold block">👰 Nama Istri:</span>
+                    <strong className="text-slate-900 capitalize">
+                      {(bookingForm.spouseRelation === 'suami'
+                        ? (bookingForm.isForOther ? bookingForm.occupantName : bookingForm.fullName)
+                        : bookingForm.spouseName) || 'Belum diisi'}
+                    </strong>
+                  </div>
+                </div>
+
                 {/* File Upload Section for Buku Nikah */}
                 <div className="space-y-2 pt-1">
                   <div className="flex items-center justify-between">
@@ -742,9 +766,9 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                   {bookingForm.marriageCertificateUrl && bookingForm.marriageCertificateUrl.trim() !== '' ? (
                     <div className="bg-white border-2 border-emerald-500/40 rounded-2xl p-3 flex items-center justify-between gap-3 shadow-xs">
                       <div className="flex items-center gap-3 overflow-hidden">
-                        {bookingForm.marriageCertificateUrl.startsWith('data:image') || bookingForm.marriageCertificateUrl.includes('http') ? (
+                        {(certPreviewUrl || bookingForm.marriageCertificateUrl.includes('http')) ? (
                           <img 
-                            src={bookingForm.marriageCertificateUrl} 
+                            src={certPreviewUrl || bookingForm.marriageCertificateUrl} 
                             alt="Bukti Buku Nikah"
                             className="w-14 h-14 object-cover rounded-xl border border-emerald-200 shrink-0 bg-slate-50"
                           />
@@ -757,8 +781,8 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                           <p className="font-bold text-[11px] text-[#1E293B] truncate">
                             Bukti Buku/Kartu Nikah Terlampir
                           </p>
-                          <p className="text-[9px] text-[#64748B] font-mono mt-0.5">
-                            Format siap diverifikasi oleh Admin
+                          <p className="text-[9px] text-[#64748B] font-mono mt-0.5 truncate">
+                            Path: {bookingForm.marriageCertificateUrl}
                           </p>
                         </div>
                       </div>
@@ -1011,9 +1035,9 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               </button>
             </div>
             <div className="p-4 flex items-center justify-center bg-slate-900/5 max-h-[70vh] overflow-auto">
-              {bookingForm.marriageCertificateUrl && bookingForm.marriageCertificateUrl.trim() !== '' ? (
+              {(certPreviewUrl || bookingForm.marriageCertificateUrl) && (certPreviewUrl || bookingForm.marriageCertificateUrl).trim() !== '' ? (
                 <img 
-                  src={bookingForm.marriageCertificateUrl} 
+                  src={certPreviewUrl || `/api/storage/signed-url?path=${encodeURIComponent(bookingForm.marriageCertificateUrl)}&redirect=1`} 
                   alt="Dokumen Buku Nikah"
                   className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-xs"
                 />

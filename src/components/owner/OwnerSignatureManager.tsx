@@ -9,8 +9,72 @@ import {
 } from 'lucide-react';
 import { Property, Room, Tenant, Booking, SystemSettings } from '../../types';
 import { database, DEFAULT_OWNER_SIGNATURE, isSupabaseConfigured } from '../../lib/supabase';
-import { uploadToSupabaseStorage } from '../../utils/storageUploader';
+import {
+  uploadToSupabaseStorage,
+  cacheRealtimeSignaturePreview,
+  getRealtimeSignaturePreview,
+  resolveDocumentSignedUrl
+} from '../../utils/storageUploader';
 import { formatRupiah } from '../../utils/formatCurrency';
+
+const ResolvedSignatureImg: React.FC<{
+  src?: string;
+  role: 'tenant' | 'owner';
+  orderId?: string;
+  alt: string;
+  className?: string;
+}> = ({ src, role, orderId, alt, className }) => {
+  const [resolvedSrc, setResolvedSrc] = useState<string>(() => {
+    const raw = (src || '').trim();
+    if (!raw) return role === 'owner' ? DEFAULT_OWNER_SIGNATURE : '';
+    const cached = getRealtimeSignaturePreview(raw, role);
+    if (cached) return cached;
+    if (raw.startsWith('data:image/') || raw.startsWith('http')) return raw;
+    return '';
+  });
+
+  useEffect(() => {
+    let active = true;
+    const raw = (src || '').trim();
+    if (!raw) {
+      setResolvedSrc(role === 'owner' ? DEFAULT_OWNER_SIGNATURE : '');
+      return;
+    }
+    const cached = getRealtimeSignaturePreview(raw, role);
+    if (cached && cached.startsWith('data:image/')) {
+      setResolvedSrc(cached);
+      return;
+    }
+    if (
+      raw.startsWith('signatures/') ||
+      raw.startsWith('tenant-documents/') ||
+      (raw.includes('/storage/v1/object/') && !raw.includes('token='))
+    ) {
+      resolveDocumentSignedUrl(raw, orderId).then((signed) => {
+        if (active && signed) setResolvedSrc(signed);
+      });
+    } else {
+      setResolvedSrc(raw);
+    }
+    return () => {
+      active = false;
+    };
+  }, [src, role, orderId]);
+
+  if (!resolvedSrc) return null;
+  return (
+    <img
+      src={resolvedSrc}
+      alt={alt}
+      className={className}
+      onError={(e) => {
+        if (role === 'owner' && e.currentTarget.src !== DEFAULT_OWNER_SIGNATURE) {
+          e.currentTarget.src = DEFAULT_OWNER_SIGNATURE;
+        }
+      }}
+    />
+  );
+};
 
 interface OwnerSignatureManagerProps {
   properties: Property[];
@@ -243,6 +307,7 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
 
       // If it's a freshly drawn base64 string, upload to Supabase Storage bucket
       if (ownerSigUrl && ownerSigUrl.startsWith('data:')) {
+        cacheRealtimeSignaturePreview(ownerSigUrl, ownerSigUrl, 'owner');
         try {
           const uploaded = await uploadToSupabaseStorage(
             ownerSigUrl,
@@ -251,6 +316,7 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
             { forcePNG: true, maxLongestSide: 900 }
           );
           if (uploaded.publicUrl) {
+            cacheRealtimeSignaturePreview(uploaded.publicUrl, ownerSigUrl, 'owner');
             finalSigUrl = uploaded.publicUrl;
             setOwnerSigUrl(finalSigUrl);
           }
@@ -412,6 +478,13 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
       // 3. Send Countersigned Contract Email via MailerSend if tenant email exists
       if (tenantEmail && tenantEmail.includes('@')) {
         try {
+          const isThirdParty = Boolean(booking.is_for_other && booking.occupant_name && booking.occupant_name.trim());
+          const primaryTenant = isThirdParty ? booking.occupant_name!.trim() : booking.tenant_name;
+          const isMarried = Boolean(booking.is_married && booking.spouse_name && booking.spouse_name.trim());
+          const spouseRel = booking.spouse_relation === 'suami' ? 'suami' : 'istri';
+          const husbandName = isMarried ? (spouseRel === 'suami' ? booking.spouse_name!.trim() : primaryTenant) : '';
+          const wifeName = isMarried ? (spouseRel === 'suami' ? primaryTenant : booking.spouse_name!.trim()) : '';
+
           const contractHtml = `
             <!DOCTYPE html>
             <html>
@@ -446,7 +519,17 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                   <p>Selamat! Permohonan sewa kamar Anda telah <strong>resmi disahkan dan ditandatangani oleh Pemilik/Manajemen Samara Stay</strong>. Dokumen sewa Anda kini sah secara hukum.</p>
                   
                   <table class="table-info">
-                    <tr><td>Nama Penyewa</td><td><strong>${booking.tenant_name}</strong></td></tr>
+                    ${isThirdParty ? `
+                    <tr><td>Pemesan (Pihak Ketiga)</td><td><strong>${booking.tenant_name}</strong></td></tr>
+                    <tr><td>Nama Penyewa (Penghuni)</td><td><strong style="color: #047857;">${primaryTenant}</strong></td></tr>
+                    ` : `
+                    <tr><td>Nama Penyewa</td><td><strong>${primaryTenant}</strong></td></tr>
+                    `}
+                    ${isMarried ? `
+                    <tr><td>Status Hunian</td><td><strong style="color: #047857;">Pasangan Suami Istri (Pasutri)</strong></td></tr>
+                    <tr><td>Nama Suami</td><td><strong>${husbandName}</strong></td></tr>
+                    <tr><td>Nama Istri</td><td><strong>${wifeName}</strong></td></tr>
+                    ` : ''}
                     <tr><td>Nomor Kamar</td><td><strong>Kamar ${booking.room_number || '-'}</strong></td></tr>
                     <tr><td>Cabang Kos</td><td>${propertyName} (${propertyAddress})</td></tr>
                     <tr><td>Durasi Sewa</td><td>${booking.duration_months} Bulan (${booking.booking_type === 'daily' ? 'Harian' : 'Bulanan'})</td></tr>
@@ -943,8 +1026,9 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                   {/* Rendered Signature Box */}
                   <div className="my-3 py-2 flex items-center justify-center min-h-[90px] bg-white/80 rounded-xl border border-slate-200/80 shadow-2xs">
                     {ownerSigUrl && ownerSigUrl.trim() !== '' ? (
-                      <img
+                      <ResolvedSignatureImg
                         src={ownerSigUrl}
+                        role="owner"
                         alt="Spesimen TTD Owner"
                         className="max-h-20 max-w-[240px] object-contain drop-shadow-xs"
                       />
@@ -1116,8 +1200,18 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                       <div>
                         <h4 className="text-sm font-black text-slate-800 flex items-center gap-1.5">
                           <User size={14} className="text-[#2E6F40]" />
-                          {b.tenant_name}
+                          {b.is_for_other && b.occupant_name ? b.occupant_name : b.tenant_name}
                         </h4>
+                        {b.is_for_other && b.occupant_name && (
+                          <p className="text-[11px] text-emerald-700 font-bold mt-0.5">
+                            👥 Pemesan Pihak Ketiga: {b.tenant_name}
+                          </p>
+                        )}
+                        {b.is_married && b.spouse_name && (
+                          <p className="text-[11px] text-emerald-700 font-bold mt-0.5">
+                            💍 Pasutri: Suami {(b.spouse_relation === 'suami' ? b.spouse_name : (b.is_for_other && b.occupant_name ? b.occupant_name : b.tenant_name))} &amp; Istri {(b.spouse_relation === 'suami' ? (b.is_for_other && b.occupant_name ? b.occupant_name : b.tenant_name) : b.spouse_name)}
+                          </p>
+                        )}
                         <p className="text-xs text-slate-500 font-medium mt-0.5">
                           🏢 {prop?.name || 'Cabang Kos'} • Kamar <strong className="text-slate-800">{b.room_number || '-'}</strong>
                         </p>
@@ -1150,7 +1244,13 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                         <div className="bg-white border border-slate-200 rounded-lg p-1.5 text-center">
                           <span className="text-[9px] font-mono uppercase text-slate-400 block">TTD Penyewa</span>
                           {b.signature_url && b.signature_url.trim() !== '' ? (
-                            <img src={b.signature_url} alt="TTD Penyewa" className="h-7 mx-auto object-contain mt-1" />
+                            <ResolvedSignatureImg
+                              src={b.signature_url}
+                              role="tenant"
+                              orderId={b.midtrans_order_id}
+                              alt="TTD Penyewa"
+                              className="h-7 mx-auto object-contain mt-1"
+                            />
                           ) : (
                             <span className="text-[10px] text-slate-400 italic block py-1">Disetujui Digital</span>
                           )}
@@ -1159,7 +1259,13 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                         <div className="border border-emerald-200 bg-emerald-50/60 rounded-lg p-1.5 text-center">
                           <span className="text-[9px] font-mono uppercase text-slate-400 block">Stempel & TTD Owner</span>
                           {(b.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE) ? (
-                            <img src={b.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE} alt="TTD Owner" className="h-7 mx-auto object-contain mt-1" />
+                            <ResolvedSignatureImg
+                              src={b.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE}
+                              role="owner"
+                              orderId={b.midtrans_order_id}
+                              alt="TTD Owner"
+                              className="h-7 mx-auto object-contain mt-1"
+                            />
                           ) : (
                             <span className="text-[10px] text-slate-400 italic block py-1">-</span>
                           )}
@@ -1237,7 +1343,12 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                 <span className="text-[10px] font-bold text-[#2E6F40] uppercase font-mono block">Pihak Pertama (Pemilik)</span>
                 <div className="h-20 flex items-center justify-center border-b border-slate-300 my-2">
                   {(ownerSigUrl || DEFAULT_OWNER_SIGNATURE) && (ownerSigUrl || DEFAULT_OWNER_SIGNATURE).trim() !== '' ? (
-                    <img src={ownerSigUrl || DEFAULT_OWNER_SIGNATURE} alt="TTD Owner" className="max-h-16 max-w-[200px] object-contain" />
+                    <ResolvedSignatureImg
+                      src={ownerSigUrl || DEFAULT_OWNER_SIGNATURE}
+                      role="owner"
+                      alt="TTD Owner"
+                      className="max-h-16 max-w-[200px] object-contain"
+                    />
                   ) : (
                     <span className="text-[10px] text-slate-400 italic">[Stempel & Tanda Tangan Owner]</span>
                   )}
@@ -1288,10 +1399,43 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
               
               {/* Rental Summary Table */}
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2 text-xs">
-                <div className="flex justify-between py-1 border-b border-slate-200/60">
-                  <span className="text-slate-500">Nama Penyewa:</span>
-                  <strong className="text-slate-900">{selectedBookingForSign.tenant_name}</strong>
-                </div>
+                {selectedBookingForSign.is_for_other && selectedBookingForSign.occupant_name ? (
+                  <>
+                    <div className="flex justify-between py-1 border-b border-slate-200/60">
+                      <span className="text-slate-500">Pemesan (Pihak Ketiga):</span>
+                      <strong className="text-slate-900">{selectedBookingForSign.tenant_name}</strong>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-200/60">
+                      <span className="text-emerald-700 font-bold">Nama Penyewa (Penghuni):</span>
+                      <strong className="text-emerald-800">{selectedBookingForSign.occupant_name}</strong>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between py-1 border-b border-slate-200/60">
+                    <span className="text-slate-500">Nama Penyewa:</span>
+                    <strong className="text-slate-900">{selectedBookingForSign.tenant_name}</strong>
+                  </div>
+                )}
+                {selectedBookingForSign.is_married && selectedBookingForSign.spouse_name && (
+                  <>
+                    <div className="flex justify-between py-1 border-b border-slate-200/60">
+                      <span className="text-emerald-700 font-bold">Nama Suami:</span>
+                      <strong className="text-slate-900">
+                        {selectedBookingForSign.spouse_relation === 'suami'
+                          ? selectedBookingForSign.spouse_name
+                          : (selectedBookingForSign.is_for_other && selectedBookingForSign.occupant_name ? selectedBookingForSign.occupant_name : selectedBookingForSign.tenant_name)}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-200/60">
+                      <span className="text-emerald-700 font-bold">Nama Istri:</span>
+                      <strong className="text-slate-900">
+                        {selectedBookingForSign.spouse_relation === 'suami'
+                          ? (selectedBookingForSign.is_for_other && selectedBookingForSign.occupant_name ? selectedBookingForSign.occupant_name : selectedBookingForSign.tenant_name)
+                          : selectedBookingForSign.spouse_name}
+                      </strong>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between py-1 border-b border-slate-200/60">
                   <span className="text-slate-500">Nomor Kamar:</span>
                   <strong className="text-slate-900">Kamar {selectedBookingForSign.room_number || '-'}</strong>
@@ -1321,7 +1465,13 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
                     <span className="text-[10px] font-mono uppercase text-slate-500 block mb-1">TTD Penyewa</span>
                     {selectedBookingForSign.signature_url ? (
-                      <img src={selectedBookingForSign.signature_url} alt="TTD Penyewa" className="h-12 mx-auto object-contain" />
+                      <ResolvedSignatureImg
+                        src={selectedBookingForSign.signature_url}
+                        role="tenant"
+                        orderId={selectedBookingForSign.midtrans_order_id}
+                        alt="TTD Penyewa"
+                        className="h-12 mx-auto object-contain"
+                      />
                     ) : (
                       <span className="text-xs text-slate-400 italic block py-2">Disetujui Digital</span>
                     )}
@@ -1332,7 +1482,13 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
                   <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-3 text-center">
                     <span className="text-[10px] font-mono uppercase text-[#2E6F40] block mb-1">Stempel & TTD Owner (Otomatis)</span>
                     {(selectedBookingForSign.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE) && (selectedBookingForSign.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE).trim() !== '' ? (
-                      <img src={selectedBookingForSign.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE} alt="TTD Owner" className="h-12 mx-auto object-contain" />
+                      <ResolvedSignatureImg
+                        src={selectedBookingForSign.owner_signature_url || ownerSigUrl || DEFAULT_OWNER_SIGNATURE}
+                        role="owner"
+                        orderId={selectedBookingForSign.midtrans_order_id}
+                        alt="TTD Owner"
+                        className="h-12 mx-auto object-contain"
+                      />
                     ) : (
                       <span className="text-xs text-slate-400 italic block py-2">[Tanda Tangan Owner]</span>
                     )}

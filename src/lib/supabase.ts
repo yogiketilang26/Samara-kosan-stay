@@ -458,6 +458,18 @@ class SupabaseRealtimeManager {
       const channel = this.client.channel('db-global-realtime');
       this.globalChannel = channel;
 
+      // R20.4: Guard & warn if activeChannels > 1 per tab (Supabase Realtime Free tier max 200 connections)
+      try {
+        const activeChannelsList = typeof this.client.getChannels === 'function' ? this.client.getChannels() : [];
+        const activeChannels = Array.isArray(activeChannelsList) ? activeChannelsList.length : (this.globalChannel ? 1 : 0);
+        if (activeChannels > 1) {
+          console.warn(
+            `[REALTIME MANAGER - R20 WARNING] activeChannels > 1 terdeteksi pada tab ini (activeChannels=${activeChannels}). Satu tab wajib menggunakan tepat 1 koneksi channel global untuk menjaga kuota Supabase Realtime (maks 200 koneksi).`
+          );
+          this.triggerLog('WARNING', `activeChannels > 1 detected (${activeChannels} channels in single tab)`);
+        }
+      } catch {}
+
       const handlePgChange = (payload: any) => {
         if (payload && payload.table) {
           invalidateMemoryCache(payload.table);
@@ -692,8 +704,14 @@ class SupabaseRealtimeManager {
   }
 
   public getStatus() {
+    const activeChannelsList = this.client && typeof this.client.getChannels === 'function' ? this.client.getChannels() : [];
+    const activeChannels = Array.isArray(activeChannelsList) ? activeChannelsList.length : (this.globalChannel ? 1 : 0);
+    if (activeChannels > 1) {
+      console.warn(`[REALTIME MANAGER - R20 WARNING] activeChannels > 1 pada tab ini (${activeChannels}).`);
+    }
     return {
       connectionStatus: this.connectionStatus,
+      activeChannels,
       isIdlePaused: this.isIdlePaused,
       listenersCount: Array.from(this.listeners.entries()).map(([table, set]) => ({
         table,
@@ -782,7 +800,8 @@ const tableSchemas: Record<string, string[]> = {
   rooms: [
     'id', 'property_id', 'room_number', 'room_type', 'price', 'size_sqm', 'floor',
     'status', 'current_tenant_name', 'facilities', 'image_url', 'images',
-    'discount_percent', 'discount_until', 'is_daily_enabled', 'daily_price', 'created_at'
+    'discount_percent', 'discount_until', 'is_daily_enabled', 'daily_price',
+    'hold_expires_at', 'hold_by_booking_id', 'is_airbnb_enabled', 'airbnb_url', 'created_at'
   ],
   tenants: [
     'id', 'user_id', 'full_name', 'phone', 'email', 'job', 'avatar_initials',
@@ -2377,14 +2396,18 @@ export const database = {
                 ? relationalFacs
                 : (columnFacs.length > 0 ? columnFacs : defaultRoomFacilities);
 
-              // Business rule: Rooms remain available for other tenants and surveys until officially paid/occupied.
+              // R18: A 'reserved' room is held while hold_expires_at > NOW(), and automatically treated as 'available' once hold_expires_at <= NOW()
               // Pure read normalization (never mutate database inside fetchRooms to prevent realtime read-write loops)
-              const normalizedStatus = (r.status === 'reserved' || !r.status) ? 'available' : r.status;
+              const isExpiredHold =
+                r.status === 'reserved' &&
+                (!r.hold_expires_at || new Date(r.hold_expires_at).getTime() <= Date.now());
+              const normalizedStatus = (!r.status || isExpiredHold) ? 'available' : r.status;
 
               const cleanRoom = { 
                 ...r, 
                 room_type: resolvedRoomType,
                 status: normalizedStatus,
+                current_tenant_name: isExpiredHold ? null : r.current_tenant_name,
                 is_airbnb_enabled: resolvedAirbnbEnabled,
                 airbnb_url: resolvedAirbnbUrl,
                 facilities: finalFacilities
@@ -2406,14 +2429,20 @@ export const database = {
         if (resp.ok) {
           const json = await resp.json();
           if (json.success && Array.isArray(json.data)) {
+            const nowMs = Date.now();
             const normalizedRooms = json.data.map((r: any) => {
               const rawFacs = Array.isArray(r.facilities) ? r.facilities : [];
               const isPremPlus = rawFacs.some((item: any) => typeof item === 'string' && item === '__ROOM_TYPE:Premium Plus__');
               const hasAirbnbEnabledTag = rawFacs.some((item: any) => typeof item === 'string' && item === '__AIRBNB_ENABLED:true__');
               const airbnbUrlTag = rawFacs.find((item: any) => typeof item === 'string' && item.startsWith('__AIRBNB_URL:') && item.endsWith('__'));
               const resolvedAirbnbUrl = r.airbnb_url || (airbnbUrlTag ? airbnbUrlTag.slice('__AIRBNB_URL:'.length, -2) : null);
+              const isExpiredHold =
+                r.status === 'reserved' &&
+                (!r.hold_expires_at || new Date(r.hold_expires_at).getTime() <= nowMs);
               return {
                 ...r,
+                status: (!r.status || isExpiredHold) ? 'available' : r.status,
+                current_tenant_name: isExpiredHold ? null : r.current_tenant_name,
                 room_type: isPremPlus ? 'Premium Plus' : (r.room_type || 'Standard'),
                 is_airbnb_enabled: Boolean(r.is_airbnb_enabled || hasAirbnbEnabledTag || resolvedAirbnbUrl),
                 airbnb_url: resolvedAirbnbUrl,

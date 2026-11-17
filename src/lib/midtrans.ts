@@ -39,31 +39,70 @@ export const loadMidtransSnapScript = (forceSandbox: boolean = false): Promise<b
       return;
     }
 
-    let clientKey = getMidtransClientKey();
-    const isProduction = !forceSandbox && (Boolean((import.meta as any).env?.VITE_MIDTRANS_IS_PRODUCTION === 'true') || Boolean((import.meta as any).env?.MIDTRANS_IS_PRODUCTION === 'true'));
-    const snapUrl = isProduction 
-      ? 'https://app.midtrans.com/snap/snap.js'
-      : 'https://app.sandbox.midtrans.com/snap/snap.js';
+    (async () => {
+      let clientKey = getMidtransClientKey();
+      let isProduction =
+        !forceSandbox &&
+        (Boolean((import.meta as any).env?.VITE_MIDTRANS_IS_PRODUCTION === 'true') ||
+          Boolean((import.meta as any).env?.MIDTRANS_IS_PRODUCTION === 'true'));
+      let snapUrl = isProduction
+        ? 'https://app.midtrans.com/snap/snap.js'
+        : 'https://app.sandbox.midtrans.com/snap/snap.js';
 
-    console.log('[MIDTRANS SDK] Initializing Snap Script with properties:', {
-      url: snapUrl,
-      clientKey,
-      isProduction
-    });
+      if (!forceSandbox) {
+        try {
+          const cfgRes = await fetch('/api/midtrans/config');
+          if (cfgRes.ok) {
+            const cfg = await cfgRes.json();
+            if (cfg && typeof cfg.isProduction === 'boolean') {
+              isProduction = cfg.isProduction;
+            }
+            if (cfg?.clientKey && typeof cfg.clientKey === 'string' && cfg.clientKey.trim()) {
+              clientKey = cfg.clientKey.trim();
+            }
+            if (cfg?.snapUrl && typeof cfg.snapUrl === 'string') {
+              snapUrl = cfg.snapUrl;
+            } else {
+              snapUrl = isProduction
+                ? 'https://app.midtrans.com/snap/snap.js'
+                : 'https://app.sandbox.midtrans.com/snap/snap.js';
+            }
+          }
+        } catch {
+          // Fallback to static environment config (Sandbox default)
+        }
+      }
 
-    const script = document.createElement('script');
-    script.src = snapUrl;
-    script.id = 'midtrans-snap-script';
-    script.setAttribute('data-client-key', clientKey);
-    script.onload = () => {
-      console.log('[MIDTRANS SDK] Snap script loaded successfully');
-      resolve(true);
-    };
-    script.onerror = () => {
-      console.error('[MIDTRANS SDK] Failed to load Snap script');
-      resolve(false);
-    };
-    document.body.appendChild(script);
+      console.log('[MIDTRANS SDK] Initializing Snap Script with properties:', {
+        url: snapUrl,
+        clientKey,
+        isProduction,
+        mode: isProduction ? 'production' : 'sandbox'
+      });
+
+      const existingScript = document.getElementById('midtrans-snap-script') as HTMLScriptElement | null;
+      if (existingScript) {
+        if ((window as any).snap) {
+          resolve(true);
+          return;
+        }
+        existingScript.remove();
+      }
+
+      const script = document.createElement('script');
+      script.src = snapUrl;
+      script.id = 'midtrans-snap-script';
+      script.setAttribute('data-client-key', clientKey);
+      script.onload = () => {
+        console.log('[MIDTRANS SDK] Snap script loaded successfully');
+        resolve(true);
+      };
+      script.onerror = () => {
+        console.error('[MIDTRANS SDK] Failed to load Snap script');
+        resolve(false);
+      };
+      document.body.appendChild(script);
+    })();
   });
 };
 

@@ -13,6 +13,7 @@ import Loader from '../components/common/Loader';
 import Modal from '../components/common/Modal';
 import { compressImage, ensurePngDataUrl } from '../utils/imageCompressor';
 import { uploadToSupabaseStorage } from '../utils/storageUploader';
+import { resolveCoupleNames } from '../utils/pdfGenerator';
 import { 
   Sparkles, HelpCircle, Phone, BookOpen, Clock, HardDrive, Shield,
   MapPin, Wifi, Zap, ChevronLeft, ChevronDown, Building2, Search, Calendar, Map, 
@@ -391,9 +392,16 @@ export default function Home({}: HomeProps) {
   const [detailRoomType, setDetailRoomType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus'>('all');
   const [searchRoomType, setSearchRoomType] = useState<'all' | 'Standard' | 'Deluxe' | 'Premium' | 'Premium Plus'>('all');
 
-  // Synchronized room availability validator directly connected to Supabase room state
+  // Synchronized room availability validator directly connected to Supabase room state (R18: expired hold_expires_at is treated as available)
   const isRoomAvailable = (r: Room): boolean => {
     if (!r) return false;
+    if (r.status === 'reserved') {
+      const holdExp = (r as any).hold_expires_at;
+      if (!holdExp || new Date(holdExp).getTime() <= Date.now()) {
+        return true;
+      }
+      return false;
+    }
     return r.status === 'available' || (r.status as string) === 'ready' || !r.status;
   };
 
@@ -742,9 +750,7 @@ export default function Home({}: HomeProps) {
     setSignatureUrl('');
   };
 
-  const handleCloseReceiptAndReset = async () => {
-    setShowReceipt(false);
-    setReceiptData(null);
+  const resetToInitialHomeView = () => {
     setActiveRoom(null);
     setSelectedRoomForDetail(null);
     setIsCatalogOpen(false);
@@ -753,7 +759,12 @@ export default function Home({}: HomeProps) {
     snapPaymentContextRef.current = null;
     setIsAgreed(false);
     setSignatureUrl('');
-    
+    setAppliedCoupon(null);
+    setCouponInput('');
+    setCouponError('');
+    setSearchLocation('');
+    setSelectedMapProperty(null);
+
     // Reset forms
     setBookingForm({
       fullName: '',
@@ -774,15 +785,33 @@ export default function Home({}: HomeProps) {
     });
     setSurveyForm(prev => ({
       ...prev,
+      fullName: '',
+      nik: '',
+      email: '',
+      phone: '',
+      address: '',
+      job: '',
       moveInDate: '',
       isWithoutDp: false
     }));
 
-    // Redirect to home page view & smooth scroll to top
+    // Clear ?property=... and any Midtrans redirect params so URL returns cleanly to initial view
+    updateUrlPropertyParam(null);
+    try {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('property');
+      cleanUrl.searchParams.delete('order_id');
+      cleanUrl.searchParams.delete('orderId');
+      cleanUrl.searchParams.delete('status_code');
+      cleanUrl.searchParams.delete('transaction_status');
+      window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+    } catch {}
+
     setUserPage('home');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
-    // Refresh fresh data directly from Supabase to guarantee UI consistency
+  const refreshAllHomeData = async () => {
     try {
       const [freshRooms, freshProps, freshSurveys, freshTenants] = await Promise.all([
         database.fetchRooms(),
@@ -797,6 +826,17 @@ export default function Home({}: HomeProps) {
     } catch (e) {
       console.warn('Silent data reload after checkout:', e);
     }
+  };
+
+  const handleCloseReceiptAndReset = async () => {
+    setShowReceipt(false);
+    setReceiptData(null);
+    try {
+      sessionStorage.removeItem('samara_last_paid_receipt');
+    } catch {}
+    resetToInitialHomeView();
+    await refreshAllHomeData();
+    window.location.replace(window.location.pathname || '/');
   };
 
   const handleProceedToPayment = async (calculatedTotal: number) => {
@@ -945,7 +985,7 @@ export default function Home({}: HomeProps) {
             }).catch(e => console.error('Error sending free survey email:', e));
           }
 
-          setReceiptData({
+          const freeReceiptPayload = {
             type: 'survey',
             id: saved.invoice_id || '999',
             name: surveyForm.fullName,
@@ -957,9 +997,12 @@ export default function Home({}: HomeProps) {
             details: 'Janji Kunjungan Survey Gratis Terkonfirmasi.',
             signatureUrl: signatureUrl,
             ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
-          });
+          };
+          resetToInitialHomeView();
+          setReceiptData(freeReceiptPayload);
           setLoading(false);
           setShowReceipt(true);
+          refreshAllHomeData();
           return;
         } catch (err: any) {
           setLoading(false);
@@ -1109,8 +1152,16 @@ export default function Home({}: HomeProps) {
         surveyDate: surveyForm.date,
         surveySlot: surveyForm.slot,
         isDaily: checkoutFlow === 'daily',
-        isForOther: bookingForm.isForOther,
-        occupantEmail: bookingForm.occupantEmail,
+        isForOther: Boolean(bookingForm.isForOther),
+        occupantName: bookingForm.occupantName || '',
+        occupantPhone: bookingForm.occupantPhone || '',
+        occupantEmail: bookingForm.occupantEmail || '',
+        occupantNik: bookingForm.occupantNik || '',
+        isMarried: Boolean(bookingForm.isMarried),
+        spouseName: bookingForm.spouseName || '',
+        spousePhone: bookingForm.spousePhone || '',
+        spouseNik: bookingForm.spouseNik || '',
+        spouseRelation: bookingForm.spouseRelation || 'istri',
         signatureUrl,
         snapToken: chargeResult.token,
         mode: chargeResult.mode,
@@ -1192,7 +1243,6 @@ export default function Home({}: HomeProps) {
 
         (window as any).snap.pay(chargeResult.token, {
           onSuccess: async (result: any) => {
-            if (pollCtrl) pollCtrl.stop();
             fetch('/api/midtrans/logs', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1206,30 +1256,39 @@ export default function Home({}: HomeProps) {
               })
             }).catch(() => {});
 
-            // G5: Verify and auto-settle on server via /api/midtrans/status/:orderId (settled flag)
-            try {
-              const verifyRes = await fetch(`/api/midtrans/status/${encodeURIComponent(orderId)}`);
-              const verifyData = verifyRes.ok ? await verifyRes.json() : null;
-              if (verifyData?.settled === true) {
-                isSettled = true;
-                await handleSandboxPaymentSuccess({
-                  transactionId: verifyData?.midtrans?.transaction_id || result?.transaction_id || `mid-${Date.now()}`,
-                  paymentMethod: verifyData?.midtrans?.payment_type || result?.payment_type || 'Midtrans SNAP',
-                  settlementTime: verifyData?.midtrans?.settlement_time || result?.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19),
-                  settled: true
-                }, currentCtx);
-              } else if (verifyData?.rejected === true) {
-                clearActivePaymentSession(orderId);
-                database.fetchRooms().then(fresh => { if (fresh?.length) setRooms(fresh); }).catch(() => {});
-                alert('Pembayaran belum masuk / ditolak oleh Midtrans. Silakan coba kembali.');
-              } else {
-                handleSandboxPaymentPending({
-                  transactionId: result?.transaction_id || `mid-${Date.now()}`,
-                  paymentMethod: result?.payment_type || 'Midtrans SNAP',
-                  settlementTime: result?.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19)
-                }, currentCtx);
+            // Verify and auto-settle on server via /api/midtrans/status/:orderId with up to 4 quick retries
+            let verifiedData: any = null;
+            for (let attempt = 1; attempt <= 4; attempt++) {
+              try {
+                const verifyRes = await fetch(`/api/midtrans/status/${encodeURIComponent(orderId)}`);
+                if (verifyRes.ok) {
+                  verifiedData = await verifyRes.json();
+                  if (verifiedData?.settled === true || verifiedData?.rejected === true) {
+                    break;
+                  }
+                }
+              } catch {}
+              if (attempt < 4) {
+                await new Promise(resolve => setTimeout(resolve, 900));
               }
-            } catch {
+            }
+
+            if (verifiedData?.settled === true) {
+              isSettled = true;
+              if (pollCtrl) pollCtrl.stop();
+              await handleSandboxPaymentSuccess({
+                transactionId: verifiedData?.midtrans?.transaction_id || result?.transaction_id || `mid-${Date.now()}`,
+                paymentMethod: verifiedData?.midtrans?.payment_type || result?.payment_type || 'Midtrans SNAP',
+                settlementTime: verifiedData?.midtrans?.settlement_time || result?.transaction_time || new Date().toISOString().replace('T', ' ').slice(0, 19),
+                settled: true
+              }, currentCtx);
+            } else if (verifiedData?.rejected === true) {
+              if (pollCtrl) pollCtrl.stop();
+              clearActivePaymentSession(orderId);
+              database.fetchRooms().then(fresh => { if (fresh?.length) setRooms(fresh); }).catch(() => {});
+              alert('Pembayaran belum masuk / ditolak oleh Midtrans. Silakan coba kembali.');
+            } else {
+              // Keep pollCtrl running so as soon as Midtrans status transitions to settlement, it auto-settles
               handleSandboxPaymentPending({
                 transactionId: result?.transaction_id || `mid-${Date.now()}`,
                 paymentMethod: result?.payment_type || 'Midtrans SNAP',
@@ -1391,20 +1450,68 @@ export default function Home({}: HomeProps) {
     const effectiveSurveySlot = surveyForm.slot || ctx?.surveySlot || '13:00 - 15:00';
     const effectiveCheckInDate = bookingCheckInDate || ctx?.checkInDate || todayJakarta();
     const effectiveSigUrl = signatureUrl || ctx?.signatureUrl || '';
+    const effectiveIsForOther = Boolean(bookingForm.isForOther || ctx?.isForOther);
+    const effectiveOccupantName = (bookingForm.occupantName || ctx?.occupantName || '').trim();
+    const effectiveOccupantPhone = (bookingForm.occupantPhone || ctx?.occupantPhone || '').trim();
+    const effectiveOccupantEmail = (bookingForm.occupantEmail || ctx?.occupantEmail || '').trim();
+    const effectiveOccupantNik = (bookingForm.occupantNik || ctx?.occupantNik || '').trim();
+    const effectiveIsMarried = Boolean(bookingForm.isMarried || ctx?.isMarried);
+    const effectiveSpouseName = (bookingForm.spouseName || ctx?.spouseName || '').trim();
+    const effectiveSpousePhone = (bookingForm.spousePhone || ctx?.spousePhone || '').trim();
+    const effectiveSpouseNik = (bookingForm.spouseNik || ctx?.spouseNik || '').trim();
+    const effectiveSpouseRelation = (bookingForm.spouseRelation || ctx?.spouseRelation || 'istri') as 'istri' | 'suami';
 
     // G5: Booking & survey settlement MUST be verified and executed by the server (/api/midtrans/status -> settled: true)
     let serverSettled = details?.settled === true;
-    if (!serverSettled) {
+    let serverReceiptSummary: any = details?.receiptSummary || null;
+    if (!serverSettled || !serverReceiptSummary) {
       try {
         const statusResp = await fetch(`/api/midtrans/status/${encodeURIComponent(currentOrderId)}`);
         if (statusResp.ok) {
           const statusData = await statusResp.json();
           serverSettled = statusData?.settled === true;
+          if (statusData?.receipt_summary) {
+            serverReceiptSummary = statusData.receipt_summary;
+          }
         }
       } catch {
-        serverSettled = false;
+        if (!details?.settled) serverSettled = false;
       }
     }
+
+    const resolvedRoomNumber =
+      effectiveRoomNumber !== '-'
+        ? effectiveRoomNumber
+        : (serverReceiptSummary?.roomNo || '-');
+    const resolvedPropertyName =
+      effectivePropertyName && effectivePropertyName !== 'Samara Stay'
+        ? effectivePropertyName
+        : (serverReceiptSummary?.propertyName || effectivePropertyName || 'Samara Stay');
+    const resolvedTenantName =
+      effectiveTenantName && effectiveTenantName !== 'Pelanggan Samara'
+        ? effectiveTenantName
+        : (serverReceiptSummary?.name || effectiveTenantName || 'Pelanggan Samara');
+    const resolvedGrossAmount =
+      Number(currentGrossAmount) > 0
+        ? Number(currentGrossAmount)
+        : Number(serverReceiptSummary?.amountPaid || 0);
+    const resolvedIsForOther = effectiveIsForOther || Boolean(serverReceiptSummary?.isForOther);
+    const resolvedOccupantName = effectiveOccupantName || serverReceiptSummary?.occupantName || '';
+    const resolvedOccupantPhone = effectiveOccupantPhone || serverReceiptSummary?.occupantPhone || '';
+    const resolvedOccupantEmail = effectiveOccupantEmail || serverReceiptSummary?.occupantEmail || '';
+    const resolvedIsMarried = effectiveIsMarried || Boolean(serverReceiptSummary?.isMarried);
+    const resolvedSpouseName = effectiveSpouseName || serverReceiptSummary?.spouseName || '';
+    const resolvedSpouseRelation = (effectiveSpouseRelation || serverReceiptSummary?.spouseRelation || 'istri') as 'istri' | 'suami';
+    const resolvedPartyInfo = resolveCoupleNames({
+      name: resolvedTenantName,
+      isForOther: resolvedIsForOther,
+      occupantName: resolvedOccupantName,
+      isMarried: resolvedIsMarried,
+      spouseName: resolvedSpouseName,
+      spouseRelation: resolvedSpouseRelation,
+      husbandName: serverReceiptSummary?.husbandName,
+      wifeName: serverReceiptSummary?.wifeName
+    });
 
     if (!serverSettled) {
       alert('Pembayaran belum terkonfirmasi lunas oleh server Midtrans. Silakan cek kembali status pembayaran Anda.');
@@ -1414,6 +1521,10 @@ export default function Home({}: HomeProps) {
     // Mark orderId as settled on client and clear active session from localStorage
     settledOrderIdsRef.current.add(currentOrderId);
     clearActivePaymentSession(currentOrderId);
+
+    // Immediately close reservation form (FORMULIR RESERVASI KAMAR) & return to tampilan awal
+    resetToInitialHomeView();
+    refreshAllHomeData();
 
     if (effectiveFlow === 'survey') {
       let finalSurveySigUrl = effectiveSigUrl;
@@ -1555,19 +1666,23 @@ export default function Home({}: HomeProps) {
         }).then(res => res.json()).then(resData => console.log('[EMAIL RESPONSE SURVEY]', resData)).catch(e => console.error('Error sending survey payment email:', e));
       }
 
-      setReceiptData({
-        type: 'survey',
+      const surveyReceiptPayload = {
+        type: 'survey' as const,
         id: saved.invoice_id || '999',
-        name: effectiveTenantName,
-        roomNo: effectiveRoomNumber,
-        propertyName: effectivePropertyName,
-        amountPaid: 500000,
-        method: details.paymentMethod || 'Midtrans SNAP',
-        date: effectiveSurveyDate,
+        name: resolvedTenantName,
+        roomNo: resolvedRoomNumber,
+        propertyName: resolvedPropertyName,
+        amountPaid: resolvedGrossAmount > 0 ? resolvedGrossAmount : 500000,
+        method: details.paymentMethod || serverReceiptSummary?.method || 'Midtrans SNAP',
+        date: effectiveSurveyDate || serverReceiptSummary?.date || todayJakarta(),
         details: 'Pembayaran DP Survey Sah.',
-        signatureUrl: effectiveSigUrl,
-        ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
-      });
+        signatureUrl: effectiveSigUrl || serverReceiptSummary?.signatureUrl || '',
+        ownerSignatureUrl: serverReceiptSummary?.ownerSignatureUrl || settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
+      };
+      setReceiptData(surveyReceiptPayload);
+      try {
+        sessionStorage.setItem('samara_last_paid_receipt', JSON.stringify(surveyReceiptPayload));
+      } catch {}
     } else {
       const isDaily = effectiveFlow === 'daily' || Boolean(ctx?.isDaily);
       
@@ -1596,9 +1711,9 @@ export default function Home({}: HomeProps) {
       const ownerSigUrl = settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE;
       const userSigUrl = finalBookingSigUrl || effectiveSigUrl || '';
 
-      const targetEmails = Array.from(new Set([effectiveEmail, (bookingForm.isForOther || ctx?.isForOther) ? (bookingForm.occupantEmail || ctx?.occupantEmail || '') : ''].filter(Boolean)));
+      const targetEmails = Array.from(new Set([effectiveEmail, resolvedIsForOther ? resolvedOccupantEmail : ''].filter(Boolean)));
       for (const targetEmail of targetEmails) {
-        const formattedPrice = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(currentGrossAmount);
+        const formattedPrice = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(resolvedGrossAmount || currentGrossAmount);
         fetch('/api/email/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1606,7 +1721,7 @@ export default function Home({}: HomeProps) {
             to: targetEmail,
             order_id: currentOrderId,
             reservation_number: currentOrderId,
-            subject: `[Samara Stay] Invoice Pembayaran & Konfirmasi Sewa - Unit ${effectiveRoomNumber}`,
+            subject: `[Samara Stay] Invoice Pembayaran & Konfirmasi Sewa - Unit ${resolvedRoomNumber}`,
             html: `
               <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #1e293b; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);">
                 <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 25px; margin-bottom: 30px;">
@@ -1621,7 +1736,7 @@ export default function Home({}: HomeProps) {
                 </div>
 
                 <div style="margin-bottom: 25px; font-size: 14px; line-height: 1.6; color: #334155;">
-                  <p>Halo <strong>${effectiveTenantName}</strong>,</p>
+                  <p>Halo <strong>${resolvedTenantName}</strong>,</p>
                   <p>Terima kasih atas pembayaran Anda! Transaksi pemesanan kamar sewa Anda telah berhasil dikonfirmasi. Berikut adalah rincian tagihan lunas Anda:</p>
                 </div>
 
@@ -1629,13 +1744,42 @@ export default function Home({}: HomeProps) {
                   <h3 style="color: #1e293b; margin-top: 0; margin-bottom: 15px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Rincian Transaksi Hunian</h3>
                   
                   <table style="width: 100%; font-size: 13px; border-collapse: collapse; line-height: 2;">
+                    ${resolvedPartyInfo.isThirdParty ? `
+                    <tr>
+                      <td style="color: #64748b; width: 45%;">Pemesan (Pihak Ketiga):</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${resolvedPartyInfo.bookerName}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #065f46; font-weight: 700;">Nama Penyewa (Penghuni):</td>
+                      <td style="color: #047857; font-weight: 800; text-align: right;">${resolvedPartyInfo.primaryTenantName}</td>
+                    </tr>
+                    ` : `
+                    <tr>
+                      <td style="color: #64748b; width: 45%;">Nama Penyewa:</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${resolvedPartyInfo.primaryTenantName}</td>
+                    </tr>
+                    `}
+                    ${resolvedPartyInfo.isMarriedCouple ? `
+                    <tr>
+                      <td style="color: #065f46; font-weight: 700;">Status Hunian:</td>
+                      <td style="color: #047857; font-weight: 800; text-align: right;">Pasangan Suami Istri (Pasutri)</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Nama Suami:</td>
+                      <td style="color: #1e293b; font-weight: 800; text-align: right;">${resolvedPartyInfo.husbandName}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #64748b;">Nama Istri:</td>
+                      <td style="color: #1e293b; font-weight: 800; text-align: right;">${resolvedPartyInfo.wifeName}</td>
+                    </tr>
+                    ` : ''}
                     <tr>
                       <td style="color: #64748b; width: 45%;">Nama Kos / Unit:</td>
-                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${effectivePropertyName}</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right;">${resolvedPropertyName}</td>
                     </tr>
                     <tr>
                       <td style="color: #64748b;">Nomor Kamar:</td>
-                      <td style="color: #1e293b; font-weight: 700; text-align: right; font-size: 14px; color: #334155;">Unit ${effectiveRoomNumber}</td>
+                      <td style="color: #1e293b; font-weight: 700; text-align: right; font-size: 14px; color: #334155;">Unit ${resolvedRoomNumber}</td>
                     </tr>
                     <tr>
                       <td style="color: #64748b;">Tipe Kontrak:</td>
@@ -1662,7 +1806,7 @@ export default function Home({}: HomeProps) {
                 <div style="margin-top: 20px; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; background-color: #f8fafc; text-align: left;">
                   <h4 style="margin: 0 0 6px 0; font-size: 11px; font-weight: 800; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">SURAT PERSETUJUAN KONTRAK SEWA RESMI</h4>
                   <p style="margin: 0; font-size: 11px; color: #475569; line-height: 1.5;">
-                    Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (Pemesan: ${effectiveTenantName})</strong> atas sewa unit kamar ${effectiveRoomNumber}. Seluruh tata tertib, hak &amp; kewajiban sewa unit, serta deposit tertera berlaku mengikat demi hukum.
+                    Dokumen ini menerangkan persetujuan sah antara <strong>Pihak Pertama (Owner &amp; Manajemen Samara Stay)</strong> dan <strong>Pihak Kedua (${resolvedPartyInfo.isThirdParty ? `Pemesan Pihak Ketiga: ${resolvedPartyInfo.bookerName} untuk Penyewa: ${resolvedPartyInfo.primaryTenantName}` : `Penyewa: ${resolvedPartyInfo.primaryTenantName}`}${resolvedPartyInfo.isMarriedCouple ? ` — Pasutri: Suami ${resolvedPartyInfo.husbandName} &amp; Istri ${resolvedPartyInfo.wifeName}` : ''})</strong> atas sewa unit kamar ${resolvedRoomNumber}. Seluruh tata tertib, hak &amp; kewajiban sewa unit, serta deposit tertera berlaku mengikat demi hukum.
                   </p>
                 </div>
 
@@ -1688,7 +1832,8 @@ export default function Home({}: HomeProps) {
                             <p style="font-size: 10px; color: #059669; font-weight: bold; margin: 15px 0 0 0; font-family: monospace;">✓ DISETUJUI DIGITAL</p>
                           `}
                         </div>
-                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${effectiveTenantName}</p>
+                        <p style="font-size: 9px; color: #1e293b; font-weight: 800; margin: 4px 0 0 0; text-transform: uppercase;">${resolvedTenantName}</p>
+                        ${resolvedPartyInfo.isThirdParty ? `<p style="font-size: 8px; color: #047857; font-weight: 700; margin: 2px 0 0 0;">Penyewa: ${resolvedPartyInfo.primaryTenantName}</p>` : ''}
                         <p style="font-size: 8px; color: #64748b; margin: 2px 0 0 0; font-family: monospace;">${effectiveEmail}</p>
                       </td>
                     </tr>
@@ -1714,21 +1859,38 @@ export default function Home({}: HomeProps) {
         }).then(res => res.json()).then(resData => console.log('[EMAIL RESPONSE BOOKING]', resData)).catch(err => console.error('Error sending booking confirmation email:', err));
       }
 
-      setReceiptData({
-        type: 'booking',
+      const bookingReceiptPayload = {
+        type: 'booking' as const,
         id: currentOrderId || '999',
-        name: effectiveTenantName,
-        roomNo: effectiveRoomNumber,
-        propertyName: effectivePropertyName,
-        amountPaid: currentGrossAmount,
-        method: details.paymentMethod || 'Midtrans SNAP',
-        date: todayJakarta(),
+        name: resolvedTenantName,
+        roomNo: resolvedRoomNumber,
+        propertyName: resolvedPropertyName,
+        amountPaid: resolvedGrossAmount,
+        method: details.paymentMethod || serverReceiptSummary?.method || 'Midtrans SNAP',
+        date: serverReceiptSummary?.date || todayJakarta(),
         details: 'Bukti lunas kontrak sewa sepihak.',
-        signatureUrl: effectiveSigUrl,
-        ownerSignatureUrl: settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE
-      });
+        signatureUrl: effectiveSigUrl || serverReceiptSummary?.signatureUrl || '',
+        ownerSignatureUrl: serverReceiptSummary?.ownerSignatureUrl || settings?.owner_signature_url || DEFAULT_OWNER_SIGNATURE,
+        isForOther: resolvedIsForOther,
+        occupantName: resolvedOccupantName,
+        occupantPhone: resolvedOccupantPhone,
+        occupantEmail: resolvedOccupantEmail,
+        occupantNik: effectiveOccupantNik,
+        isMarried: resolvedIsMarried,
+        spouseName: resolvedSpouseName,
+        spousePhone: effectiveSpousePhone,
+        spouseNik: effectiveSpouseNik,
+        spouseRelation: resolvedSpouseRelation,
+        husbandName: resolvedPartyInfo.husbandName,
+        wifeName: resolvedPartyInfo.wifeName
+      };
+      setReceiptData(bookingReceiptPayload);
+      try {
+        sessionStorage.setItem('samara_last_paid_receipt', JSON.stringify(bookingReceiptPayload));
+      } catch {}
     }
 
+    // R19: Keep invoice modal open until the user clicks "Unduh PDF" or "Tutup" (removed 3.5s auto-reload).
     setShowReceipt(true);
   };
 
@@ -1779,20 +1941,29 @@ export default function Home({}: HomeProps) {
 
           if (resData?.settled === true) {
             cleanUrlOrderParams();
+            const srvSum = resData?.receipt_summary;
             const recoveryCtx = savedSession && savedSession.orderId === targetOrderId
-              ? savedSession
+              ? {
+                  ...savedSession,
+                  tenantName: savedSession.tenantName || srvSum?.name || 'Pelanggan Samara',
+                  roomNumber: savedSession.roomNumber || srvSum?.roomNo || '-',
+                  propertyName: savedSession.propertyName || srvSum?.propertyName || 'Samara Stay',
+                  grossAmount: Number(savedSession.grossAmount || srvSum?.amountPaid || resData?.midtrans?.gross_amount || 0)
+                }
               : {
                   orderId: targetOrderId,
                   checkoutFlow: targetOrderId.startsWith('SRV-') ? 'survey' : 'monthly',
-                  grossAmount: Number(resData?.midtrans?.gross_amount || 0),
-                  roomNumber: '-',
-                  propertyName: 'Samara Stay'
+                  tenantName: srvSum?.name || 'Pelanggan Samara',
+                  grossAmount: Number(srvSum?.amountPaid || resData?.midtrans?.gross_amount || 0),
+                  roomNumber: srvSum?.roomNo || '-',
+                  propertyName: srvSum?.propertyName || 'Samara Stay'
                 };
             await handleSandboxPaymentSuccess({
               transactionId: resData?.midtrans?.transaction_id || targetOrderId,
               paymentMethod: resData?.midtrans?.payment_type || 'Midtrans SNAP',
               settlementTime: resData?.midtrans?.settlement_time || new Date().toISOString().replace('T', ' ').slice(0, 19),
-              settled: true
+              settled: true,
+              receiptSummary: srvSum || null
             }, recoveryCtx);
             return true;
           }

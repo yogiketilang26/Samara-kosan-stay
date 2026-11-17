@@ -449,6 +449,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   const isRoomAvailable = (r: Room): boolean => {
     if (!r) return false;
+    if (r.status === 'reserved') {
+      const holdExp = (r as any).hold_expires_at;
+      if (!holdExp || new Date(holdExp).getTime() <= Date.now()) {
+        return true;
+      }
+      return false;
+    }
     return r.status === 'available' || (r.status as string) === 'ready' || !r.status;
   };
 

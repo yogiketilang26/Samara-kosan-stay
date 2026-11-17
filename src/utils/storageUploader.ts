@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 export interface StorageUploadResult {
   publicUrl: string;
+  signedUrl?: string;
   storagePath: string;
   bucket: string;
   width: number;
@@ -53,10 +54,13 @@ export function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Convert Blob to Base64 Data URL or direct HTTP fallback
- * Ensures reliable rendering across external HTML Emails and UI previews
+ * Upload Blob to server signature endpoint (or Base64 only for public/non-private preview when allowed)
  */
-export async function uploadToServerOrBase64(blob: Blob, identifier: string = 'sig'): Promise<string> {
+export async function uploadToServerOrBase64(
+  blob: Blob,
+  identifier: string = 'sig',
+  rejectBase64Fallback: boolean = false
+): Promise<string> {
   const base64Data = await blobToBase64(blob);
   if (!base64Data) return '';
 
@@ -70,17 +74,21 @@ export async function uploadToServerOrBase64(blob: Blob, identifier: string = 's
       })
     });
     const result = await response.json();
-    if (result.success && result.publicUrl) {
-      // If server returned a localhost URL, prefer clean inline Base64 data URL to avoid broken external links
-      if (result.publicUrl.includes('localhost:') || result.publicUrl.includes('127.0.0.1')) {
-        console.log('[StorageUploader] Server returned localhost URL, using Base64 data URL for reliability:', identifier);
+    if (result.success && (result.storagePath || result.publicUrl)) {
+      if (rejectBase64Fallback) {
+        return result.storagePath || result.publicUrl;
+      }
+      if (result.publicUrl && (result.publicUrl.includes('localhost:') || result.publicUrl.includes('127.0.0.1'))) {
         return base64Data;
       }
-      console.log('[StorageUploader] Uploaded to server API:', result.publicUrl);
       return result.publicUrl;
     }
   } catch (err) {
-    console.warn('[StorageUploader] Server endpoint upload failed, using Base64 data URL fallback:', err);
+    console.warn('[StorageUploader] Server endpoint upload failed:', err);
+  }
+
+  if (rejectBase64Fallback) {
+    throw new Error('Gagal mengunggah berkas ke server storage (Base64 fallback dinonaktifkan sesuai R17).');
   }
 
   return base64Data;
@@ -270,12 +278,59 @@ export async function uploadToSupabaseStorage(
   const cleanPrefix = sanitizedPrefix ? sanitizedPrefix + '/' : '';
   const fileName = `${cleanPrefix}${timestamp}_${randomHash}.${ext}`;
 
+  const privateBuckets = new Set([
+    'tenant-documents',
+    'payment-proof',
+    'contracts',
+    'signatures',
+    'maintenance'
+  ]);
+  const isPrivateBucket = privateBuckets.has(bucketName);
+  const SHORT_LIVED_SIGNED_URL_TTL = 3600; // <= 1 hour (R17)
+
   if (!isSupabaseConfigured) {
-    console.warn('[StorageUploader] Supabase storage is not configured. Uploading to server API or Base64.');
-    const serverUrl = await uploadToServerOrBase64(processedBlob, pathPrefix || 'sig');
+    if (isPrivateBucket && bucketName !== 'signatures') {
+      // R17: Never fall back to Base64 in DB columns for private documents; try server storage proxy
+      const base64Data = await blobToBase64(processedBlob);
+      if (base64Data) {
+        const srvRes = await fetch('/api/storage/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            bucket: bucketName,
+            fileName,
+            base64Data,
+            mimeType
+          })
+        });
+        if (srvRes.ok) {
+          const srvJson = await srvRes.json();
+          if (srvJson.success && (srvJson.storagePath || srvJson.publicUrl)) {
+            const canonicalPath = srvJson.storagePath?.startsWith(`${bucketName}/`)
+              ? srvJson.storagePath
+              : `${bucketName}/${srvJson.storagePath || fileName}`;
+            return {
+              publicUrl: canonicalPath,
+              signedUrl: srvJson.signedUrl || srvJson.publicUrl,
+              storagePath: canonicalPath,
+              bucket: bucketName,
+              width,
+              height,
+              mimeType,
+              size: processedBlob.size
+            };
+          }
+        }
+      }
+      throw new Error(`Layanan Supabase Storage belum aktif untuk bucket privat '${bucketName}'. Penolakan fallback Base64 sesuai kebijakan privasi R17.`);
+    }
+
+    console.warn('[StorageUploader] Supabase storage is not configured. Uploading via server signature/media endpoint.');
+    const serverUrl = await uploadToServerOrBase64(processedBlob, pathPrefix || 'sig', isPrivateBucket);
     return {
       publicUrl: serverUrl,
-      storagePath: fileName,
+      storagePath: `${bucketName}/${fileName}`,
       bucket: bucketName,
       width,
       height,
@@ -297,7 +352,7 @@ export async function uploadToSupabaseStorage(
         .upload(fileName, processedBlob, {
           contentType: mimeType,
           upsert: true,
-          cacheControl: '3600000'
+          cacheControl: '3600'
         });
 
       if (error) {
@@ -308,7 +363,7 @@ export async function uploadToSupabaseStorage(
         
         if (isBucketNotFound || isUnauthorized) {
           console.info(`[StorageUploader] Supabase storage bucket '${bucketName}' unavailable (${isUnauthorized ? 'RLS Policy' : 'Not Found'}). Using Server API fallback.`);
-          break; // Skip further retries and immediately proceed to server fallback
+          break; // Skip further retries and immediately proceed to server /api/storage/upload proxy
         } else {
           console.warn(`[StorageUploader] Upload attempt ${attempts} failed:`, error.message);
         }
@@ -320,23 +375,20 @@ export async function uploadToSupabaseStorage(
         throw error;
       }
 
-      const privateBuckets = new Set([
-        'tenant-documents',
-        'payment-proof',
-        'contracts',
-        'signatures',
-        'maintenance'
-      ]);
-
+      const canonicalPath = `${bucketName}/${data.path}`;
       let resolvedUrl = '';
-      if (privateBuckets.has(bucketName)) {
+      let signedPreviewUrl: string | undefined = undefined;
+
+      if (isPrivateBucket) {
         const { data: signedData, error: signErr } = await supabase.storage
           .from(bucketName)
-          .createSignedUrl(data.path, 315360000);
+          .createSignedUrl(data.path, SHORT_LIVED_SIGNED_URL_TTL);
         if (!signErr && signedData?.signedUrl) {
-          resolvedUrl = signedData.signedUrl;
+          signedPreviewUrl = signedData.signedUrl;
+          // Store canonical path in DB columns (R17), not 10-year URL or Base64
+          resolvedUrl = canonicalPath;
         } else {
-          break; // Proceed to server /api/storage/upload fallback to mint signed URL via service_role
+          break; // Proceed to server /api/storage/upload fallback to mint short-lived signed URL via service_role
         }
       } else {
         const { data: publicUrlData } = supabase.storage
@@ -345,9 +397,21 @@ export async function uploadToSupabaseStorage(
         resolvedUrl = publicUrlData.publicUrl;
       }
 
+      if (bucketName === 'signatures') {
+        const sigRole: 'tenant' | 'owner' = (pathPrefix || '').toLowerCase().includes('owner') ? 'owner' : 'tenant';
+        const b64Preview = await blobToBase64(processedBlob);
+        if (b64Preview) {
+          cacheRealtimeSignaturePreview(canonicalPath, b64Preview, sigRole);
+          cacheRealtimeSignaturePreview(resolvedUrl, b64Preview, sigRole);
+        } else if (signedPreviewUrl) {
+          cacheRealtimeSignaturePreview(canonicalPath, signedPreviewUrl, sigRole);
+        }
+      }
+
       return {
         publicUrl: resolvedUrl,
-        storagePath: data.path,
+        signedUrl: signedPreviewUrl || resolvedUrl,
+        storagePath: canonicalPath,
         bucket: bucketName,
         width,
         height,
@@ -360,7 +424,7 @@ export async function uploadToSupabaseStorage(
     }
   }
 
-  // Server-side Supabase Storage proxy fallback (handles private bucket RLS & signed URL generation)
+  // Server-side Supabase Storage proxy fallback (handles private bucket RLS & short-lived signed URL generation)
   try {
     const base64Data = await blobToBase64(processedBlob);
     if (base64Data) {
@@ -382,10 +446,20 @@ export async function uploadToSupabaseStorage(
       });
       if (srvRes.ok) {
         const srvJson = await srvRes.json();
-        if (srvJson.success && srvJson.publicUrl) {
+        if (srvJson.success && (srvJson.storagePath || srvJson.publicUrl)) {
+          const rawPath = srvJson.storagePath || fileName;
+          const canonicalPath = rawPath.startsWith(`${bucketName}/`) ? rawPath : `${bucketName}/${rawPath}`;
+          if (bucketName === 'signatures') {
+            const sigRole: 'tenant' | 'owner' = (pathPrefix || '').toLowerCase().includes('owner') ? 'owner' : 'tenant';
+            cacheRealtimeSignaturePreview(canonicalPath, base64Data, sigRole);
+            if (srvJson.signedUrl) {
+              cacheRealtimeSignaturePreview(srvJson.signedUrl, base64Data, sigRole);
+            }
+          }
           return {
-            publicUrl: srvJson.publicUrl,
-            storagePath: srvJson.storagePath || fileName,
+            publicUrl: isPrivateBucket ? canonicalPath : srvJson.publicUrl,
+            signedUrl: srvJson.signedUrl || srvJson.publicUrl,
+            storagePath: canonicalPath,
             bucket: bucketName,
             width,
             height,
@@ -399,12 +473,24 @@ export async function uploadToSupabaseStorage(
     console.warn('[StorageUploader] Server storage upload proxy notice:', srvUploadErr);
   }
 
-  // Resilient Fallback: If Supabase Storage bucket does not exist or upload permanently fails,
-  // upload to server API or convert to Base64 so signature/room photo never breaks.
-  const fallbackUrl = await uploadToServerOrBase64(processedBlob, pathPrefix || 'img');
+  // R17: For private document buckets, NEVER fall back to storing Base64 data:image/... in DB tables
+  if (isPrivateBucket && bucketName !== 'signatures') {
+    throw new Error(
+      lastError?.message ||
+      `Gagal mengunggah dokumen privat ke bucket '${bucketName}'. Penyimpanan Base64 di database dinonaktifkan (R17).`
+    );
+  }
+
+  // For signatures or public marketing fallback: upload to server signature endpoint (never raw Base64 for private docs)
+  const fallbackUrl = await uploadToServerOrBase64(processedBlob, pathPrefix || 'img', isPrivateBucket);
+  if (isPrivateBucket && fallbackUrl.startsWith('data:')) {
+    throw new Error('Gagal menyimpan tanda tangan ke server storage (Base64 fallback ditolak sesuai R17).');
+  }
+
   return {
     publicUrl: fallbackUrl,
-    storagePath: fileName,
+    signedUrl: fallbackUrl,
+    storagePath: `${bucketName}/${fileName}`,
     bucket: bucketName,
     width,
     height,
@@ -413,14 +499,163 @@ export async function uploadToSupabaseStorage(
   };
 }
 
+const realtimeSigMemoryCache = new Map<string, string>();
+const REALTIME_SIG_STORAGE_KEY = 'samara_realtime_sig_previews_v1';
+
+function loadSessionSigCache(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = sessionStorage.getItem(REALTIME_SIG_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function cacheRealtimeSignaturePreview(
+  pathOrKey: string,
+  dataUrlOrSignedUrl: string,
+  role: 'tenant' | 'owner' = 'tenant'
+): void {
+  if (!dataUrlOrSignedUrl || typeof dataUrlOrSignedUrl !== 'string') return;
+  const cleanKey = String(pathOrKey || '').trim();
+  if (cleanKey) {
+    realtimeSigMemoryCache.set(cleanKey, dataUrlOrSignedUrl);
+  }
+  if (dataUrlOrSignedUrl.startsWith('data:image/')) {
+    realtimeSigMemoryCache.set(`__latest_${role}_sig__`, dataUrlOrSignedUrl);
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      const current = loadSessionSigCache();
+      if (cleanKey) current[cleanKey] = dataUrlOrSignedUrl;
+      if (dataUrlOrSignedUrl.startsWith('data:image/')) {
+        current[`__latest_${role}_sig__`] = dataUrlOrSignedUrl;
+      }
+      // Keep storage bounded to recent 25 entries
+      const keys = Object.keys(current);
+      if (keys.length > 25) {
+        for (let i = 0; i < keys.length - 25; i++) {
+          if (!keys[i].startsWith('__latest_')) delete current[keys[i]];
+        }
+      }
+      sessionStorage.setItem(REALTIME_SIG_STORAGE_KEY, JSON.stringify(current));
+      window.dispatchEvent(
+        new CustomEvent('samara-signature-realtime-sync', {
+          detail: { key: cleanKey, previewUrl: dataUrlOrSignedUrl, role }
+        })
+      );
+    } catch {}
+  }
+}
+
+export function getRealtimeSignaturePreview(
+  pathOrUrl?: string,
+  role: 'tenant' | 'owner' = 'tenant'
+): string {
+  const raw = String(pathOrUrl || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('data:image/') || raw.startsWith('blob:')) return raw;
+
+  const memHit = realtimeSigMemoryCache.get(raw);
+  if (memHit) return memHit;
+
+  const sessionMap = loadSessionSigCache();
+  if (sessionMap[raw]) {
+    realtimeSigMemoryCache.set(raw, sessionMap[raw]);
+    return sessionMap[raw];
+  }
+
+  // If raw is a canonical storage path like signatures/tenant_... and we have the latest drawn signature in this session
+  if (role === 'tenant' && (raw.startsWith('signatures/') || raw.includes('tenant_'))) {
+    const latestTenant = realtimeSigMemoryCache.get('__latest_tenant_sig__') || sessionMap['__latest_tenant_sig__'];
+    if (latestTenant) return latestTenant;
+  }
+  if (role === 'owner' && (raw.startsWith('signatures/') || raw.includes('owner_'))) {
+    const latestOwner = realtimeSigMemoryCache.get('__latest_owner_sig__') || sessionMap['__latest_owner_sig__'];
+    if (latestOwner) return latestOwner;
+  }
+
+  return '';
+}
+
+/**
+ * Request a short-lived signed URL (<= 1 hour) from the server for a private storage path
+ */
+export async function resolveDocumentSignedUrl(pathOrUrl: string, orderId?: string): Promise<string> {
+  if (!pathOrUrl) return '';
+  const trimmed = pathOrUrl.trim();
+  if (trimmed.startsWith('data:image/') || trimmed.startsWith('blob:')) return trimmed;
+
+  // Check real-time in-memory / sessionStorage preview cache first for instant 0ms rendering
+  const cachedPreview = getRealtimeSignaturePreview(
+    trimmed,
+    trimmed.includes('owner_') ? 'owner' : 'tenant'
+  );
+  if (cachedPreview && cachedPreview.startsWith('data:image/')) {
+    return cachedPreview;
+  }
+
+  if (trimmed.startsWith('/api/signatures/')) return trimmed;
+
+  let normalizedPath = trimmed;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    // If it is already a signed URL with a token, return it directly
+    if (trimmed.includes('/storage/v1/object/sign/') && trimmed.includes('token=')) {
+      return trimmed;
+    }
+    // Extract bucket/path if it is a Supabase storage URL on a private bucket
+    const match = trimmed.match(/\/storage\/v1\/object\/(?:public|sign)\/(tenant-documents|payment-proof|contracts|signatures|maintenance)\/([^?]+)/);
+    if (!match) return trimmed;
+    normalizedPath = `${match[1]}/${decodeURIComponent(match[2])}`;
+  }
+
+  try {
+    const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+    const token = sessionData?.session?.access_token;
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const params = new URLSearchParams({ path: normalizedPath, expiresIn: '3600' });
+    if (orderId) params.set('order_id', orderId);
+
+    const res = await fetch(`/api/storage/signed-url?${params.toString()}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include'
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.signedUrl) {
+        realtimeSigMemoryCache.set(trimmed, json.signedUrl);
+        realtimeSigMemoryCache.set(normalizedPath, json.signedUrl);
+        return json.signedUrl;
+      }
+    }
+  } catch (err) {
+    console.warn('[StorageUploader] Failed resolving short-lived signed URL:', err);
+  }
+  if (cachedPreview) return cachedPreview;
+  return `/api/storage/signed-url?path=${encodeURIComponent(normalizedPath)}&redirect=1${orderId ? `&order_id=${encodeURIComponent(orderId)}` : ''}`;
+}
+
 /**
  * Specialized Digital Signature Uploader
- * Exports signature canvas directly to transparent PNG and stores in 'signatures' bucket.
+ * Exports signature canvas directly to transparent PNG and stores in 'signatures' bucket,
+ * while caching the exact drawn PNG data URL in real-time for instant rendering in UI & PDF.
  */
 export async function uploadSignatureCanvas(
   canvas: HTMLCanvasElement,
   identifier: string = 'sig'
 ): Promise<string> {
+  const instantDataUrl = canvas.toDataURL('image/png');
+  const role: 'tenant' | 'owner' = identifier.toLowerCase().includes('owner') ? 'owner' : 'tenant';
+  if (instantDataUrl) {
+    cacheRealtimeSignaturePreview(instantDataUrl, instantDataUrl, role);
+  }
+
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       async (blob) => {
@@ -433,9 +668,16 @@ export async function uploadSignatureCanvas(
           const result = await uploadToSupabaseStorage(
             blob,
             'signatures',
-            `tenant_${identifier}`,
+            `${role}_${identifier}`,
             { forcePNG: true, maxLongestSide: 800 }
           );
+          if (instantDataUrl) {
+            if (result.publicUrl) cacheRealtimeSignaturePreview(result.publicUrl, instantDataUrl, role);
+            if (result.storagePath) cacheRealtimeSignaturePreview(result.storagePath, instantDataUrl, role);
+          } else if (result.signedUrl) {
+            if (result.publicUrl) cacheRealtimeSignaturePreview(result.publicUrl, result.signedUrl, role);
+            if (result.storagePath) cacheRealtimeSignaturePreview(result.storagePath, result.signedUrl, role);
+          }
           resolve(result.publicUrl);
         } catch (err) {
           reject(err);

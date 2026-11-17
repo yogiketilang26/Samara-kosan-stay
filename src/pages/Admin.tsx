@@ -38,7 +38,18 @@ import { egressGuard } from '../lib/egressGuard';
 import { can, canManageRole, canAssignProperty, canAccessProperty, maskNik, UserRole } from '../lib/permissions';
 import { formatRupiah } from '../utils/formatCurrency';
 import { calculateLeaseRemaining, getRoomLeaseStatus } from '../utils/leaseDuration';
-import { calculateOccupancy, calculateTotalInflow, calculateTotalExpenses, calculateNOI, calculateGrossPipeline } from '../lib/financialMetrics';
+import {
+  calculateOccupancy,
+  calculateTotalInflow,
+  calculateTotalExpenses,
+  calculateNOI,
+  calculateGrossPipeline,
+  buildUniformKosanFinancialReport,
+  getSharedFinanceFilterState,
+  setSharedFinanceFilterState,
+  FinancialReportPeriod
+} from '../lib/financialMetrics';
+import { KosanFinancialReportSuite } from '../components/finance/KosanFinancialReportSuite';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
 import { 
   Building2, BedDouble, Receipt, Ticket, ShieldAlert, CheckCircle, AlertCircle, XCircle,
@@ -1277,13 +1288,72 @@ export default function Admin({}: AdminProps) {
     );
   };
 
+  const [sentEmailsLog, setSentEmailsLog] = useState<any[]>([]);
+  const [loadingSentEmails, setLoadingSentEmails] = useState<boolean>(false);
+  const [retryingEmailId, setRetryingEmailId] = useState<number | string | null>(null);
+
+  const fetchSentEmailsLog = async () => {
+    setLoadingSentEmails(true);
+    try {
+      const headers = await getAuthHeaders();
+      const resp = await fetch('/api/admin/emails', {
+        headers,
+        credentials: 'include'
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (Array.isArray(json.data)) {
+          setSentEmailsLog(json.data);
+        }
+      }
+    } catch {} finally {
+      setLoadingSentEmails(false);
+    }
+  };
+
+  const handleRetryFailedEmail = async (emailRowId: number | string) => {
+    setRetryingEmailId(emailRowId);
+    try {
+      const headers = await getAuthHeaders();
+      const resp = await fetch('/api/admin/emails/retry', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ id: emailRowId })
+      });
+      const data = await resp.json();
+      setEmailResult({
+        success: Boolean(data.success && data.emailSent !== false),
+        message: data.message || (data.success ? 'Email berhasil dikirim ulang.' : 'Gagal mengirim ulang email.'),
+        details: data.details || data
+      });
+      await fetchSentEmailsLog();
+    } catch (err: any) {
+      setEmailResult({
+        success: false,
+        message: err?.message || 'Gagal mengirim ulang email.',
+        details: err
+      });
+    } finally {
+      setRetryingEmailId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'email_integration' && !isAnakOwner) {
+      fetchSentEmailsLog();
+    }
+  }, [activeTab, isAnakOwner]);
+
   const handleSendTestEmail = async () => {
     setEmailSending(true);
     setEmailResult(null);
     try {
+      const headers = await getAuthHeaders();
       const response = await fetch('/api/email/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
+        credentials: 'include',
         body: JSON.stringify({
           to: testEmailTo,
           subject: testEmailSubject,
@@ -1293,16 +1363,19 @@ export default function Admin({}: AdminProps) {
         })
       });
       const data = await response.json();
+      // R20.1: Never display "email terkirim" if emailSent === false or status === 'failed' (#MS42207)
+      const isActuallySent = Boolean(data.success === true && data.emailSent !== false && data.status !== 'failed');
       setEmailResult({
-        success: data.success,
+        success: isActuallySent,
         message: data.message,
         details: data.details || data.error || data
       });
-      if (data.success) {
+      if (isActuallySent) {
         database.logActivity("System", "EMAIL_TEST_SUCCESS", `Sukses mengirim email tes MailerSend ke ${testEmailTo}`);
       } else {
         database.logActivity("System", "EMAIL_TEST_FAILED", `Gagal mengirim email tes ke ${testEmailTo}: ${data.message}`);
       }
+      fetchSentEmailsLog();
     } catch (err: any) {
       setEmailResult({
         success: false,
@@ -3116,12 +3189,43 @@ export default function Admin({}: AdminProps) {
     );
   };
 
+  // Synchronized filter state for Uniform Kosan Financial Reporting (SSOT across Super Admin, Owner, Anak Owner, Admin & Finance)
+  const initialSharedFilter = getSharedFinanceFilterState();
+  const [financeSelectedPropertyId, setFinanceSelectedPropertyId] = useState<string>(initialSharedFilter.propertyId);
+  const [financeSelectedPeriod, setFinanceSelectedPeriod] = useState<FinancialReportPeriod>(initialSharedFilter.period);
+
+  useEffect(() => {
+    const onFilterSync = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail) {
+        if (detail.propertyId && detail.propertyId !== financeSelectedPropertyId) {
+          setFinanceSelectedPropertyId(detail.propertyId);
+        }
+        if (detail.period && detail.period !== financeSelectedPeriod) {
+          setFinanceSelectedPeriod(detail.period);
+        }
+      }
+    };
+    window.addEventListener('samara-finance-filter-sync', onFilterSync);
+    return () => window.removeEventListener('samara-finance-filter-sync', onFilterSync);
+  }, [financeSelectedPropertyId, financeSelectedPeriod]);
+
+  const handleSelectFinanceProperty = (propId: string) => {
+    setFinanceSelectedPropertyId(propId);
+    setSharedFinanceFilterState({ propertyId: propId });
+  };
+
+  const handleSelectFinancePeriod = (period: FinancialReportPeriod) => {
+    setFinanceSelectedPeriod(period);
+    setSharedFinanceFilterState({ period });
+  };
+
   // G9: Server-side dashboard summary RPC integration (debounced to prevent burst calls)
   const [serverDashboardSummary, setServerDashboardSummary] = useState<any | null>(null);
   useEffect(() => {
     let active = true;
     const timer = setTimeout(() => {
-      database.fetchDashboardSummary({ property_id: 'all' }).then((res) => {
+      database.fetchDashboardSummary({ property_id: financeSelectedPropertyId }).then((res) => {
         if (active && res?.summary) {
           setServerDashboardSummary(res.summary);
         }
@@ -3131,21 +3235,52 @@ export default function Admin({}: AdminProps) {
       active = false;
       clearTimeout(timer);
     };
-  }, [transactions.length, payments.length, bookings.length, rooms.length]);
+  }, [financeSelectedPropertyId, transactions.length, payments.length, bookings.length, rooms.length]);
 
-  // Aggregated pricing math (prefers server RPC summary when available)
-  const occupancyMath = calculateOccupancy(rooms);
-  const totalOccupied = serverDashboardSummary?.occupancy?.occupiedRooms ?? occupancyMath.occupiedRooms;
-  const occupancyRate = serverDashboardSummary?.occupancy?.occupancyRate ?? occupancyMath.ratePercentage;
-  
-  // Real time direct calculated PBJT values
-  const rawRevenue = serverDashboardSummary?.grossPipeline ?? calculateGrossPipeline(bookings.filter(b=>b.status === 'approved'));
-  const totalPBJT = Math.round(rawRevenue * 0.10); // 10% Local tax
+  // SINGLE SOURCE OF TRUTH (SSOT): 100% Identical Calculation Engine across Admin, Super Admin, Anak Owner, Finance & Owner Portal
+  const uniformReport = useMemo(() => {
+    return buildUniformKosanFinancialReport({
+      properties,
+      rooms,
+      tenants: tenantsList,
+      bookings,
+      payments,
+      transactions,
+      accounts,
+      clearingList: clearingTransactions,
+      maintenanceList: maintenanceData,
+      surveys,
+      selectedPropertyId: financeSelectedPropertyId,
+      selectedPeriod: financeSelectedPeriod
+    });
+  }, [
+    properties,
+    rooms,
+    tenantsList,
+    bookings,
+    payments,
+    transactions,
+    accounts,
+    clearingTransactions,
+    maintenanceData,
+    surveys,
+    financeSelectedPropertyId,
+    financeSelectedPeriod
+  ]);
 
-  // Double-entry finance aggregations
-  const totalInflow = serverDashboardSummary?.totalInflow ?? calculateTotalInflow(transactions, payments);
-  const totalOutflow = serverDashboardSummary?.totalExpenses ?? calculateTotalExpenses(transactions);
-  const netEarnings = serverDashboardSummary?.noi ?? calculateNOI(totalInflow, totalOutflow);
+  const totalOccupied = uniformReport.occupancy.occupiedRooms;
+  const occupancyRate = uniformReport.occupancy.ratePercentage;
+  const rawRevenue = uniformReport.revenue.contractPipeline;
+  const totalInflow = uniformReport.revenue.effectiveGrossRevenue;
+  const totalOutflow = uniformReport.expenses.totalExpenses;
+  const netEarnings = uniformReport.profitability.netOperatingIncome;
+  const totalPBJT = uniformReport.liabilitiesAndTax.estimatedPbjtTax10;
+
+  const activeViewerRoleLabel = useMemo(() => {
+    if (isAnakOwner || simulatedRole === 'anak_owner') return 'Anak Owner (Operasional & Keuangan)';
+    if (isSuper) return 'Super Admin';
+    return user?.role ? String(user.role).toUpperCase() : 'Admin Operasional & Finance';
+  }, [isAnakOwner, simulatedRole, isSuper, user?.role]);
 
   const filteredPayments = payments.filter(p => {
     const matchesSearch = p.tenant_name.toLowerCase().includes(paymentSearch.toLowerCase()) || p.id.toLowerCase().includes(paymentSearch.toLowerCase());
@@ -3155,9 +3290,9 @@ export default function Admin({}: AdminProps) {
 
   // Recharts parameters parser
   const chartData = [
-    { name: 'KOS PUTRI', Terisi: rooms.filter(r=>r.status==='occupied' && properties.find(p=>p.id===r.property_id)?.type==='putri').length },
-    { name: 'KOS PUTRA', Terisi: rooms.filter(r=>r.status==='occupied' && properties.find(p=>p.id===r.property_id)?.type==='putra').length },
-    { name: 'KOS CAMPUR', Terisi: rooms.filter(r=>r.status==='occupied' && properties.find(p=>p.id===r.property_id)?.type==='campur').length }
+    { name: 'KOS PUTRI', Terisi: uniformReport.occupancy.genderBreakdown.putriOccupied },
+    { name: 'KOS PUTRA', Terisi: uniformReport.occupancy.genderBreakdown.putraOccupied },
+    { name: 'KOS CAMPUR', Terisi: uniformReport.occupancy.genderBreakdown.campurOccupied }
   ];
 
   if (loading) {
@@ -3225,66 +3360,27 @@ export default function Admin({}: AdminProps) {
         
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            <div className="border-b border-[#F1F5F9] pb-3 text-left">
-              <h2 className="text-lg font-extrabold font-display text-[#3A444D] uppercase tracking-tight">Kinerja Finansial & Hunian</h2>
-              <p className="text-xs text-[#64748B] mt-0.5">Analisis occupancy kamar dan rasio penarikan pajak PBJT 10% secara langsung.</p>
-            </div>
-
-            {/* Quick KPI stats row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Okupansi Kamar</span>
-                <span className="text-xl sm:text-2xl font-extrabold text-[#0D9488] font-mono tabular-nums block">{occupancyRate}%</span>
-                <span className="text-[11px] text-[#64748B] font-sans block truncate">{totalOccupied} terisi dari {rooms.length} unit</span>
-              </div>
-
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Sewa Bulanan Aktif</span>
-                <span className="text-xl sm:text-2xl font-extrabold text-[#3A444D] font-mono tabular-nums block">{bookings.length} kontrak</span>
-                <span className="text-[11px] text-[#64748B] font-sans block truncate">Approved settlement</span>
-              </div>
-
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Total Pendapatan (Inflow)</span>
-                <span className="text-base sm:text-lg font-extrabold text-[#0D9488] font-mono tabular-nums break-words block leading-snug select-all">{formatRupiah(totalInflow > 0 ? totalInflow : rawRevenue)}</span>
-                <span className="text-[10px] sm:text-[11px] text-[#64748B] font-sans block break-words leading-snug">
-                  {totalInflow > 0 ? `Kas Real-Time (Kontrak: ${formatRupiah(rawRevenue)})` : 'Sewa terakumulasi'}
-                </span>
-              </div>
-
-              <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 rounded-[20px] text-center space-y-1 shadow-xs min-w-0 overflow-hidden flex flex-col justify-between">
-                <span className="text-[10px] font-bold text-[#64748B] uppercase block tracking-wider font-mono truncate">Pajak PBJT (10%)</span>
-                <span className="text-base sm:text-lg font-extrabold text-amber-600 font-mono tabular-nums break-words block leading-snug select-all">{formatRupiah(Math.round((totalInflow > 0 ? totalInflow : rawRevenue) * 0.10))}</span>
-                <span className="text-[10px] sm:text-[11px] text-[#64748B] font-sans block truncate">Kewajiban pajak daerah (10%)</span>
-              </div>
-            </div>
-
-            {/* Occupants Charting visuals */}
-            <div className="bg-[#F8FAFC] p-5 rounded-[20px] border border-[#E2E8F0] space-y-3 text-left">
-              <h4 className="text-xs font-bold uppercase text-[#3A444D] tracking-wider font-sans">Okupansi Kamar Berdasarkan Gender</h4>
-              <div className="h-48 text-[11px]">
-                <ResponsiveContainer width="100%" height={180} minWidth={0} minHeight={0}>
-                  <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                    <XAxis dataKey="name" stroke="#64748B" />
-                    <YAxis stroke="#64748B" />
-                    <Tooltip contentStyle={{ backgroundColor: '#fff', borderColor: '#E2E8F0', borderRadius: '12px' }} />
-                    <Bar dataKey="Terisi" fill="#0D9488" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Dashboard Keuangan: Ringkasan Arus Kas Bulanan (Pemasukan vs Pengeluaran) */}
-            <MonthlyCashflowDashboard
-              transactions={transactions}
-              payments={payments}
-              bookings={bookings}
+            <KosanFinancialReportSuite
+              report={uniformReport}
               properties={properties}
-              selectedPropertyId="all"
-              grossRevenue={totalInflow > 0 ? totalInflow : rawRevenue}
-              totalExpenses={totalOutflow}
-              theme="light"
+              selectedPropertyId={financeSelectedPropertyId}
+              onSelectPropertyId={handleSelectFinanceProperty}
+              selectedPeriod={financeSelectedPeriod}
+              onSelectPeriod={handleSelectFinancePeriod}
+              onRefresh={async () => {
+                await Promise.all([
+                  refetchProperties(),
+                  refetchRooms(),
+                  refetchTenants(),
+                  refetchBookings(),
+                  refetchTransactions(),
+                  refetchPayments(),
+                  refetchAccounts(),
+                  refetchClearingTransactions()
+                ]);
+              }}
+              viewerRoleLabel={activeViewerRoleLabel}
+              defaultSubTab="ringkasan"
             />
 
             {/* Sisa Durasi Sewa & 24h Auto-Release Engine Section */}
@@ -3968,16 +4064,28 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
               <div className="space-y-6 animate-fade-in">
                 {/* SAMARA_FINANCE_ERP_START */}
 
-                {/* Dashboard Keuangan: Ringkasan Arus Kas Bulanan (Pemasukan vs Pengeluaran) */}
-                <MonthlyCashflowDashboard
-                  transactions={transactions}
-                  payments={payments}
-                  bookings={bookings}
+                {/* Laporan Keuangan Standar Aplikasi Kosan Terpadu (SSOT - Identik di Semua Role) */}
+                <KosanFinancialReportSuite
+                  report={uniformReport}
                   properties={properties}
-                  selectedPropertyId="all"
-                  grossRevenue={totalInflow > 0 ? totalInflow : rawRevenue}
-                  totalExpenses={totalOutflow}
-                  theme="light"
+                  selectedPropertyId={financeSelectedPropertyId}
+                  onSelectPropertyId={handleSelectFinanceProperty}
+                  selectedPeriod={financeSelectedPeriod}
+                  onSelectPeriod={handleSelectFinancePeriod}
+                  onRefresh={async () => {
+                    await Promise.all([
+                      refetchProperties(),
+                      refetchRooms(),
+                      refetchTenants(),
+                      refetchBookings(),
+                      refetchTransactions(),
+                      refetchPayments(),
+                      refetchAccounts(),
+                      refetchClearingTransactions()
+                    ]);
+                  }}
+                  viewerRoleLabel={activeViewerRoleLabel}
+                  defaultSubTab="laba_rugi"
                 />
                 
                 {/* MailerSend Email Debugger and Diagnostics Console */}
@@ -4119,39 +4227,39 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
                            <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
                              <TrendingUp size={10} className="text-emerald-400 shrink-0" />
-                             <span className="truncate">Total Pendapatan (Inflow)</span>
+                             <span className="truncate">Total Pendapatan (Omset Sewa)</span>
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-[#10b981] font-mono tabular-nums break-words">{formatRupiah(totalInflow)}</div>
-                           <p className="text-[9px] text-slate-500 truncate">Omset hunian real-time & jaminan DP survey</p>
+                           <div className="text-base md:text-lg font-extrabold text-[#10b981] font-mono tabular-nums break-words">{formatRupiah(uniformReport.revenue.effectiveGrossRevenue)}</div>
+                           <p className="text-[9px] text-slate-500 truncate">Kas Masuk Riil: {formatRupiah(uniformReport.revenue.realizedInflow)}</p>
                          </div>
  
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
                            <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
                              <TrendingDown size={10} className="text-red-400 shrink-0" />
-                             <span className="truncate">Biaya Operasional (Outflow)</span>
+                             <span className="truncate">Biaya Operasional (OPEX)</span>
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-[#ef4444] font-mono tabular-nums break-words">{formatRupiah(totalOutflow)}</div>
-                           <p className="text-[9px] text-slate-500 truncate">Beban pemeliharaan, utilitas & gaji staff</p>
+                           <div className="text-base md:text-lg font-extrabold text-[#ef4444] font-mono tabular-nums break-words">{formatRupiah(uniformReport.expenses.totalExpenses)}</div>
+                           <p className="text-[9px] text-slate-500 truncate">Rasio OER: {uniformReport.profitability.operatingExpenseRatioPercent}% dari omset</p>
                          </div>
  
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
                            <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
                              <Coins size={10} className="text-amber-400 shrink-0" />
-                             <span className="truncate">Net Profit Laba Bersih</span>
+                             <span className="truncate">Laba Bersih Operasional (NOI)</span>
                            </span>
-                           <div className="text-base md:text-lg font-extrabold text-[#0D9488] font-bold font-mono tabular-nums break-words">{formatRupiah(netEarnings)}</div>
-                           <p className="text-[9px] text-slate-500 font-sans truncate">Marjin Laba: {totalInflow ? Math.round((netEarnings / totalInflow)*100) : 0}%</p>
+                           <div className="text-base md:text-lg font-extrabold text-[#0D9488] font-bold font-mono tabular-nums break-words">{formatRupiah(uniformReport.profitability.netOperatingIncome)}</div>
+                           <p className="text-[9px] text-slate-500 font-sans truncate">Marjin Laba (NOI): {uniformReport.profitability.noiMarginPercent}%</p>
                          </div>
  
                          <div className="bg-slate-950/65 p-4 rounded-2xl border border-slate-800/80 space-y-1 min-w-0 overflow-hidden">
                            <span className="text-[9px] text-[#64748B] font-bold uppercase font-mono flex items-center gap-1 min-w-0">
                              <Percent size={10} className="text-sky-400 shrink-0" />
-                             <span className="truncate">Kewajiban Pajak PBJT (10%)</span>
+                             <span className="truncate">Estimasi Pajak PBJT (10%)</span>
                            </span>
                            <div className="text-base md:text-lg font-extrabold text-sky-400 font-mono tabular-nums break-words">
-                             {formatRupiah(accounts.find(a=>a.id===2100)?.balance || 0)}
+                             {formatRupiah(uniformReport.liabilitiesAndTax.estimatedPbjtTax10)}
                            </div>
-                           <p className="text-[9px] text-slate-500 font-sans truncate">Disisihkan otomatis dari billing lunas</p>
+                           <p className="text-[9px] text-slate-500 font-sans truncate">Titipan Deposit (2100): {formatRupiah(uniformReport.liabilitiesAndTax.securityDepositHeld2100)}</p>
                          </div>
                        </div>
                      </div>
@@ -4176,15 +4284,15 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                                setAiInsightText(`###  REPORT EXECUTIVE INSIGHT - SAMARA KOS ERP\n` +
                                  `**Diproduksi Real-time Pada:** ${new Date().toLocaleString()}\n\n` +
                                  `#### 1. Analisis Profitabilitas & Cash Flow\n` +
-                                 `- **Total Arus Kas Masuk (Inflow):** ${formatRupiah(totalInflow)} menunjukkan sirkulasi keuangan yang sangat sehat.\n` +
-                                 `- **Efisiensi Pengeluaran:** Rasio biaya terhadap omset saat ini berkisar **${totalInflow ? Math.round((totalOutflow/totalInflow)*100) : 0}%**, berada dalam batas ideal standar industri (maksimal 35%).\n` +
-                                 `- **Laba Bersih Operasional:** Bisnis mencatatkan laba bersih sebesar **${formatRupiah(netEarnings)}**.\n\n` +
+                                 `- **Total Pendapatan Sewa Efektif:** ${formatRupiah(uniformReport.revenue.effectiveGrossRevenue)} (Kas Masuk Riil: ${formatRupiah(uniformReport.revenue.realizedInflow)}).\n` +
+                                 `- **Efisiensi Pengeluaran (OER):** Rasio biaya terhadap omset saat ini berkisar **${uniformReport.profitability.operatingExpenseRatioPercent}%**.\n` +
+                                 `- **Laba Bersih Operasional (NOI):** Bisnis mencatatkan laba bersih sebesar **${formatRupiah(uniformReport.profitability.netOperatingIncome)}** (${uniformReport.profitability.noiMarginPercent}%).\n\n` +
                                  `#### 2. Deteksi Anomali & Kontrol Anggaran (Peringatan Deviasi)\n` +
                                  `${exceededBudget ? `- [!] **PELANGGARAN ANGGARAN:** Beban akun **"${exceededBudget.category}"** saat ini telah menyentuh **${formatRupiah(exceededBudget.spent)}**, melampaui batas toleransi anggaran sebesar **${formatRupiah(exceededBudget.limit)}** (Varian Negatif: **-${Math.round((exceededBudget.spent - exceededBudget.limit)/exceededBudget.limit*100)}%**).\n` : `- [OK] **KONTROL ANGGARAN:** Semua pos operasional berjalan tertib dan tidak ada penyimpangan batas anggaran.\n`}` +
                                  `${lowStock.length > 0 ? `-  **PERINGATAN RANTAI PASOK:** Ditemukan item inventaris **${lowStock.map(l => l.name).join(', ')}** yang berada di bawah tingkat persediaan minimum. Segera buat purchase order baru untuk menghindari kekosongan stock.\n` : `- [OK] **STATUS INVENTARIS:** Tingkat persediaan logistik kos aman.\n`}\n` +
                                  `#### 3. Rekomendasi Finansial Berbasis Keputusan Bisnis\n` +
-                                 `1. **Restrukturisasi Promosi:** Disarankan membatasi diskon kupon langsung karena pos pemasaran melampaui anggaran perencanaan.\n` +
-                                 `2. **Mitigasi Pajak:** Saldo Utang Pajak Daerah PBJT DKI sebesar **${formatRupiah(accounts.find(a=>a.id===2100)?.balance || 0)}** harus segera disetorkan ke kas daerah sebelum tanggal 15 bulan depan guna menghindari sanksi administratif denda 2% per bulan.`
+                                 `1. **Pengelolaan Dana Titipan Deposit (COA 2100):** Pastikan dana deposit penghuni sebesar **${formatRupiah(uniformReport.liabilitiesAndTax.securityDepositHeld2100)}** tetap dipisahkan dari pendapatan sewa operasional.\n` +
+                                 `2. **Mitigasi Pajak Daerah:** Estimasi kewajiban Pajak Daerah Kos (PBJT 10%) sebesar **${formatRupiah(uniformReport.liabilitiesAndTax.estimatedPbjtTax10)}** dan PPh Final UMKM 0,5% sebesar **${formatRupiah(uniformReport.liabilitiesAndTax.estimatedPphFinal05)}** disarankan disisihkan sebelum distribusi dividen.`
                                );
                                database.logActivity("System Finance", "AI_ANALYTICS", "Menghasilkan ringkasan analitik keuangan AI");
                              }, 1200);
@@ -4226,31 +4334,33 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                              <span className="text-[10px] font-bold text-slate-600 font-mono">Rp Inflow</span>
                            </div>
                            <div className="flex flex-col items-center gap-2">
-                             <div className="w-16 bg-[#ef4444] rounded-t-xl transition-all duration-500" style={{ height: `${totalInflow ? (totalOutflow/totalInflow)*130 : 5}px` }}></div>
+                             <div className="w-16 bg-[#ef4444] rounded-t-xl transition-all duration-500" style={{ height: `${totalInflow ? Math.max(5, (totalOutflow/totalInflow)*130) : 5}px` }}></div>
                              <span className="text-[10px] font-bold text-slate-600 font-mono">Rp Outflow</span>
                            </div>
                            <div className="flex flex-col items-center gap-2">
-                             <div className="w-16 bg-amber-500 rounded-t-xl transition-all duration-500" style={{ height: `${totalInflow ? (netEarnings/totalInflow)*130 : 5}px` }}></div>
+                             <div className="w-16 bg-amber-500 rounded-t-xl transition-all duration-500" style={{ height: `${totalInflow ? Math.max(5, (netEarnings/totalInflow)*130) : 5}px` }}></div>
                              <span className="text-[10px] font-bold text-slate-600 font-mono">Rp Net Laba</span>
                            </div>
                          </div>
                        </div>
  
                        <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-xs space-y-4">
-                         <h4 className="text-xs font-bold text-slate-800 font-display">Kinerja Tingkat Okupansi Hunian</h4>
+                         <h4 className="text-xs font-bold text-slate-800 font-display">Kinerja Tingkat Okupansi Hunian (Real-Time SSOT)</h4>
                          <div className="flex items-center justify-between py-6">
                            <div className="space-y-1">
-                             <div className="text-3xl font-black text-slate-800 font-display">85.4%</div>
-                             <p className="text-[10px] text-[#64748B] font-medium font-sans">12 dari 14 Kamar Terisi Aktif</p>
-                             <span className="inline-block bg-emerald-50 text-brand-green text-[9px] font-bold px-2 py-0.5 rounded-full mt-1 font-sans">Okupansi Sangat Tinggi</span>
+                             <div className="text-3xl font-black text-slate-800 font-display">{uniformReport.occupancy.ratePercentage}%</div>
+                             <p className="text-[10px] text-[#64748B] font-medium font-sans">{uniformReport.occupancy.occupiedRooms} dari {uniformReport.occupancy.totalRooms} Kamar Terisi Aktif</p>
+                             <span className="inline-block bg-emerald-50 text-brand-green text-[9px] font-bold px-2 py-0.5 rounded-full mt-1 font-sans">
+                               Tersedia: {uniformReport.occupancy.availableRooms} Kamar • Hold: {uniformReport.occupancy.reservedRooms}
+                             </span>
                            </div>
                            <div className="relative w-24 h-24 flex items-center justify-center">
                              {/* Radial gauge representation */}
                              <svg className="w-full h-full transform -rotate-90">
                                <circle cx="48" cy="48" r="38" stroke="#f1f5f9" strokeWidth="8" fill="transparent" />
-                               <circle cx="48" cy="48" r="38" stroke="#10b981" strokeWidth="8" fill="transparent" strokeDasharray="238" strokeDashoffset="35" />
+                               <circle cx="48" cy="48" r="38" stroke="#10b981" strokeWidth="8" fill="transparent" strokeDasharray="238" strokeDashoffset={String(Math.round(238 * (1 - uniformReport.occupancy.ratePercentage / 100)))} />
                              </svg>
-                             <span className="absolute text-xs font-black text-slate-800 font-mono">85%</span>
+                             <span className="absolute text-xs font-black text-slate-800 font-mono">{uniformReport.occupancy.ratePercentage}%</span>
                            </div>
                          </div>
                        </div>
@@ -6210,26 +6320,26 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
  
                        <div className="p-4 bg-slate-900 text-white rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                          <div className="space-y-1">
-                           <span className="text-[9px] text-[#64748B] font-bold font-mono block">SALDO UTANG PAJAK DAERAH PBJT (KODE AKUN 2100)</span>
+                           <span className="text-[9px] text-[#64748B] font-bold font-mono block">ESTIMASI KEWAJIBAN PAJAK DAERAH KOS PBJT (10% DARI OMSET SEWA)</span>
                            <div className="text-xl font-black text-amber-400 font-mono">
-                             {formatRupiah(accounts.find(a=>a.id===2100)?.balance || 0)}
+                             {formatRupiah(uniformReport.liabilitiesAndTax.estimatedPbjtTax10)}
                            </div>
-                           <p className="text-[9px] text-[#64748B] font-sans">Penyetoran wajib dilakukan paling lambat tanggal 15 setiap bulannya.</p>
+                           <p className="text-[9px] text-[#64748B] font-sans">
+                             Terpisah dari Dana Titipan Deposit Penghuni (COA 2100: {formatRupiah(uniformReport.liabilitiesAndTax.securityDepositHeld2100)}). Penyetoran tanggal 15 setiap bulan.
+                           </p>
                          </div>
                          <button
                            onClick={async () => {
-                             const taxBalance = accounts.find(a=>a.id===2100)?.balance || 0;
+                             const taxBalance = uniformReport.liabilitiesAndTax.estimatedPbjtTax10;
                              if (taxBalance <= 0) {
                                alert("Bagus! Tidak ada kewajiban pajak terutang saat ini.");
                                return;
                              }
-                             if (confirm(`Setorkan pajak PBJT senilai ${formatRupiah(taxBalance)} ke Kas Daerah melalui Surat Setoran Pajak Daerah (SSPD)? Ini akan mendebit akun Utang Pajak dan mengkredit Kas Mandiri.`)) {
+                             if (confirm(`Catat penyetoran pajak PBJT senilai ${formatRupiah(taxBalance)} ke Kas Daerah melalui Surat Setoran Pajak Daerah (SSPD)?`)) {
                                try {
-                                 // Debit Utang Pajak (2100), Credit Kas/Bank (1010)
-                                 await database.recordFinancialReclassification(2100, 1010, taxBalance, "Penyetoran SSPD Pajak PBJT Daerah 10% Masa Pajak Juni 2026");
+                                 await database.recordFinancialExpense(5400, 1010, taxBalance, "Penyetoran SSPD Pajak PBJT Daerah 10%", "Pajak & Retribusi Daerah");
                                  database.logActivity("System Finance", "PAY_TAX_PBJT", `Penyetoran pajak daerah Rp ${taxBalance}`);
-                                 alert("Sukses! Pajak daerah PBJT berhasil disetorkan dan Jurnal double-entry penyesuaian pajak ter-posting.");
-                                 
+                                 alert("Sukses! Pajak daerah PBJT berhasil dicatat dan Jurnal double-entry ter-posting.");
                                } catch(err: any) {
                                  alert("Gagal menyetorkan pajak: " + err.message);
                                }
@@ -8180,7 +8290,7 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       : 'bg-red-500/10 border-red-500/20 text-red-400'
                   }`}>
                     <p className="font-extrabold uppercase font-mono tracking-wider">
-                      {emailResult.success ? '[OK] Sukses Terkirim' : '[X] Gagal Mengirim'}
+                      {emailResult.success ? '[OK] Sukses Terkirim' : '[X] Gagal Mengirim (Tercatat FAILED di Database)'}
                     </p>
                     <p className="font-sans leading-relaxed text-[#3A444D]">{emailResult.message}</p>
                     {emailResult.details && (
@@ -8196,6 +8306,89 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
 
               </div>
 
+            </div>
+
+            {/* R20.1: Daftar Log Pengiriman Email (sent_emails) & Tombol Kirim Ulang (Retry) */}
+            <div className="bg-slate-900 border border-slate-805 p-5 rounded-3xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-305 uppercase tracking-wider font-mono flex items-center gap-2">
+                    <Mail size={13} className="text-[#0D9488]" />
+                    Riwayat Pengiriman Email (`sent_emails`) & Antrean Kirim Ulang
+                  </h3>
+                  <p className="text-[10px] text-[#64748B] mt-0.5">
+                    Email yang gagal (termasuk #MS42207 domain belum terverifikasi) dicatat sebagai <code className="font-mono text-rose-400">failed</code> dan dapat dikirim ulang kapan saja.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchSentEmailsLog}
+                  disabled={loadingSentEmails}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-[10px] font-bold flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+                >
+                  <RotateCw size={11} className={loadingSentEmails ? 'animate-spin' : ''} />
+                  Muat Ulang Log
+                </button>
+              </div>
+
+              {sentEmailsLog.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4 text-center font-mono">Belum ada riwayat email di tabel sent_emails.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-[9px] uppercase font-mono text-slate-400">
+                        <th className="py-2 pr-3">Waktu</th>
+                        <th className="py-2 px-3">Penerima</th>
+                        <th className="py-2 px-3">Subjek</th>
+                        <th className="py-2 px-3">Status</th>
+                        <th className="py-2 px-3">Alasan / Error</th>
+                        <th className="py-2 pl-3 text-right">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {sentEmailsLog.slice(0, 25).map((item: any) => {
+                        const isFailed = item.status === 'failed';
+                        const isRetrying = retryingEmailId === item.id;
+                        return (
+                          <tr key={item.id} className="hover:bg-slate-800/30">
+                            <td className="py-2.5 pr-3 font-mono text-[10px] text-slate-400 whitespace-nowrap">
+                              {item.created_at ? new Date(item.created_at).toLocaleString('id-ID') : '-'}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-slate-200">{item.recipient_email}</td>
+                            <td className="py-2.5 px-3 text-slate-300 max-w-[220px] truncate">{item.subject}</td>
+                            <td className="py-2.5 px-3">
+                              <span className={`px-2 py-0.5 rounded-md text-[9px] font-mono font-bold uppercase border ${
+                                isFailed
+                                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                              }`}>
+                                {item.status}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-[10px] text-rose-300 max-w-[260px] truncate font-mono" title={item.error_message || ''}>
+                              {item.error_message || '-'}
+                            </td>
+                            <td className="py-2.5 pl-3 text-right whitespace-nowrap">
+                              {isFailed && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRetryFailedEmail(item.id)}
+                                  disabled={isRetrying}
+                                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-extrabold rounded-lg text-[10px] inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  <RotateCw size={10} className={isRetrying ? 'animate-spin' : ''} />
+                                  {isRetrying ? 'Mengirim...' : 'Kirim Ulang'}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}

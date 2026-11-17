@@ -247,6 +247,18 @@ export const RoomSelectionList: React.FC<RoomSelectionListProps> = ({
           )}
         </div>
 
+        {/* R21(a): Airbnb Cross-Platform Double-Booking Mitigation Banner */}
+        <div
+          data-testid="airbnb-manual-occupied-banner"
+          className="mt-3.5 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5 flex items-start gap-2.5 text-left"
+        >
+          <AlertCircle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-[11px] text-amber-900 leading-relaxed">
+            <span className="font-extrabold uppercase tracking-wide">Perhatian Operasional Airbnb: </span>
+            <strong className="font-bold">Pesanan dari Airbnb harus segera ditandai Terisi</strong> secara manual pada daftar kamar di bawah ini untuk mencegah bentrok pesanan (double-booking) dengan transaksi Midtrans.
+          </div>
+        </div>
+
         {/* Status Breakdown Chips (Clickable as fast filters) */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-3.5">
           {/* Total Units */}

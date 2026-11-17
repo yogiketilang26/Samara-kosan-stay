@@ -1,3 +1,5 @@
+import { getRealtimeSignaturePreview, resolveDocumentSignedUrl } from './storageUploader';
+
 export function compressImage(file: File, maxW: number = 640, maxH: number = 480, quality: number = 0.5): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -92,40 +94,149 @@ export function generateOwnerStampPngDataUrl(): string {
 }
 
 /**
- * Convert any SVG Data URL or SVG string into a clean PNG Base64 Data URL for email and PDF compatibility
+ * Convert any signature source (real-time cached PNG Data URL, private storage path `signatures/...`,
+ * signed HTTP URL, or SVG string) into a clean PNG Base64 Data URL for PDF & Email compatibility.
+ *
+ * CRITICAL: When options.isTenant === true, NEVER fall back to `generateOwnerStampPngDataUrl()`
+ * ("SAMARA STAY OWNER") so the tenant's box never displays the Owner's stamp.
  */
-export function ensurePngDataUrl(input: string, defaultWidth = 240, defaultHeight = 90): Promise<string> {
-  return new Promise((resolve) => {
-    if (!input) {
-      resolve(generateOwnerStampPngDataUrl());
-      return;
+export async function ensurePngDataUrl(
+  input: string,
+  defaultWidth = 240,
+  defaultHeight = 90,
+  options?: { isTenant?: boolean; orderId?: string }
+): Promise<string> {
+  const isTenant = Boolean(options?.isTenant);
+  const role: 'tenant' | 'owner' = isTenant ? 'tenant' : 'owner';
+  const raw = String(input || '').trim();
+
+  if (!raw) {
+    const fallbackCached = getRealtimeSignaturePreview('', role);
+    if (fallbackCached && fallbackCached.startsWith('data:image/')) {
+      return fallbackCached;
     }
-    if (input.startsWith('data:image/png') || input.startsWith('data:image/jpeg') || input.startsWith('data:image/webp')) {
-      resolve(input);
-      return;
-    }
-    if (typeof document === 'undefined') {
-      resolve(input);
-      return;
+    return isTenant ? '' : generateOwnerStampPngDataUrl();
+  }
+
+  // 1. Check real-time in-memory / sessionStorage PNG Data URL cache first (0ms, exact canvas pixels)
+  const realtimeCached = getRealtimeSignaturePreview(raw, role);
+  if (realtimeCached && (realtimeCached.startsWith('data:image/png') || realtimeCached.startsWith('data:image/jpeg') || realtimeCached.startsWith('data:image/webp'))) {
+    return realtimeCached;
+  }
+
+  // 2. Already a raster Data URL
+  if (raw.startsWith('data:image/png') || raw.startsWith('data:image/jpeg') || raw.startsWith('data:image/webp')) {
+    return raw;
+  }
+
+  if (typeof document === 'undefined') {
+    return raw;
+  }
+
+  // Helper to render an HTMLImageElement onto a transparent canvas preserving aspect ratio
+  const renderImgToPngDataUrl = (img: HTMLImageElement): string => {
+    const canvas = document.createElement('canvas');
+    canvas.width = defaultWidth;
+    canvas.height = defaultHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return isTenant ? '' : generateOwnerStampPngDataUrl();
+
+    ctx.clearRect(0, 0, defaultWidth, defaultHeight);
+    const natW = img.naturalWidth || img.width || defaultWidth;
+    const natH = img.naturalHeight || img.height || defaultHeight;
+    const scale = Math.min(defaultWidth / natW, defaultHeight / natH);
+    const drawW = natW * scale;
+    const drawH = natH * scale;
+    const offsetX = (defaultWidth - drawW) / 2;
+    const offsetY = (defaultHeight - drawH) / 2;
+    ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
+    return canvas.toDataURL('image/png');
+  };
+
+  // 3. Determine whether `raw` is a storage path / HTTP URL / API endpoint vs an SVG string
+  const isStoragePathOrUrl =
+    raw.startsWith('http://') ||
+    raw.startsWith('https://') ||
+    raw.startsWith('/') ||
+    raw.startsWith('blob:') ||
+    raw.startsWith('signatures/') ||
+    raw.startsWith('tenant-documents/') ||
+    raw.startsWith('contracts/');
+
+  if (isStoragePathOrUrl) {
+    let fetchTargetUrl = raw;
+    if (
+      raw.startsWith('signatures/') ||
+      raw.startsWith('tenant-documents/') ||
+      raw.startsWith('contracts/') ||
+      (raw.includes('/storage/v1/object/') && !raw.includes('token='))
+    ) {
+      const resolved = await resolveDocumentSignedUrl(raw, options?.orderId);
+      if (resolved) {
+        if (resolved.startsWith('data:image/png') || resolved.startsWith('data:image/jpeg') || resolved.startsWith('data:image/webp')) {
+          return resolved;
+        }
+        fetchTargetUrl = resolved;
+      }
     }
 
-    // Convert SVG to PNG via offscreen Canvas
+    // Fetch image bytes as Blob first to avoid CORS tainted canvas issues
+    try {
+      const resp = await fetch(fetchTargetUrl, { credentials: 'include' });
+      if (resp.ok) {
+        const blob = await resp.blob();
+        if (blob && blob.size > 0 && blob.type.startsWith('image/')) {
+          const objectUrl = URL.createObjectURL(blob);
+          try {
+            const loadedPng = await new Promise<string>((resolve) => {
+              const img = new Image();
+              img.onload = () => resolve(renderImgToPngDataUrl(img));
+              img.onerror = () => resolve('');
+              img.src = objectUrl;
+            });
+            URL.revokeObjectURL(objectUrl);
+            if (loadedPng) return loadedPng;
+          } catch {
+            URL.revokeObjectURL(objectUrl);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ensurePngDataUrl] Fetch blob notice:', e);
+    }
+
+    // Fallback: direct Image load with crossOrigin='anonymous'
+    const directLoaded = await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          resolve(renderImgToPngDataUrl(img));
+        } catch {
+          resolve('');
+        }
+      };
+      img.onerror = () => resolve('');
+      img.src = fetchTargetUrl;
+    });
+    if (directLoaded) return directLoaded;
+
+    return isTenant ? '' : generateOwnerStampPngDataUrl();
+  }
+
+  // 4. SVG Data URL or raw <svg ...> markup
+  return new Promise((resolve) => {
     const img = new Image();
-    const cleanSvg = input.startsWith('data:') ? input : `data:image/svg+xml;utf8,${encodeURIComponent(input)}`;
+    const cleanSvg = raw.startsWith('data:') ? raw : `data:image/svg+xml;utf8,${encodeURIComponent(raw)}`;
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = defaultWidth;
-      canvas.height = defaultHeight;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0, defaultWidth, defaultHeight);
-        resolve(canvas.toDataURL('image/png'));
-      } else {
-        resolve(generateOwnerStampPngDataUrl());
+      try {
+        resolve(renderImgToPngDataUrl(img));
+      } catch {
+        resolve(isTenant ? '' : generateOwnerStampPngDataUrl());
       }
     };
     img.onerror = () => {
-      resolve(generateOwnerStampPngDataUrl());
+      resolve(isTenant ? '' : generateOwnerStampPngDataUrl());
     };
     img.src = cleanSvg;
   });

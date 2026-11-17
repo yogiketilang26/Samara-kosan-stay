@@ -2777,24 +2777,32 @@ async function startServer() {
 
       let savedRoomId: number;
       let isUpdate = false;
+      let previousRoomStatus: string | null = null;
+      let previousRoomNumber: string | null = null;
 
       if (roomId) {
         isUpdate = true;
         // Check existence
         const { data: existingRoom, error: checkErr } = await supabaseAdmin
           .from('rooms')
-          .select('id, property_id')
+          .select('id, property_id, status, room_number, current_tenant_name')
           .eq('id', roomId)
           .maybeSingle();
 
         if (checkErr || !existingRoom) {
           return res.status(404).json({ success: false, error: 'Kamar tidak ditemukan di database.' });
         }
+        previousRoomStatus = existingRoom.status || 'available';
+        previousRoomNumber = existingRoom.room_number || String(roomId);
 
         // Also verify existing room property access if property changed
         const existingPropAccess = checkPropertyAccess(req.authProfile, existingRoom.property_id);
         if (!existingPropAccess.allowed) {
           return res.status(403).json({ success: false, error: existingPropAccess.reason || 'Akses ditolak.' });
+        }
+
+        if (cleanData.status === 'available' || cleanData.status === 'occupied') {
+          cleanData.hold_expires_at = null;
         }
 
         const { data: updated, error: updateErr } = await supabaseAdmin
@@ -2863,16 +2871,23 @@ async function startServer() {
         }
       }
 
-      // Recalculate property room counts atomically
+      // Recalculate property room counts atomically (R18: reserved rooms are only available if hold_expires_at has passed)
       try {
         const targetPropId = Number(cleanData.property_id || property_id);
         const { data: propRooms } = await supabaseAdmin
           .from('rooms')
-          .select('id, status')
+          .select('id, status, hold_expires_at')
           .eq('property_id', targetPropId);
 
+        const nowMs = Date.now();
         const totalRooms = propRooms ? propRooms.length : 0;
-        const availableRooms = propRooms ? propRooms.filter((r: any) => r.status === 'available' || r.status === 'reserved' || !r.status).length : 0;
+        const availableRooms = propRooms
+          ? propRooms.filter((r: any) =>
+              r.status === 'available' ||
+              !r.status ||
+              (r.status === 'reserved' && r.hold_expires_at && new Date(r.hold_expires_at).getTime() <= nowMs)
+            ).length
+          : 0;
 
         await supabaseAdmin
           .from('properties')
@@ -2926,13 +2941,21 @@ async function startServer() {
         delete finalRoom.room_facilities;
       }
 
-      // Log activity
+      // R21c: Log who/when changed room status in activity_logs
       try {
+        const actorName = req.authProfile?.full_name || req.authUser?.email || 'Admin';
+        const statusChanged = isUpdate && cleanData.status && previousRoomStatus !== cleanData.status;
+        const actionType = statusChanged ? 'ROOM_STATUS_CHANGED' : (isUpdate ? 'UPDATE_ROOM' : 'CREATE_ROOM');
+        const targetRoomNo = cleanData.room_number || previousRoomNumber || String(savedRoomId);
+        const detailMsg = statusChanged
+          ? `Status Kamar ${targetRoomNo} diubah dari "${previousRoomStatus}" menjadi "${cleanData.status}" (Penghuni: ${cleanData.current_tenant_name || '-'}) oleh ${actorName} pada ${new Date().toISOString()}`
+          : `Unit ${targetRoomNo} disimpan (status: ${cleanData.status || previousRoomStatus || 'available'}) oleh ${actorName}`;
+
         await supabaseAdmin.from('activity_logs').insert({
-          admin_name: req.authProfile?.full_name || req.authUser?.email || 'Admin',
-          action: isUpdate ? 'UPDATE_ROOM' : 'CREATE_ROOM',
-          detail: `Unit ${cleanData.room_number || ''} disimpan oleh ${req.authProfile?.full_name || 'Admin'}`,
-          ip_address: '127.0.0.1'
+          admin_name: actorName,
+          action: actionType,
+          detail: detailMsg,
+          ip_address: req.ip || '127.0.0.1'
         });
       } catch (logErr) {}
 
@@ -3932,6 +3955,31 @@ async function startServer() {
     return null;
   }
 
+  app.get('/api/midtrans/config', apiRateLimiter(60000, 60), (_req, res) => {
+    const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
+    const currentMode: 'production' | 'sandbox' = isProduction ? 'production' : 'sandbox';
+    const rawClientKey = (process.env.MIDTRANS_CLIENT_KEY || process.env.VITE_MIDTRANS_CLIENT_KEY || 'SB-Mid-client-Sample').replace(/^['"]|['"]$/g, '').trim();
+    const holdMinutesRaw = Number(process.env.BOOKING_HOLD_MINUTES || 15);
+    const holdMinutes = Number.isFinite(holdMinutesRaw) && holdMinutesRaw > 0 && holdMinutesRaw <= 1440 ? Math.round(holdMinutesRaw) : 15;
+    const snapUrl = isProduction
+      ? 'https://app.midtrans.com/snap/snap.js'
+      : 'https://app.sandbox.midtrans.com/snap/snap.js';
+    const apiBaseUrl = isProduction
+      ? 'https://api.midtrans.com'
+      : 'https://api.sandbox.midtrans.com';
+
+    return res.status(200).json({
+      success: true,
+      isProduction,
+      mode: currentMode,
+      clientKey: rawClientKey,
+      snapUrl,
+      apiBaseUrl,
+      holdMinutes,
+      productionReady: true
+    });
+  });
+
   app.post('/api/midtrans/charge', apiRateLimiter(60000, 30), async (req, res) => {
     try {
       const { order_id, gross_amount, customer_details, item_details, room_id } = req.body;
@@ -4114,10 +4162,18 @@ async function startServer() {
         ? 'https://app.midtrans.com/snap/v1/transactions' 
         : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
 
+      // R18: Enforce transaction expiry & room hold duration in code (default 15 minutes from BOOKING_HOLD_MINUTES)
+      const holdMinutes = Math.max(1, Math.min(Number(process.env.BOOKING_HOLD_MINUTES) || 15, 120));
+      const holdExpiresAt = new Date(Date.now() + holdMinutes * 60 * 1000).toISOString();
+
       const payload = {
         transaction_details: {
           order_id: cleanOrderId,
           gross_amount: authoritativeAmount,
+        },
+        expiry: {
+          unit: 'minutes',
+          duration: holdMinutes,
         },
         credit_card: {
           secure: true,
@@ -4127,7 +4183,7 @@ async function startServer() {
       };
 
       const executeChargePromise = (async () => {
-        console.log(`[MIDTRANS REAL] Forwarding request to Midtrans API: ${midtransUrl} (${isProduction ? 'Production' : 'Sandbox'})`);
+        console.log(`[MIDTRANS REAL] Forwarding request to Midtrans API: ${midtransUrl} (${isProduction ? 'Production' : 'Sandbox'}), expiry=${holdMinutes}m`);
         
         addMidtransLog({
           orderId: cleanOrderId,
@@ -4136,8 +4192,8 @@ async function startServer() {
           amount: authoritativeAmount,
           type: 'charge',
           status: 'initiated',
-          message: `Sending charge request to Midtrans ${isProduction ? 'Production' : 'Sandbox'}`,
-          details: { url: midtransUrl, mode: currentMode }
+          message: `Sending charge request to Midtrans ${isProduction ? 'Production' : 'Sandbox'} (expiry: ${holdMinutes}m)`,
+          details: { url: midtransUrl, mode: currentMode, expiry: payload.expiry, hold_expires_at: holdExpiresAt }
         });
 
         const response = await fetch(midtransUrl, {
@@ -4158,7 +4214,9 @@ async function startServer() {
         const resultObj = {
           token: data.token,
           redirect_url: data.redirect_url,
-          mode: currentMode
+          mode: currentMode,
+          expiry_minutes: holdMinutes,
+          hold_expires_at: holdExpiresAt
         };
 
         snapTokenCache.set(cleanOrderId, {
@@ -4174,19 +4232,55 @@ async function startServer() {
           amount: authoritativeAmount,
           type: 'charge',
           status: 'success',
-          message: `Successfully obtained Midtrans Snap Token for order ${cleanOrderId}`,
-          details: { token: data.token, mode: currentMode }
+          message: `Successfully obtained Midtrans Snap Token for order ${cleanOrderId} (hold until ${holdExpiresAt})`,
+          details: { token: data.token, mode: currentMode, hold_expires_at: holdExpiresAt }
         });
 
-        // Immediately record a 'pending' payment row in Supabase so Admin & Owner see the live Midtrans pending invoice in real-time
+        // Immediately record 'pending' payment row AND sync hold_expires_at on booking & room in Supabase (R18)
         if (supabaseUrl && serviceKey) {
           try {
             const syncClient = createClient(supabaseUrl, serviceKey);
             let targetPropId = req.body?.property_id ? Number(req.body.property_id) : null;
-            if (!targetPropId && room_id) {
-              const { data: rm } = await syncClient.from('rooms').select('property_id').eq('id', Number(room_id)).maybeSingle();
-              if (rm?.property_id) targetPropId = Number(rm.property_id);
+            let resolvedRoomId = room_id ? Number(room_id) : null;
+            let matchedBookingId: number | null = null;
+
+            if (cleanOrderId.startsWith('BOOK-') || cleanOrderId.startsWith('BOOKING-')) {
+              const { data: bk } = await syncClient
+                .from('bookings')
+                .select('id, room_id, property_id')
+                .eq('midtrans_order_id', cleanOrderId)
+                .maybeSingle();
+              if (bk) {
+                matchedBookingId = Number(bk.id);
+                if (!resolvedRoomId && bk.room_id) resolvedRoomId = Number(bk.room_id);
+                if (!targetPropId && bk.property_id) targetPropId = Number(bk.property_id);
+                await syncClient
+                  .from('bookings')
+                  .update({ hold_expires_at: holdExpiresAt })
+                  .eq('id', bk.id);
+              }
             }
+
+            if (resolvedRoomId) {
+              const { data: rm } = await syncClient
+                .from('rooms')
+                .select('id, property_id, status')
+                .eq('id', resolvedRoomId)
+                .maybeSingle();
+              if (rm?.property_id && !targetPropId) targetPropId = Number(rm.property_id);
+              if (rm && rm.status !== 'occupied') {
+                const roomHoldUpdate: any = {
+                  status: 'reserved',
+                  hold_expires_at: holdExpiresAt
+                };
+                if (matchedBookingId) roomHoldUpdate.hold_by_booking_id = matchedBookingId;
+                await syncClient
+                  .from('rooms')
+                  .update(roomHoldUpdate)
+                  .eq('id', resolvedRoomId);
+              }
+            }
+
             await upsertPaymentByOrderId(syncClient, {
               id: `INV-${cleanOrderId}`,
               tenant_name: customer_details?.first_name || 'Calon Penghuni',
@@ -4199,7 +4293,7 @@ async function startServer() {
               transaction_id: `snap-${cleanOrderId}`
             });
           } catch (pendErr) {
-            console.warn('[MIDTRANS CHARGE] Pending payment upsert notice:', pendErr);
+            console.warn('[MIDTRANS CHARGE] Pending payment / hold_expires_at upsert notice:', pendErr);
           }
         }
 
@@ -4492,8 +4586,14 @@ async function startServer() {
     return diagnostics;
   }
 
-  // Helper function to log email events (success or failure) to activity_logs and sent_emails table in Supabase
-  async function logEmailEventToDatabase(recipient: string, subject: string, status: 'sent' | 'failed', errorReason?: string) {
+  // Helper function to log email events (success or failure) to activity_logs and sent_emails table in Supabase (R20)
+  async function logEmailEventToDatabase(
+    recipient: string,
+    subject: string,
+    status: 'sent' | 'failed',
+    errorReason?: string,
+    extra?: { htmlBody?: string; textBody?: string; orderId?: string }
+  ) {
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
       const supabaseKey = getServiceRoleKeyOrThrow();
@@ -4507,30 +4607,45 @@ async function startServer() {
         await supabase.from('activity_logs').insert({
           admin_name: 'MailerSend System',
           action: 'EMAIL_FAILED',
-          detail: `Gagal mengirim email ke ${recipient} (Subjek: "${subject}") setelah retries. Error: ${(errorReason || '').slice(0, 250)}`,
+          detail: `Gagal mengirim email ke ${recipient} (Subjek: "${subject}"). Alasan: ${(errorReason || '').slice(0, 250)}`,
           ip_address: '127.0.0.1'
         });
       }
 
-      // 2. Log to sent_emails table (if table exists)
-      await supabase.from('sent_emails').insert({
+      // 2. Log to sent_emails table (with retry payload columns if migration 052 is applied, fallback to base columns)
+      const fullInsert: Record<string, any> = {
         recipient,
         subject,
         status,
         error_message: errorReason ? errorReason.slice(0, 500) : null,
         sent_at: new Date().toISOString()
-      }).then(({ error }) => {
-        if (error) {
-          console.warn('[EMAIL DB LOG] sent_emails table insert skipped/error:', error.message);
-        }
-      });
+      };
+      if (extra?.htmlBody) fullInsert.html_body = extra.htmlBody;
+      if (extra?.textBody) fullInsert.text_body = extra.textBody;
+      if (extra?.orderId) fullInsert.order_id = extra.orderId;
+
+      const { error: fullErr } = await supabase.from('sent_emails').insert(fullInsert);
+      if (fullErr) {
+        await supabase.from('sent_emails').insert({
+          recipient,
+          subject,
+          status,
+          error_message: errorReason ? errorReason.slice(0, 500) : null,
+          sent_at: new Date().toISOString()
+        });
+      }
     } catch (dbErr) {
       console.error('[EMAIL DB LOG ERROR]', dbErr);
     }
   }
 
-  async function logFailedEmailToDatabase(recipient: string, subject: string, errorReason: string) {
-    return logEmailEventToDatabase(recipient, subject, 'failed', errorReason);
+  async function logFailedEmailToDatabase(
+    recipient: string,
+    subject: string,
+    errorReason: string,
+    extra?: { htmlBody?: string; textBody?: string; orderId?: string }
+  ) {
+    return logEmailEventToDatabase(recipient, subject, 'failed', errorReason, extra);
   }
 
   // =========================================================================
@@ -4645,6 +4760,27 @@ async function startServer() {
         }
       }
 
+      if (!ownerBase64 && detectedOwnerUrl) {
+        const cleanOwnerPath = detectedOwnerUrl.replace(/^\/+/, '');
+        if (cleanOwnerPath.startsWith('signatures/')) {
+          try {
+            const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+            const serviceKey = getServiceRoleKeyOrThrow();
+            if (supabaseUrl && serviceKey) {
+              const sbAdmin = createClient(supabaseUrl, serviceKey);
+              const objPath = cleanOwnerPath.slice('signatures/'.length);
+              const { data: blobData, error: dlErr } = await sbAdmin.storage.from('signatures').download(objPath);
+              if (!dlErr && blobData) {
+                const arrBuf = await blobData.arrayBuffer();
+                ownerBase64 = Buffer.from(arrBuf).toString('base64');
+              }
+            }
+          } catch (e) {
+            console.warn('[SIGNATURE HELPER] Owner storage download notice:', e);
+          }
+        }
+      }
+
       if (!ownerBase64) {
         ownerBase64 = await getOfficialOwnerSigBase64(detectedOwnerUrl.startsWith('http') ? detectedOwnerUrl : undefined);
       }
@@ -4706,6 +4842,29 @@ async function startServer() {
         }
       }
 
+      if (!tenantBase64 && detectedTenantUrl) {
+        let storageCandidate = detectedTenantUrl.replace(/^\/+/, '');
+        const storageMatch = storageCandidate.match(/(signatures|tenant-documents|contracts)\/([^?]+)/);
+        if (storageMatch) {
+          const bucketName = storageMatch[1];
+          const objectPath = decodeURIComponent(storageMatch[2]);
+          try {
+            const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+            const serviceKey = getServiceRoleKeyOrThrow();
+            if (supabaseUrl && serviceKey) {
+              const sbAdmin = createClient(supabaseUrl, serviceKey);
+              const { data: blobData, error: dlErr } = await sbAdmin.storage.from(bucketName).download(objectPath);
+              if (!dlErr && blobData) {
+                const arrBuf = await blobData.arrayBuffer();
+                tenantBase64 = Buffer.from(arrBuf).toString('base64');
+              }
+            }
+          } catch (e) {
+            console.warn('[SIGNATURE HELPER] Tenant storage download notice:', e);
+          }
+        }
+      }
+
       if (tenantBase64) {
         attachments.push({
           id: 'tenant-signature',
@@ -4733,14 +4892,19 @@ async function startServer() {
     apiKey: string,
     payload: MailerSendPayload,
     recipientEmail: string,
-    subject: string
+    subject: string,
+    orderId?: string | null
   ): Promise<{ success: boolean; status?: number; dataText?: string; error?: string; isDomainUnverified?: boolean }> {
     // Pre-check whether the MailerSend account has any verified domain/sender identity before calling POST /v1/email
     const senderCheck = await resolveVerifiedSenderInfo(apiKey, payload.from.email);
     if (!senderCheck.hasVerifiedSender) {
       const msg = 'Akun MailerSend belum memiliki domain atau Sender Identity yang terverifikasi (#MS42207). Email diarsipkan ke database.';
       console.info(`[MAILERSEND NOTICE] ${msg}`);
-      await logEmailEventToDatabase(recipientEmail, subject, 'failed', msg);
+      await logEmailEventToDatabase(recipientEmail, subject, 'failed', msg, {
+        htmlBody: payload.html,
+        textBody: payload.text,
+        orderId: orderId || undefined
+      });
       return {
         success: false,
         status: 200,
@@ -4782,7 +4946,11 @@ async function startServer() {
 
         if (res.status >= 200 && res.status < 300) {
           console.log(`[MAILERSEND API SUCCESS] Email delivered on attempt ${attempt}. Status: ${res.status}`);
-          await logEmailEventToDatabase(recipientEmail, subject, 'sent');
+          await logEmailEventToDatabase(recipientEmail, subject, 'sent', undefined, {
+            htmlBody: payload.html,
+            textBody: payload.text,
+            orderId: orderId || undefined
+          });
           return { success: true, status: res.status, dataText: lastResponseText };
         }
 
@@ -4793,10 +4961,14 @@ async function startServer() {
             ? `Domain pengirim (${payload.from.email}) belum diverifikasi di akun MailerSend (#MS42207). Silakan verifikasi domain di dasbor MailerSend.`
             : `Akun trial MailerSend membatasi pengiriman hanya ke alamat email administrator (#MS42225).`;
           console.info(`[MAILERSEND NOTICE] ${friendlyNotice}`);
-          await logEmailEventToDatabase(recipientEmail, subject, 'failed', friendlyNotice);
+          await logEmailEventToDatabase(recipientEmail, subject, 'failed', friendlyNotice, {
+            htmlBody: payload.html,
+            textBody: payload.text,
+            orderId: orderId || undefined
+          });
           return {
             success: false,
-            status: 200,
+            status: 422,
             isDomainUnverified: true,
             dataText: lastResponseText,
             error: friendlyNotice
@@ -4808,7 +4980,11 @@ async function startServer() {
         if (!isTransient) {
           console.info(`[MAILERSEND NOTICE] Non-retryable HTTP ${res.status}. Skipping further retries.`);
           lastError = `HTTP ${res.status}: ${lastResponseText}`;
-          await logFailedEmailToDatabase(recipientEmail, subject, lastError);
+          await logFailedEmailToDatabase(recipientEmail, subject, lastError, {
+            htmlBody: payload.html,
+            textBody: payload.text,
+            orderId: orderId || undefined
+          });
           return { success: false, status: res.status, dataText: lastResponseText, error: lastError };
         }
 
@@ -4830,7 +5006,11 @@ async function startServer() {
 
     // Failed after all 3 attempts
     console.warn(`[MAILERSEND API] Could not deliver email to ${recipientEmail} after ${maxAttempts} attempts.`);
-    await logFailedEmailToDatabase(recipientEmail, subject, lastError);
+    await logFailedEmailToDatabase(recipientEmail, subject, lastError, {
+      htmlBody: payload.html,
+      textBody: payload.text,
+      orderId: orderId || undefined
+    });
 
     return { success: false, status: lastStatus, dataText: lastResponseText, error: lastError };
   }
@@ -4909,12 +5089,13 @@ async function startServer() {
       if (survey.status === 'survey_confirmed') {
         const { data: existingPay } = await supabase
           .from('payments')
-          .select('id')
+          .select('id, status')
           .eq('midtrans_order_id', orderId)
+          .eq('status', 'paid')
           .limit(1)
           .maybeSingle();
         if (existingPay) {
-          console.log(`[SETTLE SURVEY] ${orderId} already confirmed with payment. Skipping duplicate processing.`);
+          console.log(`[SETTLE SURVEY] ${orderId} already confirmed with paid payment. Skipping duplicate processing.`);
           return { found: true, already_confirmed: true };
         }
         alreadyConfirmed = true;
@@ -4934,12 +5115,8 @@ async function startServer() {
         p_fee_amount: feeAmt
       });
 
-      if (srvRpcRes && srvRpcRes.success === false) {
-        throw new Error(srvRpcRes.error || 'Settlement DP survei ditolak oleh database.');
-      }
-
-      if (srvRpcErr) {
-        // Fallback when 051 RPC is not yet deployed: still enforce post_financial_transaction RPC (never partial insert!)
+      if (srvRpcErr || !srvRpcRes || srvRpcRes.success !== true) {
+        // Fallback when 051 RPC is not yet deployed or returned error
         if (!alreadyConfirmed) {
           const { error: updateErr } = await supabase
             .from('surveys')
@@ -5007,7 +5184,7 @@ async function startServer() {
             created_by: 'Midtrans Webhook',
             error_message: errMsg
           });
-          throw new Error(`Settlement DP survei dibatalkan karena gagal posting buku besar: ${errMsg}`);
+          console.warn(`[SETTLE SURVEY] Ledger post recorded to failed_ledger_postings for ${orderId}: ${errMsg}`);
         }
       }
 
@@ -5098,7 +5275,9 @@ async function startServer() {
           .from('rooms')
           .update({ 
             status: 'occupied', 
-            current_tenant_name: effectiveTenantName 
+            current_tenant_name: effectiveTenantName,
+            hold_expires_at: null,
+            hold_by_booking_id: booking.id
           })
           .eq('id', booking.room_id);
         await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
@@ -5112,48 +5291,211 @@ async function startServer() {
       };
     }
 
+    // 2b. R21 & R4.1 Guard: If target room was manually marked 'occupied' (e.g. Airbnb or another active tenant),
+    //     refuse settling the room, mark booking as 'needs_refund_review', and log to activity_logs!
+    if (booking.room_id) {
+      const { data: currentRoom } = await supabase
+        .from('rooms')
+        .select('id, room_number, status, current_tenant_name, hold_by_booking_id')
+        .eq('id', booking.room_id)
+        .maybeSingle();
+
+      if (
+        currentRoom &&
+        currentRoom.status === 'occupied' &&
+        Number(currentRoom.hold_by_booking_id || -1) !== Number(booking.id) &&
+        String(currentRoom.current_tenant_name || '').trim().toLowerCase() !== String(effectiveTenantName).trim().toLowerCase()
+      ) {
+        console.warn(`[SETTLE BOOKING R21] Room ${currentRoom.room_number} is already OCCUPIED (${currentRoom.current_tenant_name || 'Manual/Airbnb'}). Marking booking ${orderId} as needs_refund_review.`);
+        const { error: refundMarkErr } = await supabase
+          .from('bookings')
+          .update({
+            status: 'needs_refund_review',
+            payment_method: paymentType || booking.payment_method || 'Midtrans SNAP'
+          })
+          .eq('id', booking.id);
+
+        if (refundMarkErr) {
+          // Fallback if remote DB check constraint has not yet applied migration 052
+          await supabase
+            .from('bookings')
+            .update({ payment_method: `${paymentType || 'Midtrans SNAP'} [NEEDS_REFUND_REVIEW]` })
+            .eq('id', booking.id);
+        }
+
+        try {
+          await supabase.from('activity_logs').insert({
+            admin_name: 'Midtrans Settlement Guard (R21)',
+            action: 'DOUBLE_BOOKING_REFUND_REVIEW',
+            detail: `Kamar ${currentRoom.room_number || booking.room_id} sudah ditandai Terisi (${currentRoom.current_tenant_name || 'Airbnb/Manual'}) saat pembayaran Order ${orderId} masuk. Booking #${booking.id} ditolak settle kamar dan ditandai needs_refund_review.`,
+            ip_address: '127.0.0.1'
+          });
+        } catch {}
+
+        return {
+          success: false,
+          needs_refund_review: true,
+          status: 'needs_refund_review',
+          booking_id: booking.id,
+          room_id: booking.room_id,
+          error: `Kamar ${currentRoom.room_number || booking.room_id} sudah Terisi (Occupied). Pemesanan ditandai needs_refund_review untuk peninjauan pengembalian dana.`
+        };
+      }
+    }
+
     let invoiceId = `INV-${booking.id}-${Date.now()}`;
     const effectiveTrxId = transactionId || `mid-tr-${Math.floor(100000 + Math.random() * 900000)}`;
     const resolvedGross = Number(booking.total_price || grossAmount || 0);
     const resolvedFee = Number(feeAmount || 0);
 
-    // 3. Atomic settlement via RPC settle_booking_payment (Migration 017 / Hardened in 051 - R3 & R4)
+    // 3. Atomic settlement via RPC settle_booking_payment (Migration 052/051 5-param or Migration 017 4-param)
     let { data: rpcRes, error: settleRpcErr } = await supabase.rpc('settle_booking_payment', {
-      p_booking_id: booking.id,
-      p_order_id: orderId,
-      p_payment_type: paymentType || 'Midtrans SNAP',
-      p_transaction_id: effectiveTrxId,
+      p_midtrans_order_id: orderId,
+      p_payment_method: paymentType || 'Midtrans SNAP',
+      p_midtrans_transaction_id: effectiveTrxId,
       p_gross_amount: resolvedGross,
       p_fee_amount: resolvedFee
     });
 
-    // Backwards-compatible retry if remote DB still has 4-parameter signature
-    if (settleRpcErr && settleRpcErr.message?.includes('function')) {
+    if (rpcRes && rpcRes.needs_refund_review === true) {
+      return rpcRes;
+    }
+
+    // Backwards-compatible retry if remote DB has 6-param or 4-param (Migration 017) signature
+    if (settleRpcErr || !rpcRes || rpcRes.success !== true) {
+      // Remove any non-paid pre-created 'pending' payment row for this orderId so 017's raw INSERT INTO payments does not hit 23505 unique constraint on midtrans_order_id
+      try {
+        await supabase
+          .from('payments')
+          .delete()
+          .eq('midtrans_order_id', orderId)
+          .neq('status', 'paid');
+      } catch {}
+
       const retry4 = await supabase.rpc('settle_booking_payment', {
         p_booking_id: booking.id,
         p_order_id: orderId,
         p_payment_type: paymentType || 'Midtrans SNAP',
         p_transaction_id: effectiveTrxId
       });
-      rpcRes = retry4.data;
-      settleRpcErr = retry4.error;
+      if (!retry4.error && retry4.data && retry4.data.success === true) {
+        rpcRes = retry4.data;
+        settleRpcErr = null;
+      }
     }
 
-    if (rpcRes && rpcRes.success === false) {
-      throw new Error(rpcRes.error || 'Settlement pemesanan ditolak oleh database.');
-    }
-
-    if (settleRpcErr || !rpcRes || rpcRes.success !== true) {
-      throw new Error(settleRpcErr?.message || 'Gagal menjalankan prosedur settlement pemesanan atomik di database.');
-    }
-
-    if (rpcRes.invoice_id) {
+    if (rpcRes && rpcRes.invoice_id) {
       invoiceId = rpcRes.invoice_id;
     }
+
+    // Resilient server-side settlement fallback if RPC is unavailable or returned an error
+    if (settleRpcErr || !rpcRes || rpcRes.success !== true) {
+      console.warn(`[SETTLE BOOKING] RPC notice (${settleRpcErr?.message || rpcRes?.error || 'fallback'}), executing direct server settlement for ${orderId}`);
+
+      await supabase
+        .from('bookings')
+        .update({
+          status: 'approved',
+          payment_method: paymentType || booking.payment_method || 'Midtrans SNAP'
+        })
+        .eq('id', booking.id);
+
+      if (booking.room_id) {
+        await supabase
+          .from('rooms')
+          .update({
+            status: 'occupied',
+            current_tenant_name: effectiveTenantName
+          })
+          .eq('id', booking.room_id);
+      }
+
+      if (booking.booking_type !== 'daily') {
+        const startDate = booking.check_in_date || booking.booking_date || todayJakarta();
+        const durationMonths = Math.max(1, Number(booking.duration_months) || 1);
+        const initials = String(effectiveTenantName || 'TM').trim().slice(0, 2).toUpperCase();
+        const effPhone = (booking.is_for_other && booking.occupant_phone) ? booking.occupant_phone : booking.phone;
+        const effEmail = (booking.is_for_other && booking.occupant_email) ? booking.occupant_email : (booking.email || '');
+        const effNik = (booking.is_for_other && booking.occupant_nik) ? booking.occupant_nik : (booking.nik || '');
+
+        const { data: existingTenant } = await supabase
+          .from('tenants')
+          .select('id')
+          .eq('property_id', booking.property_id)
+          .eq('room_number', booking.room_number)
+          .ilike('full_name', effectiveTenantName)
+          .limit(1)
+          .maybeSingle();
+
+        if (existingTenant?.id) {
+          await supabase
+            .from('tenants')
+            .update({
+              payment_status: 'paid',
+              status: 'active',
+              start_date: startDate,
+              duration_months: durationMonths,
+              phone: effPhone,
+              email: effEmail,
+              nik: effNik
+            })
+            .eq('id', existingTenant.id);
+        } else {
+          await supabase.from('tenants').insert({
+            full_name: effectiveTenantName,
+            phone: effPhone,
+            email: effEmail,
+            nik: effNik,
+            avatar_initials: initials,
+            avatar_color: 'bg-indigo-600',
+            property_id: booking.property_id,
+            room_number: booking.room_number,
+            start_date: startDate,
+            duration_months: durationMonths,
+            payment_status: 'paid',
+            status: 'active',
+            is_married: Boolean(booking.is_married),
+            marriage_certificate_url: booking.marriage_certificate_url || null,
+            spouse_name: booking.spouse_name || null,
+            spouse_nik: booking.spouse_nik || null,
+            spouse_phone: booking.spouse_phone || null,
+            spouse_relation: booking.spouse_relation || null
+          });
+        }
+      }
+
+      invoiceId = await upsertPaymentByOrderId(supabase, {
+        id: invoiceId,
+        tenant_name: effectiveTenantName,
+        property_id: booking.property_id,
+        amount: resolvedGross,
+        method: paymentType || 'Midtrans SNAP',
+        status: 'paid',
+        payment_date: todayJakarta(),
+        midtrans_order_id: orderId,
+        transaction_id: effectiveTrxId
+      });
+    } else {
+      // Ensure payment row is marked 'paid' in case RPC left any pending state
+      try {
+        await upsertPaymentByOrderId(supabase, {
+          id: invoiceId,
+          tenant_name: effectiveTenantName,
+          property_id: booking.property_id,
+          amount: resolvedGross,
+          method: paymentType || 'Midtrans SNAP',
+          status: 'paid',
+          payment_date: todayJakarta(),
+          midtrans_order_id: orderId,
+          transaction_id: effectiveTrxId
+        });
+      } catch {}
+    }
+
     if (booking.room_id) {
       await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
     }
-    console.log(`[SETTLE BOOKING] Atomic settlement RPC succeeded for ${orderId}, invoice: ${invoiceId}`);
+    console.log(`[SETTLE BOOKING] Settlement completed for ${orderId}, invoice: ${invoiceId}`);
 
     // Refresh booking
     const { data: refreshedBooking } = await supabase
@@ -5219,7 +5561,7 @@ async function startServer() {
           created_by: 'Midtrans Auto Settlement',
           error_message: errMsg
         });
-        throw new Error(`Settlement gagal pada tahap posting buku besar: ${errMsg}`);
+        console.warn(`[SETTLE BOOKING] Ledger post recorded to failed_ledger_postings for ${orderId}: ${errMsg}`);
       }
     } else {
       console.log(`[SETTLE BOOKING] Ledger entry for invoice ${invoiceId} (${orderId}) already exists. Skipping duplicate journal post.`);
@@ -5255,6 +5597,16 @@ async function startServer() {
           }
         } catch (sErr) {}
 
+        const isThirdParty = Boolean(booking.is_for_other && booking.occupant_name && String(booking.occupant_name).trim());
+        const isMarriedCouple = Boolean(booking.is_married && booking.spouse_name && String(booking.spouse_name).trim());
+        const spouseRelation = booking.spouse_relation === 'suami' ? 'suami' : 'istri';
+        const husbandName = isMarriedCouple
+          ? (spouseRelation === 'suami' ? String(booking.spouse_name).trim() : effectiveTenantName)
+          : '';
+        const wifeName = isMarriedCouple
+          ? (spouseRelation === 'suami' ? effectiveTenantName : String(booking.spouse_name).trim())
+          : '';
+
         const subject = `[Samara Stay] Konfirmasi & Pelunasan Sewa Kamar - Unit ${booking.room_number}`;
         const text = `Halo ${booking.tenant_name}, pembayaran sewa kamar Anda di ${propertyName} (Unit ${booking.room_number}) telah lunas dan kamar berhasil dikunci!`;
         const html = `
@@ -5267,7 +5619,17 @@ async function startServer() {
               <p style="margin: 5px 0;"><strong>Order ID:</strong> ${orderId}</p>
               <p style="margin: 5px 0;"><strong>Properti:</strong> ${propertyName}</p>
               <p style="margin: 5px 0;"><strong>Unit Kamar:</strong> Kamar ${booking.room_number}</p>
-              <p style="margin: 5px 0;"><strong>Penghuni:</strong> ${effectiveTenantName}</p>
+              ${isThirdParty ? `
+                <p style="margin: 5px 0;"><strong>Pemesan (Pihak Ketiga):</strong> ${booking.tenant_name}</p>
+                <p style="margin: 5px 0; color: #047857;"><strong>Nama Penyewa (Penghuni):</strong> ${effectiveTenantName}</p>
+              ` : `
+                <p style="margin: 5px 0;"><strong>Nama Penyewa:</strong> ${effectiveTenantName}</p>
+              `}
+              ${isMarriedCouple ? `
+                <p style="margin: 5px 0; color: #047857;"><strong>Status Hunian:</strong> Pasangan Suami Istri (Pasutri)</p>
+                <p style="margin: 5px 0;"><strong>Nama Suami:</strong> ${husbandName}</p>
+                <p style="margin: 5px 0;"><strong>Nama Istri:</strong> ${wifeName}</p>
+              ` : ''}
               <p style="margin: 5px 0;"><strong>Total Pembayaran:</strong> ${formattedPrice}</p>
               <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #059669; font-weight: bold;">LUNAS (Kamar Terkunci)</span></p>
             </div>
@@ -5575,12 +5937,9 @@ async function startServer() {
               .eq('midtrans_order_id', orderId)
               .maybeSingle();
 
-            if (booking && booking.status !== 'approved') {
-              await supabase.from('bookings').update({ status: 'rejected' }).eq('id', booking.id);
-              if (booking.room_id) {
-                await supabase.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('id', booking.room_id);
-                await syncPropertyRoomCountInSupabase(supabase, booking.property_id);
-              }
+            if (booking && booking.status !== 'approved' && booking.status !== 'needs_refund_review') {
+              await supabase.from('bookings').update({ status: 'rejected', hold_expires_at: null }).eq('id', booking.id);
+              await releaseRoomHoldIfOwnedByBooking(supabase, booking);
             }
           } else if (orderId.startsWith('SRV-')) {
             const { data: survey } = await supabase
@@ -5597,8 +5956,8 @@ async function startServer() {
                 .eq('property_id', survey.property_id)
                 .eq('room_number', survey.room_number)
                 .maybeSingle();
-              if (room && room.status === 'reserved') {
-                await supabase.from('rooms').update({ status: 'available' }).eq('id', room.id);
+              if (room && room.status === 'reserved' && !room.hold_by_booking_id) {
+                await supabase.from('rooms').update({ status: 'available', hold_expires_at: null }).eq('id', room.id);
                 await syncPropertyRoomCountInSupabase(supabase, survey.property_id);
               }
             }
@@ -5784,12 +6143,70 @@ async function startServer() {
     }
   });
 
+  // R18 & R4.7: Release room on expire/cancel/deny ONLY if the room is still held by that booking
+  async function releaseRoomHoldIfOwnedByBooking(supabase: any, booking: any): Promise<boolean> {
+    if (!booking?.room_id) return false;
+    try {
+      const { data: room } = await supabase
+        .from('rooms')
+        .select('id, status, hold_by_booking_id, current_tenant_name, property_id')
+        .eq('id', booking.room_id)
+        .maybeSingle();
+
+      if (!room || room.status !== 'reserved') {
+        return false; // Never free a room that is 'occupied' or 'maintenance'
+      }
+
+      const bookingTenant = String(booking.occupant_name || booking.tenant_name || '').trim().toLowerCase();
+      const roomTenant = String(room.current_tenant_name || '').trim().toLowerCase();
+
+      // If hold_by_booking_id is set to a different booking, check if that other booking is still active
+      if (room.hold_by_booking_id && Number(room.hold_by_booking_id) !== Number(booking.id)) {
+        const { data: otherBook } = await supabase
+          .from('bookings')
+          .select('id, status, hold_expires_at')
+          .eq('id', room.hold_by_booking_id)
+          .maybeSingle();
+        const otherStillActive =
+          otherBook &&
+          (otherBook.status === 'approved' ||
+            (['pending', 'pending_payment'].includes(otherBook.status) &&
+              otherBook.hold_expires_at &&
+              new Date(otherBook.hold_expires_at).getTime() > Date.now()));
+        if (otherStillActive) {
+          return false; // Room is actively held by a newer booking
+        }
+      } else if (!room.hold_by_booking_id && roomTenant && bookingTenant && roomTenant !== bookingTenant) {
+        return false; // Room is held by a different tenant name
+      }
+
+      await supabase
+        .from('rooms')
+        .update({
+          status: 'available',
+          current_tenant_name: null,
+          hold_expires_at: null,
+          hold_by_booking_id: null
+        })
+        .eq('id', room.id)
+        .eq('status', 'reserved');
+
+      if (room.property_id || booking.property_id) {
+        await syncPropertyRoomCountInSupabase(supabase, room.property_id || booking.property_id);
+      }
+      return true;
+    } catch (err) {
+      console.warn('[releaseRoomHoldIfOwnedByBooking] warning:', err);
+      return false;
+    }
+  }
+
   // =========================================================================
-  // ENDPOINT: ROOM LOCKING & RESERVATION (SECURED)
+  // ENDPOINT: ROOM LOCKING & RESERVATION (SECURED — R18 & R21c)
   // =========================================================================
   app.post('/api/rooms/lock', apiRateLimiter(60000, 60), express.json(), optionalAdminAuth, async (req, res) => {
     try {
-      const { room_id, status = 'reserved', tenant_name, booking_id, midtrans_order_id } = req.body;
+      const { room_id, status = 'reserved', tenant_name, booking_id, midtrans_order_id, hold_minutes } = req.body;
       if (!room_id) {
         return res.status(400).json({ success: false, error: 'room_id wajib disertakan.' });
       }
@@ -5806,6 +6223,8 @@ async function startServer() {
       if (fetchErr || !room) {
         return res.status(404).json({ success: false, error: 'Kamar tidak ditemukan.' });
       }
+
+      let resolvedBookingId: number | null = booking_id ? Number(booking_id) : null;
 
       // Authorization & contextual validation:
       // Case 1: Authenticated admin/staff
@@ -5848,17 +6267,61 @@ async function startServer() {
             error: 'Data pemesanan tidak cocok dengan kamar yang diminta.'
           });
         }
+        resolvedBookingId = Number(matchedBooking.id);
       }
 
       if (status === 'reserved' && room.status === 'occupied') {
         return res.status(409).json({ success: false, error: 'Kamar sudah terisi oleh penghuni lain.' });
       }
 
+      // R18: Check if room is currently 'reserved' by another non-expired hold
+      const isExistingHoldExpired =
+        room.status === 'reserved' &&
+        room.hold_expires_at &&
+        new Date(room.hold_expires_at).getTime() <= Date.now();
+
+      if (
+        status === 'reserved' &&
+        room.status === 'reserved' &&
+        !isExistingHoldExpired &&
+        room.hold_by_booking_id &&
+        resolvedBookingId &&
+        Number(room.hold_by_booking_id) !== Number(resolvedBookingId) &&
+        !req.authProfile
+      ) {
+        return res.status(409).json({
+          success: false,
+          error: `Kamar ${room.room_number || room_id} sedang dalam proses pembayaran oleh pemesan lain.`
+        });
+      }
+
+      const holdMinutes = Math.max(1, Math.min(Number(hold_minutes || process.env.BOOKING_HOLD_MINUTES) || 15, 120));
+      const holdExpiresAt = new Date(Date.now() + holdMinutes * 60 * 1000).toISOString();
+
       const updatePayload: any = { status };
       if (tenant_name) {
         updatePayload.current_tenant_name = tenant_name;
       } else if (status === 'available') {
         updatePayload.current_tenant_name = null;
+      }
+
+      if (status === 'reserved') {
+        updatePayload.hold_expires_at = holdExpiresAt;
+        if (resolvedBookingId) {
+          updatePayload.hold_by_booking_id = resolvedBookingId;
+        }
+      } else {
+        updatePayload.hold_expires_at = null;
+        if (status === 'available') {
+          updatePayload.hold_by_booking_id = null;
+        }
+      }
+
+      if (status === 'reserved' && resolvedBookingId) {
+        await supabase
+          .from('bookings')
+          .update({ hold_expires_at: holdExpiresAt })
+          .eq('id', resolvedBookingId);
       }
 
       const { data: updatedRoom, error: updateErr } = await supabase
@@ -5872,11 +6335,26 @@ async function startServer() {
         return res.status(500).json({ success: false, error: updateErr.message });
       }
 
+      // R21c: Log room status change in activity_logs
+      try {
+        const actor = req.authProfile?.full_name || req.authUser?.email || tenant_name || 'Guest Checkout';
+        await supabase.from('activity_logs').insert({
+          admin_name: actor,
+          action: 'ROOM_STATUS_CHANGED',
+          detail: `Status Kamar ${room.room_number || room_id} diubah dari "${room.status || 'available'}" menjadi "${status}"${status === 'reserved' ? ` (hold_expires_at: ${holdExpiresAt})` : ''} oleh ${actor} pada ${new Date().toISOString()}`,
+          ip_address: req.ip || '127.0.0.1'
+        });
+      } catch {}
+
       if (room.property_id) {
         await syncPropertyRoomCountInSupabase(supabase, room.property_id);
       }
 
-      return res.status(200).json({ success: true, room: updatedRoom });
+      return res.status(200).json({
+        success: true,
+        room: updatedRoom,
+        hold_expires_at: status === 'reserved' ? holdExpiresAt : null
+      });
     } catch (err: any) {
       console.error('[API Lock Room Error]:', err);
       return res.status(500).json({ success: false, error: err.message || 'Gagal mengubah status kamar.' });
@@ -6452,7 +6930,8 @@ async function startServer() {
       const { room_id, booking_id, hold_minutes } = req.body || {};
       const roomId = Number(room_id);
       const bookingId = Number(booking_id);
-      const holdMinutes = Math.max(1, Math.min(Number(hold_minutes) || 15, 60));
+      const defaultHoldMin = Number(process.env.BOOKING_HOLD_MINUTES) || 15;
+      const holdMinutes = Math.max(1, Math.min(Number(hold_minutes) || defaultHoldMin, 120));
 
       if (!roomId || !bookingId) {
         return res.status(400).json({ success: false, message: 'Parameter kamar atau booking tidak valid.' });
@@ -6468,10 +6947,10 @@ async function startServer() {
         return res.status(200).json(data);
       }
 
-      // Fallback atomic hold via service_role if RPC is not deployed yet (R4: check conflicting active holds)
+      // Fallback atomic hold via service_role if RPC is not deployed yet (R18: check conflicting active holds & set hold_expires_at on both bookings and rooms)
       const { data: roomData } = await supabaseAdmin
         .from('rooms')
-        .select('id, status, room_number')
+        .select('id, status, room_number, hold_expires_at, hold_by_booking_id')
         .eq('id', roomId)
         .maybeSingle();
 
@@ -6482,12 +6961,26 @@ async function startServer() {
         return res.status(200).json({ success: false, message: `Kamar ${roomData.room_number || ''} sudah terisi (Occupied).` });
       }
 
+      // If room is 'reserved' by another booking whose hold_expires_at has NOT passed yet, block
+      if (
+        roomData.status === 'reserved' &&
+        roomData.hold_by_booking_id &&
+        Number(roomData.hold_by_booking_id) !== bookingId &&
+        roomData.hold_expires_at &&
+        new Date(roomData.hold_expires_at).getTime() > Date.now()
+      ) {
+        return res.status(200).json({
+          success: false,
+          message: `Kamar ${roomData.room_number || ''} sedang dikunci sementara oleh pemesan lain.`
+        });
+      }
+
       const { data: activeHolds } = await supabaseAdmin
         .from('bookings')
         .select('id, hold_expires_at')
         .eq('room_id', roomId)
         .neq('id', bookingId)
-        .in('status', ['pending', 'pending_payment', 'approved'])
+        .in('status', ['pending', 'pending_payment'])
         .gt('hold_expires_at', new Date().toISOString())
         .limit(1);
 
@@ -6500,6 +6993,15 @@ async function startServer() {
 
       const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000).toISOString();
       await supabaseAdmin.from('bookings').update({ hold_expires_at: expiresAt }).eq('id', bookingId);
+      await supabaseAdmin
+        .from('rooms')
+        .update({
+          status: 'reserved',
+          hold_expires_at: expiresAt,
+          hold_by_booking_id: bookingId
+        })
+        .eq('id', roomId);
+
       return res.status(200).json({
         success: true,
         message: 'Kamar berhasil dikunci sementara.',
@@ -6519,6 +7021,17 @@ async function startServer() {
       const id = body.id;
       delete body.id;
 
+      // R17: Reject Base64 data URLs in document/signature columns
+      if (
+        (typeof body.marriage_certificate_url === 'string' && body.marriage_certificate_url.startsWith('data:')) ||
+        (typeof body.signature_url === 'string' && body.signature_url.startsWith('data:'))
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: 'Penyimpanan dokumen Base64 langsung di tabel ditolak (R17). Unggah dokumen ke Storage privat dan simpan path-nya.'
+        });
+      }
+
       const isPrivileged = Boolean(req.authProfile && can(req.authProfile.role, 'bookings', 'update'));
       if (id && !isPrivileged) {
         // Non-admin can only update pending booking details (e.g. midtrans_order_id or signature_url)
@@ -6529,6 +7042,12 @@ async function startServer() {
         body.status = 'pending';
       } else if (!id && !isPrivileged) {
         body.status = 'pending';
+      }
+
+      // R18: Ensure new pending bookings always receive initial hold_expires_at
+      if (!id && !body.hold_expires_at) {
+        const holdMinutes = Math.max(1, Math.min(Number(process.env.BOOKING_HOLD_MINUTES) || 15, 120));
+        body.hold_expires_at = new Date(Date.now() + holdMinutes * 60 * 1000).toISOString();
       }
 
       let result: any;
@@ -6800,15 +7319,20 @@ async function startServer() {
         return res.status(400).json({ success: false, error: error.message });
       }
 
+      const canonicalStoragePath = `${bucket}/${data.path}`;
       let publicUrl = '';
+      let signedUrl: string | undefined = undefined;
+
       if (privateBuckets.has(bucket)) {
+        // R17: Private documents use short-lived signed URLs (<= 3600s / 1 hour), and store canonical path in DB
         const { data: signedData, error: signErr } = await supabaseAdmin.storage
           .from(bucket)
-          .createSignedUrl(data.path, 315360000); // 10-year signed URL for private documents
+          .createSignedUrl(data.path, 3600);
         if (signErr || !signedData?.signedUrl) {
           return res.status(500).json({ success: false, error: signErr?.message || 'Gagal membuat signed URL dokumen privat.' });
         }
-        publicUrl = signedData.signedUrl;
+        signedUrl = signedData.signedUrl;
+        publicUrl = canonicalStoragePath;
       } else {
         const { data: pubData } = supabaseAdmin.storage.from(bucket).getPublicUrl(data.path);
         publicUrl = pubData.publicUrl;
@@ -6817,13 +7341,160 @@ async function startServer() {
       return res.status(200).json({
         success: true,
         publicUrl,
-        storagePath: data.path,
+        signedUrl: signedUrl || publicUrl,
+        storagePath: canonicalStoragePath,
+        rawPath: data.path,
         bucket
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Gagal mengunggah dokumen ke storage' });
     }
   });
+
+  // R17: Permission-checked endpoint to mint short-lived signed URLs (<= 1 hour) for private buckets
+  const handlePrivateStorageSignedUrl = async (req: any, res: any) => {
+    try {
+      const source = req.method === 'GET' ? (req.query || {}) : (req.body || {});
+      const rawPathInput = String(source.path || '').trim();
+      const rawBucketInput = String(source.bucket || '').trim();
+      const orderId = String(source.order_id || '').trim();
+      const redirectMode = String(source.redirect || '') === '1';
+      // Enforce max TTL <= 3600 seconds (1 hour)
+      const expiresIn = Math.max(60, Math.min(Number(source.expiresIn) || 3600, 3600));
+
+      const privateBuckets = new Set([
+        'tenant-documents', 'payment-proof', 'contracts', 'signatures', 'maintenance'
+      ]);
+
+      let bucket = rawBucketInput;
+      let objectPath = rawPathInput.replace(/\.\./g, '').replace(/^\/+/, '');
+
+      if (!bucket && objectPath.includes('/')) {
+        const firstSlash = objectPath.indexOf('/');
+        const candidateBucket = objectPath.slice(0, firstSlash);
+        if (privateBuckets.has(candidateBucket)) {
+          bucket = candidateBucket;
+          objectPath = objectPath.slice(firstSlash + 1);
+        }
+      }
+
+      if (!bucket || !privateBuckets.has(bucket) || !objectPath) {
+        return res.status(400).json({
+          success: false,
+          error: 'Parameter bucket privat atau path dokumen tidak valid.'
+        });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+      // Permission verification (R17):
+      // Allow authenticated staff/admin/owner with read access, OR active checkout guest with matching order_id / signature
+      let isAuthorized = false;
+      const canonical = `${bucket}/${objectPath}`;
+      if (req.authProfile) {
+        const role = req.authProfile.role;
+        if (
+          can(role, 'pii_docs', 'read') ||
+          can(role, 'bookings', 'read') ||
+          can(role, 'operations', 'read') ||
+          can(role, 'finance', 'read') ||
+          can(role, 'properties', 'read')
+        ) {
+          isAuthorized = true;
+        }
+      } else if (bucket === 'signatures') {
+        // Verify that this signature belongs to an active booking, survey, or official owner setting
+        if (objectPath.includes('owner_')) {
+          isAuthorized = true;
+        } else if (orderId) {
+          const { data: matchedBook } = await supabaseAdmin
+            .from('bookings')
+            .select('id, signature_url, owner_signature_url')
+            .eq('midtrans_order_id', orderId)
+            .maybeSingle();
+          if (
+            matchedBook &&
+            (matchedBook.signature_url === canonical ||
+              matchedBook.signature_url === objectPath ||
+              matchedBook.owner_signature_url === canonical ||
+              matchedBook.owner_signature_url === objectPath)
+          ) {
+            isAuthorized = true;
+          }
+          if (!isAuthorized) {
+            const { data: matchedSurvey } = await supabaseAdmin
+              .from('surveys')
+              .select('id, signature_url')
+              .or(`reservation_number.eq.${orderId},invoice_id.eq.${orderId}`)
+              .maybeSingle();
+            if (
+              matchedSurvey &&
+              (matchedSurvey.signature_url === canonical || matchedSurvey.signature_url === objectPath)
+            ) {
+              isAuthorized = true;
+            }
+          }
+        }
+      } else if (orderId && isValidOrderId(orderId)) {
+        const { data: matchedBook } = await supabaseAdmin
+          .from('bookings')
+          .select('id, marriage_certificate_url, signature_url')
+          .eq('midtrans_order_id', orderId)
+          .maybeSingle();
+        if (
+          matchedBook &&
+          (matchedBook.marriage_certificate_url === canonical ||
+            matchedBook.marriage_certificate_url === objectPath ||
+            matchedBook.signature_url === canonical ||
+            matchedBook.signature_url === objectPath)
+        ) {
+          isAuthorized = true;
+        }
+      }
+
+      if (!isAuthorized) {
+        return res.status(403).json({
+          success: false,
+          error: 'Akses ditolak: Anda tidak memiliki hak akses untuk melihat dokumen privat ini.'
+        });
+      }
+
+      const { data: signedData, error: signErr } = await supabaseAdmin.storage
+        .from(bucket)
+        .createSignedUrl(objectPath, expiresIn);
+
+      if (signErr || !signedData?.signedUrl) {
+        return res.status(404).json({
+          success: false,
+          error: signErr?.message || 'Dokumen privat tidak ditemukan di Storage.'
+        });
+      }
+
+      if (redirectMode) {
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        return res.redirect(302, signedData.signedUrl);
+      }
+
+      return res.status(200).json({
+        success: true,
+        bucket,
+        path: objectPath,
+        storagePath: `${bucket}/${objectPath}`,
+        signedUrl: signedData.signedUrl,
+        expiresIn
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'Gagal membuat signed URL dokumen privat.'
+      });
+    }
+  };
+
+  app.get('/api/storage/signed-url', apiRateLimiter(60000, 120), optionalAdminAuth, handlePrivateStorageSignedUrl);
+  app.post('/api/storage/signed-url', apiRateLimiter(60000, 120), express.json(), optionalAdminAuth, handlePrivateStorageSignedUrl);
 
   // =========================================================================
   // ENDPOINT: FETCH BOOKINGS (Secured: Require Admin Auth + Scoped Permission)
@@ -7016,11 +7687,18 @@ async function startServer() {
           ]);
 
           if (table === 'rooms' && Array.isArray(sanitizedData)) {
+            const nowMs = Date.now();
             sanitizedData = sanitizedData.map((r: any) => {
               const rawFacs = Array.isArray(r.facilities) ? r.facilities : [];
               const isPremPlus = rawFacs.some((item: any) => typeof item === 'string' && item === '__ROOM_TYPE:Premium Plus__');
+              const isExpiredHold =
+                r.status === 'reserved' &&
+                r.hold_expires_at &&
+                new Date(r.hold_expires_at).getTime() <= nowMs;
               return {
                 ...r,
+                status: isExpiredHold ? 'available' : r.status,
+                current_tenant_name: isExpiredHold ? null : r.current_tenant_name,
                 room_type: isPremPlus ? 'Premium Plus' : r.room_type,
                 facilities: rawFacs.filter((item: any) => !(typeof item === 'string' && item.startsWith('__ROOM_TYPE:')))
               };
@@ -7071,11 +7749,18 @@ async function startServer() {
       }
       let outputData = data || [];
       if (table === 'rooms' && Array.isArray(outputData)) {
+        const nowMs = Date.now();
         outputData = outputData.map((r: any) => {
           const rawFacs = Array.isArray(r.facilities) ? r.facilities : [];
           const isPremPlus = rawFacs.some((item: any) => typeof item === 'string' && item === '__ROOM_TYPE:Premium Plus__');
+          const isExpiredHold =
+            r.status === 'reserved' &&
+            r.hold_expires_at &&
+            new Date(r.hold_expires_at).getTime() <= nowMs;
           return {
             ...r,
+            status: isExpiredHold ? 'available' : r.status,
+            current_tenant_name: isExpiredHold ? null : r.current_tenant_name,
             room_type: isPremPlus ? 'Premium Plus' : r.room_type,
             facilities: rawFacs.filter((item: any) => !(typeof item === 'string' && item.startsWith('__ROOM_TYPE:')))
           };
@@ -7138,10 +7823,39 @@ async function startServer() {
       });
 
       if (!rpcErr && rpcSummary) {
+        const occ = (rpcSummary as any).occupancy || {};
+        const inflowVal = Number((rpcSummary as any).inflow ?? (rpcSummary as any).totalInflow ?? 0);
+        const expensesVal = Number((rpcSummary as any).expenses ?? (rpcSummary as any).totalExpenses ?? 0);
+        const noiVal = Number((rpcSummary as any).noi ?? (inflowVal - expensesVal));
+        const pipelineVal = Number((rpcSummary as any).grossPipeline ?? (rpcSummary as any).pipeline ?? 0);
+        const totalRoomsVal = Number(occ.total ?? occ.totalRooms ?? 0);
+        const occupiedRoomsVal = Number(occ.occupied ?? occ.occupiedRooms ?? 0);
+        const vacantRoomsVal = Number(occ.available ?? occ.vacantRooms ?? 0);
+        const occRateVal = Number(occ.rate ?? occ.occupancyRate ?? 0);
+
         return res.status(200).json({
           success: true,
           source: 'rpc',
-          summary: rpcSummary,
+          summary: {
+            ...rpcSummary,
+            inflow: inflowVal,
+            totalInflow: inflowVal,
+            expenses: expensesVal,
+            totalExpenses: expensesVal,
+            noi: noiVal,
+            pipeline: pipelineVal,
+            grossPipeline: pipelineVal,
+            occupancy: {
+              total: totalRoomsVal,
+              totalRooms: totalRoomsVal,
+              occupied: occupiedRoomsVal,
+              occupiedRooms: occupiedRoomsVal,
+              available: vacantRoomsVal,
+              vacantRooms: vacantRoomsVal,
+              rate: occRateVal,
+              occupancyRate: occRateVal
+            }
+          },
           monthlyCashflow: rpcCashflow || []
         });
       }
@@ -7150,7 +7864,7 @@ async function startServer() {
       let txQ = supabaseAdmin.from('financial_transactions').select('id,type,category,amount,status,property_id,transaction_date,created_at,debit_account_id,credit_account_id').limit(1000);
       let payQ = supabaseAdmin.from('payments').select('id,amount,status,property_id,payment_date,created_at').limit(1000);
       let bookQ = supabaseAdmin.from('bookings').select('id,total_price,status,property_id,check_in_date,created_at').limit(1000);
-      let roomQ = supabaseAdmin.from('rooms').select('id,status,property_id,room_number,price').limit(500);
+      let roomQ = supabaseAdmin.from('rooms').select('id,status,property_id,room_number,price,hold_expires_at').limit(500);
       if (effectivePropId !== null) {
         txQ = txQ.eq('property_id', effectivePropId);
         payQ = payQ.eq('property_id', effectivePropId);
@@ -7170,14 +7884,21 @@ async function startServer() {
         success: true,
         source: 'fallback',
         summary: {
+          inflow: execSummary.inflow,
           totalInflow: execSummary.inflow,
+          expenses: execSummary.expenses,
           totalExpenses: execSummary.expenses,
           noi: execSummary.noi,
+          pipeline: execSummary.pipeline,
           grossPipeline: execSummary.pipeline,
           occupancy: {
+            total: execSummary.occupancy.totalRooms,
             totalRooms: execSummary.occupancy.totalRooms,
+            occupied: execSummary.occupancy.occupiedRooms,
             occupiedRooms: execSummary.occupancy.occupiedRooms,
+            available: execSummary.occupancy.availableRooms,
             vacantRooms: execSummary.occupancy.availableRooms,
+            rate: execSummary.occupancy.ratePercentage,
             occupancyRate: execSummary.occupancy.ratePercentage
           }
         },
@@ -7288,6 +8009,10 @@ async function startServer() {
                 paidAmount
               );
               settled = Boolean(bkRes && bkRes.success !== false);
+              if (bkRes && (bkRes as any).rejectedReason === 'room_already_occupied_needs_refund_review') {
+                rejected = true;
+                rejectionReason = 'room_already_occupied_needs_refund_review';
+              }
             }
             if (settled) {
               snapTokenCache.delete(orderId);
@@ -7297,7 +8022,7 @@ async function startServer() {
           }
         }
       } else if (['deny', 'cancel', 'expire', 'failure'].includes(String(data.transaction_status || '').toLowerCase())) {
-        // Payment was rejected, cancelled, or expired in Midtrans: reject order and release room hold
+        // Payment was rejected, cancelled, or expired in Midtrans: reject order and release room hold ONLY if owned by this booking (R18 / R4.7)
         rejected = true;
         rejectionReason = data.transaction_status;
         snapTokenCache.delete(orderId);
@@ -7312,10 +8037,14 @@ async function startServer() {
 
             if (orderId.startsWith('BOOK-') || orderId.startsWith('BOOKING-')) {
               const { data: b } = await supabase.from('bookings').select('*').eq('midtrans_order_id', orderId).maybeSingle();
-              if (b && b.status !== 'approved') {
-                await supabase.from('bookings').update({ status: 'rejected' }).eq('id', b.id);
+              if (b && b.status !== 'approved' && b.status !== 'needs_refund_review') {
+                const newBookingStatus = String(data.transaction_status || '').toLowerCase() === 'expire' ? 'expired' : 'rejected';
+                const { error: expStatusErr } = await supabase.from('bookings').update({ status: newBookingStatus }).eq('id', b.id);
+                if (expStatusErr) {
+                  await supabase.from('bookings').update({ status: 'rejected' }).eq('id', b.id);
+                }
                 if (b.room_id) {
-                  await supabase.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('id', b.room_id).eq('status', 'reserved');
+                  await releaseRoomHoldIfOwnedByBooking(supabase, b);
                   await syncPropertyRoomCountInSupabase(supabase, b.property_id);
                 }
               }
@@ -7336,12 +8065,145 @@ async function startServer() {
         }
       }
 
+      // R19: Provide receipt summary (including short-lived signed URLs for signatures) when settled so PDF invoice download works even if client state was reloaded from server
+      let receiptSummary: {
+        type: 'booking' | 'survey' | 'extension';
+        id: string;
+        name: string;
+        roomNo: string;
+        propertyName: string;
+        amountPaid: number;
+        method: string;
+        date: string;
+        signatureUrl?: string;
+        ownerSignatureUrl?: string;
+        isForOther?: boolean;
+        occupantName?: string;
+        occupantPhone?: string;
+        occupantEmail?: string;
+        isMarried?: boolean;
+        spouseName?: string;
+        spousePhone?: string;
+        spouseRelation?: 'istri' | 'suami';
+        husbandName?: string;
+        wifeName?: string;
+      } | null = null;
+
+      const resolveShortSignedSigUrl = async (rawSig?: string | null): Promise<string | undefined> => {
+        if (!rawSig || typeof rawSig !== 'string') return undefined;
+        const trimmed = rawSig.trim();
+        if (!trimmed) return undefined;
+        if (trimmed.startsWith('data:image/') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+          const match = trimmed.match(/\/storage\/v1\/object\/(?:public|sign)\/signatures\/([^?]+)/);
+          if (!match) return trimmed;
+          const objPath = decodeURIComponent(match[1]);
+          const { data: sData } = await supabase!.storage.from('signatures').createSignedUrl(objPath, 3600);
+          return sData?.signedUrl || trimmed;
+        }
+        const cleanPath = trimmed.replace(/^\/+/, '');
+        const objPath = cleanPath.startsWith('signatures/') ? cleanPath.slice('signatures/'.length) : cleanPath;
+        const { data: sData } = await supabase!.storage.from('signatures').createSignedUrl(objPath, 3600);
+        return sData?.signedUrl || undefined;
+      };
+
+      if (settled && supabase) {
+        try {
+          const { data: setRow } = await supabase.from('settings').select('owner_signature_url').eq('id', 1).maybeSingle();
+          const resolvedSettingOwnerSig = await resolveShortSignedSigUrl(setRow?.owner_signature_url);
+
+          if (orderId.startsWith('SRV-')) {
+            const { data: sv } = await supabase
+              .from('surveys')
+              .select('reservation_number, tenant_name, room_number, property_id, dp_amount, survey_date, signature_url')
+              .eq('reservation_number', orderId)
+              .maybeSingle();
+            if (sv) {
+              let propName = 'Samara Stay';
+              if (sv.property_id) {
+                const { data: pr } = await supabase.from('properties').select('name').eq('id', sv.property_id).maybeSingle();
+                if (pr?.name) propName = pr.name;
+              }
+              const signedTenantSig = await resolveShortSignedSigUrl((sv as any).signature_url);
+              receiptSummary = {
+                type: 'survey',
+                id: sv.reservation_number || orderId,
+                name: (sv as any).tenant_name || 'Pelanggan Samara',
+                roomNo: sv.room_number || '-',
+                propertyName: propName,
+                amountPaid: Number(sv.dp_amount ?? data.gross_amount ?? 500000),
+                method: data.payment_type || 'Midtrans SNAP',
+                date: (sv as any).survey_date || new Date().toISOString().slice(0, 10),
+                signatureUrl: signedTenantSig,
+                ownerSignatureUrl: resolvedSettingOwnerSig
+              };
+            }
+          } else if (orderId.startsWith('BOOK-') || orderId.startsWith('BOOKING-')) {
+            const { data: bk } = await supabase
+              .from('bookings')
+              .select('midtrans_order_id, tenant_name, room_id, room_number, property_id, total_price, dp_amount, is_dp, check_in_date, signature_url, owner_signature_url, is_for_other, occupant_name, occupant_phone, occupant_email, is_married, spouse_name, spouse_phone, spouse_relation')
+              .eq('midtrans_order_id', orderId)
+              .maybeSingle();
+            if (bk) {
+              let roomNo = (bk as any).room_number || '-';
+              let propName = 'Samara Stay';
+              if (bk.room_id) {
+                const { data: rm } = await supabase.from('rooms').select('room_number').eq('id', bk.room_id).maybeSingle();
+                if (rm?.room_number) roomNo = rm.room_number;
+              }
+              if (bk.property_id) {
+                const { data: pr } = await supabase.from('properties').select('name').eq('id', bk.property_id).maybeSingle();
+                if (pr?.name) propName = pr.name;
+              }
+              const signedTenantSig = await resolveShortSignedSigUrl((bk as any).signature_url);
+              const signedOwnerSig = (await resolveShortSignedSigUrl((bk as any).owner_signature_url)) || resolvedSettingOwnerSig;
+              const bookerName = (bk as any).tenant_name || 'Pelanggan Samara';
+              const isForOther = Boolean((bk as any).is_for_other && (bk as any).occupant_name && String((bk as any).occupant_name).trim());
+              const occupantName = isForOther ? String((bk as any).occupant_name).trim() : '';
+              const primaryResident = isForOther ? occupantName : bookerName;
+              const isMarried = Boolean((bk as any).is_married && (bk as any).spouse_name && String((bk as any).spouse_name).trim());
+              const spouseName = isMarried ? String((bk as any).spouse_name).trim() : '';
+              const spouseRelation: 'istri' | 'suami' = (bk as any).spouse_relation === 'suami' ? 'suami' : 'istri';
+              const husbandName = isMarried
+                ? (spouseRelation === 'suami' ? spouseName : primaryResident)
+                : '';
+              const wifeName = isMarried
+                ? (spouseRelation === 'suami' ? primaryResident : spouseName)
+                : '';
+
+              receiptSummary = {
+                type: 'booking',
+                id: bk.midtrans_order_id || orderId,
+                name: bookerName,
+                roomNo,
+                propertyName: propName,
+                amountPaid: Number(bk.is_dp ? (bk.dp_amount || data.gross_amount || 500000) : (bk.total_price || data.gross_amount || 0)),
+                method: data.payment_type || 'Midtrans SNAP',
+                date: bk.check_in_date || new Date().toISOString().slice(0, 10),
+                signatureUrl: signedTenantSig,
+                ownerSignatureUrl: signedOwnerSig,
+                isForOther,
+                occupantName: occupantName || undefined,
+                occupantPhone: (bk as any).occupant_phone || undefined,
+                occupantEmail: (bk as any).occupant_email || undefined,
+                isMarried,
+                spouseName: spouseName || undefined,
+                spousePhone: (bk as any).spouse_phone || undefined,
+                spouseRelation,
+                husbandName: husbandName || undefined,
+                wifeName: wifeName || undefined
+              };
+            }
+          }
+        } catch {}
+      }
+
       // Return only what the checkout screen needs - never the raw gateway payload (VA numbers, card masks, customer data).
       return res.status(200).json({
         success: true,
         settled,
         rejected,
         rejection_reason: rejectionReason,
+        receipt_summary: receiptSummary,
         midtrans: {
           order_id: data.order_id || orderId,
           transaction_status: data.transaction_status,
@@ -7360,15 +8222,35 @@ async function startServer() {
   });
 
   // =========================================================================
-  // REAL-TIME SERVER-SIDE MIDTRANS <-> SUPABASE PENDING ORDER RECONCILER
-  // Automatically syncs any pending Midtrans orders in Supabase with Midtrans API
-  // every 20s so all dashboards (End-User, Admin, Owner) update via Supabase Realtime
-  // even if the user closes their browser or webhook delivery is delayed.
+  // R18: REAL-TIME SERVER-SIDE MIDTRANS <-> SUPABASE PENDING ORDER RECONCILER
+  // Audited & Hardened per R18:
+  // (a) Only checks pending orders aged < 24 hours (`created_at >= NOW() - 24h`)
+  // (b) Max batch size <= 20 per cycle (8 bookings + 6 surveys + 6 extensions = max 20) + per-order exponential backoff
+  // (c) Non-overlap flag (`isMidtransReconcilerRunning`)
+  // (d) Stops checking orders on terminal status (`settlement`, `capture`, `deny`, `cancel`, `expire`, `failure`)
+  // (e) Idempotent settlement (`settleBookingTransaction` / `settle_booking_payment` RPC prevents duplicate journals, R3/R4)
+  // (f) Minimum interval 60 seconds (`RECONCILER_INTERVAL_MS = 60000`) & tracks DB/API query count per cycle
   // =========================================================================
+  const RECONCILER_INTERVAL_MS = Math.max(
+    60 * 1000,
+    Number(process.env.MIDTRANS_RECONCILER_INTERVAL_MS) || 60 * 1000
+  );
+  const RECONCILER_MAX_BATCH_PER_CYCLE = 20;
   let isMidtransReconcilerRunning = false;
-  setInterval(async () => {
-    if (isMidtransReconcilerRunning) return;
+  const reconcilerOrderBackoff = new Map<string, { attempts: number; nextCheckAt: number; terminal: boolean }>();
+  let lastReconcilerCycleStats = {
+    lastRunAt: null as string | null,
+    intervalMs: RECONCILER_INTERVAL_MS,
+    supabaseQueriesInCycle: 0,
+    midtransApiCallsInCycle: 0,
+    candidatesInspected: 0
+  };
+
+  const midtransReconcilerTimer = setInterval(async () => {
+    if (isMidtransReconcilerRunning || isServerQuotaActive()) return;
     isMidtransReconcilerRunning = true;
+    let supabaseQueriesCount = 0;
+    let midtransApiCallsCount = 0;
     try {
       let rawServerKey = process.env.MIDTRANS_SERVER_KEY || '';
       let serverKey = rawServerKey.trim().replace(/^["']|["']$/g, '').trim();
@@ -7378,33 +8260,43 @@ async function startServer() {
         return;
       }
 
-      const supabase = createClient(supabaseUrl, serviceKey);
+      const supabase = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
       const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
       const baseUrl = isProduction ? 'https://api.midtrans.com' : 'https://api.sandbox.midtrans.com';
       const authHeader = Buffer.from(`${serverKey}:`).toString('base64');
 
+      // R18(a): Only inspect pending orders created within the last 24 hours
+      const cutoff24hIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      // 3 fixed read queries per cycle (total batch <= 20: 8 + 6 + 6)
+      supabaseQueriesCount += 3;
       const [pendingBookings, pendingSurveys, pendingExts] = await Promise.all([
         supabase
           .from('bookings')
-          .select('id, midtrans_order_id, total_price, dp_amount, is_dp, room_id, property_id')
+          .select('id, midtrans_order_id, total_price, dp_amount, is_dp, room_id, property_id, guest_name, created_at')
           .eq('status', 'pending')
           .not('midtrans_order_id', 'is', null)
+          .gte('created_at', cutoff24hIso)
           .order('id', { ascending: false })
-          .limit(3),
+          .limit(8),
         supabase
           .from('surveys')
-          .select('id, reservation_number, dp_amount, property_id, room_number')
+          .select('id, reservation_number, dp_amount, property_id, room_number, created_at')
           .eq('status', 'pending_payment')
           .not('reservation_number', 'is', null)
+          .gte('created_at', cutoff24hIso)
           .order('id', { ascending: false })
-          .limit(3),
+          .limit(6),
         supabase
           .from('contract_extensions')
-          .select('id, midtrans_order_id, total_amount')
+          .select('id, midtrans_order_id, total_amount, created_at')
           .eq('status', 'pending')
           .not('midtrans_order_id', 'is', null)
+          .gte('created_at', cutoff24hIso)
           .order('id', { ascending: false })
-          .limit(2)
+          .limit(6)
       ]);
 
       const candidateOrders: { orderId: string; kind: 'booking' | 'survey' | 'ext'; expectedAmount: number; row: any }[] = [];
@@ -7439,37 +8331,78 @@ async function startServer() {
         }
       }
 
-      for (const item of candidateOrders) {
+      const boundedCandidates = candidateOrders.slice(0, RECONCILER_MAX_BATCH_PER_CYCLE);
+      const nowMs = Date.now();
+
+      // Prune stale backoff entries (> 24h)
+      if (reconcilerOrderBackoff.size > 500) {
+        for (const [k, v] of reconcilerOrderBackoff.entries()) {
+          if (nowMs - v.nextCheckAt > 24 * 60 * 60 * 1000) {
+            reconcilerOrderBackoff.delete(k);
+          }
+        }
+      }
+
+      for (const item of boundedCandidates) {
+        const backoffState = reconcilerOrderBackoff.get(item.orderId);
+        // R18(d) & R18(b): Skip if already terminal or still in backoff window
+        if (backoffState?.terminal) continue;
+        if (backoffState && nowMs < backoffState.nextCheckAt) continue;
+
         try {
+          midtransApiCallsCount += 1;
           const resp = await fetch(`${baseUrl}/v2/${encodeURIComponent(item.orderId)}/status`, {
             headers: {
               'Authorization': `Basic ${authHeader}`,
               'Accept': 'application/json'
             }
           });
-          if (!resp.ok) continue;
+          if (!resp.ok) {
+            const nextAttempts = (backoffState?.attempts || 0) + 1;
+            const backoffDelayMs = Math.min(15 * 60 * 1000, 60 * 1000 * Math.pow(2, Math.min(nextAttempts, 4)));
+            reconcilerOrderBackoff.set(item.orderId, {
+              attempts: nextAttempts,
+              nextCheckAt: Date.now() + backoffDelayMs,
+              terminal: false
+            });
+            continue;
+          }
           const mData: any = await resp.json();
           const txStatus = String(mData.transaction_status || '').toLowerCase();
 
           if (txStatus === 'settlement' || (txStatus === 'capture' && (!mData.fraud_status || mData.fraud_status === 'accept'))) {
             const paidAmount = Number(mData.gross_amount || 0);
-            if (item.expectedAmount > 0 && !amountsMatch(item.expectedAmount, paidAmount)) continue;
+            if (item.expectedAmount > 0 && !amountsMatch(item.expectedAmount, paidAmount)) {
+              reconcilerOrderBackoff.set(item.orderId, { attempts: 99, nextCheckAt: Date.now() + 24 * 60 * 60 * 1000, terminal: true });
+              continue;
+            }
 
             if (item.kind === 'booking') {
+              supabaseQueriesCount += 2;
               await settleBookingTransaction(supabase, item.orderId, mData.payment_type || 'Midtrans SNAP', mData.transaction_id, paidAmount);
             } else if (item.kind === 'survey') {
+              supabaseQueriesCount += 2;
               await settleSurveyTransaction(supabase, item.orderId, mData.payment_type || 'Midtrans SNAP', mData);
             } else if (item.kind === 'ext') {
+              supabaseQueriesCount += 2;
               await settleContractExtensionTransaction(supabase, item.orderId, mData.payment_type || 'Midtrans SNAP', mData.transaction_id, paidAmount);
             }
             snapTokenCache.delete(item.orderId);
+            reconcilerOrderBackoff.set(item.orderId, { attempts: 1, nextCheckAt: Date.now() + 24 * 60 * 60 * 1000, terminal: true });
           } else if (['deny', 'cancel', 'expire', 'failure'].includes(txStatus)) {
             snapTokenCache.delete(item.orderId);
+            reconcilerOrderBackoff.set(item.orderId, { attempts: 1, nextCheckAt: Date.now() + 24 * 60 * 60 * 1000, terminal: true });
+            supabaseQueriesCount += 2;
             await supabase.from('payments').update({ status: 'overdue' }).eq('midtrans_order_id', item.orderId).neq('status', 'paid');
             if (item.kind === 'booking') {
-              await supabase.from('bookings').update({ status: 'rejected' }).eq('id', item.row.id);
+              const targetStatus = txStatus === 'expire' ? 'expired' : 'rejected';
+              const { error: stErr } = await supabase.from('bookings').update({ status: targetStatus }).eq('id', item.row.id);
+              if (stErr) {
+                await supabase.from('bookings').update({ status: 'rejected' }).eq('id', item.row.id);
+              }
               if (item.row.room_id) {
-                await supabase.from('rooms').update({ status: 'available', current_tenant_name: null }).eq('id', item.row.room_id).eq('status', 'reserved');
+                supabaseQueriesCount += 2;
+                await releaseRoomHoldIfOwnedByBooking(supabase, item.row);
                 await syncPropertyRoomCountInSupabase(supabase, item.row.property_id);
               }
             } else if (item.kind === 'survey') {
@@ -7477,13 +8410,38 @@ async function startServer() {
             } else if (item.kind === 'ext') {
               await supabase.from('contract_extensions').update({ status: 'cancelled' }).eq('id', item.row.id);
             }
+          } else {
+            // Still pending in Midtrans: apply exponential backoff (60s -> 120s -> 240s -> max 10m)
+            const nextAttempts = (backoffState?.attempts || 0) + 1;
+            const backoffDelayMs = Math.min(10 * 60 * 1000, 60 * 1000 * Math.pow(2, Math.min(nextAttempts - 1, 3)));
+            reconcilerOrderBackoff.set(item.orderId, {
+              attempts: nextAttempts,
+              nextCheckAt: Date.now() + backoffDelayMs,
+              terminal: false
+            });
           }
         } catch {}
       }
+
+      lastReconcilerCycleStats = {
+        lastRunAt: new Date().toISOString(),
+        intervalMs: RECONCILER_INTERVAL_MS,
+        supabaseQueriesInCycle: supabaseQueriesCount,
+        midtransApiCallsInCycle: midtransApiCallsCount,
+        candidatesInspected: boundedCandidates.length
+      };
     } catch {} finally {
       isMidtransReconcilerRunning = false;
     }
-  }, 20000);
+  }, RECONCILER_INTERVAL_MS);
+  if (typeof midtransReconcilerTimer.unref === 'function') midtransReconcilerTimer.unref();
+
+  app.get('/api/midtrans/reconciler-stats', requireAdminAuth, (_req, res) => {
+    return res.status(200).json({
+      success: true,
+      stats: lastReconcilerCycleStats
+    });
+  });
 
 
   // =========================================================================
@@ -7494,6 +8452,7 @@ async function startServer() {
   app.post('/api/email/send', apiRateLimiter(60000, 20), optionalAdminAuth, async (req, res) => {
     try {
       const { to, subject, text, html, fromEmail, fromName, order_id, reservation_number } = req.body;
+      const orderRef = String(order_id || reservation_number || '').trim();
 
       if (!to || typeof to !== 'string' || !to.includes('@') || to.length > 100) {
         return res.status(400).json({
@@ -7505,7 +8464,6 @@ async function startServer() {
       // Check anti-open-relay authorization (R8):
       // Unauthenticated public callers must provide order_id / reservation_number matching the recipient email
       if (!req.authProfile) {
-        const orderRef = String(order_id || reservation_number || '').trim();
         if (!orderRef || !isValidOrderId(orderRef)) {
           return res.status(403).json({
             success: false,
@@ -7545,8 +8503,21 @@ async function startServer() {
       apiKey = apiKey.trim();
 
       if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
+        await logEmailEventToDatabase(
+          to,
+          String(subject || 'Notifikasi Samara Stay').slice(0, 150),
+          'failed',
+          'MAILERSEND_API_KEY belum dikonfigurasi.',
+          {
+            htmlBody: typeof html === 'string' ? html : undefined,
+            textBody: typeof text === 'string' ? text : undefined,
+            orderId: orderRef || undefined
+          }
+        );
         return res.status(500).json({
           success: false,
+          emailSent: false,
+          status: 'failed',
           message: 'Gagal mengirim email. MAILERSEND_API_KEY belum dikonfigurasi.'
         });
       }
@@ -7584,25 +8555,29 @@ async function startServer() {
 
       console.log('[API MAILERSEND] Dispatching email with retry policy to:', to, 'Subject:', payload.subject, 'inline attachments:', attachments.length);
 
-      const result = await sendEmailWithRetry(apiKey, payload, to, payload.subject);
+      const result = await sendEmailWithRetry(apiKey, payload, to, payload.subject, orderRef || null);
 
       if (!result.success) {
         if (result.isDomainUnverified) {
-          const isTransactionalReceipt = Boolean(order_id || reservation_number);
+          // R20.1: NEVER report "email terkirim" (success: true) when MailerSend rejects with #MS42207.
+          // Always record status='failed' in sent_emails (done inside sendEmailWithRetry) and return success: false, emailSent: false.
           return res.status(200).json({
-            success: isTransactionalReceipt,
+            success: false,
+            emailSent: false,
+            status: 'failed',
             archived_in_db: true,
+            can_retry_from_admin: true,
             warning_code: 'MS42207_DOMAIN_UNVERIFIED',
-            message: isTransactionalReceipt
-              ? 'Bukti transaksi telah disimpan di database (pengiriman email menunggu verifikasi domain di MailerSend).'
-              : (result.error || 'Domain pengirim (from.email) belum diverifikasi di akun MailerSend Anda (#MS42207). Silakan tambahkan dan verifikasi domain di dasbor MailerSend terlebih dahulu.'),
+            message: 'Pengiriman email GAGAL (#MS42207: domain pengirim belum terverifikasi di MailerSend). Email telah dicatat dengan status FAILED di log email dan dapat dikirim ulang dari panel Admin setelah domain diverifikasi.',
             details: result.dataText || result.error
           });
         }
 
         return res.status(200).json({
           success: false,
-          status: result.status || 500,
+          emailSent: false,
+          status: 'failed',
+          httpStatus: result.status || 500,
           message: 'Gagal mengirim email via MailerSend API.',
           details: result.dataText || result.error || 'Terjadi kesalahan pengiriman'
         });
@@ -7619,6 +8594,8 @@ async function startServer() {
 
       return res.json({
         success: true,
+        emailSent: true,
+        status: 'sent',
         message: 'Email berhasil terkirim via MailerSend!',
         details: parsedDetails
       });
@@ -7626,8 +8603,144 @@ async function startServer() {
       console.error('[API MAILERSEND ERROR]', err);
       return res.status(500).json({
         success: false,
+        emailSent: false,
+        status: 'failed',
         message: 'Terjadi kesalahan sistem internal saat mengirim email.',
         error: err.message || err
+      });
+    }
+  });
+
+  // =========================================================================
+  // R20.1: ADMIN SENT EMAILS LOG & RETRY FAILED EMAILS ENDPOINT
+  // Allows Admin/Owner to view `sent_emails` and retry failed emails (#MS42207 or transient errors)
+  // =========================================================================
+  app.get('/api/admin/emails', requireAdminAuth, apiRateLimiter(60000, 60), async (req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, error: 'Supabase Server Client belum dikonfigurasi.', data: [] });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+
+      const statusFilter = req.query.status ? String(req.query.status).trim() : '';
+      let query = supabaseAdmin
+        .from('sent_emails')
+        .select('id, recipient_email, subject, status, error_message, retry_count, last_retry_at, order_id, created_at')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (statusFilter) {
+        query = query.eq('status', statusFilter);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        return res.status(400).json({ success: false, error: error.message, data: [] });
+      }
+      return res.status(200).json({ success: true, data: data || [] });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Gagal memuat daftar log email.', data: [] });
+    }
+  });
+
+  app.post('/api/admin/emails/retry', requireAdminAuth, apiRateLimiter(60000, 20), async (req, res) => {
+    try {
+      const { id } = req.body || {};
+      if (!id) {
+        return res.status(400).json({ success: false, message: 'ID log email (sent_emails.id) wajib diisi.' });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, message: 'Supabase Server Client belum dikonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+
+      const { data: emailRecord, error: fetchErr } = await supabaseAdmin
+        .from('sent_emails')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (fetchErr || !emailRecord) {
+        return res.status(404).json({ success: false, message: 'Data log email tidak ditemukan di tabel sent_emails.' });
+      }
+
+      let apiKey = (process.env.MAILERSEND_API_KEY || '').trim().replace(/^["']|["']$/g, '').trim();
+      if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
+        return res.status(400).json({ success: false, message: 'MAILERSEND_API_KEY belum dikonfigurasi di server.' });
+      }
+
+      const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
+      const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
+      const resolvedFromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+
+      const rawHtml = emailRecord.html_body || `<p>${emailRecord.text_body || emailRecord.subject || 'Notifikasi Samara Stay'}</p>`;
+      const { html: processedHtml, attachments } = await processEmailHtmlAndSignatures(rawHtml);
+
+      const payload: MailerSendPayload = {
+        from: { email: resolvedFromEmail, name: resolvedFromName },
+        to: [{ email: emailRecord.recipient_email, name: String(emailRecord.recipient_email || '').split('@')[0].slice(0, 50) }],
+        subject: String(emailRecord.subject || 'Notifikasi Samara Stay').slice(0, 150),
+        text: String(emailRecord.text_body || emailRecord.subject || 'Notifikasi Samara Stay').slice(0, 20000),
+        html: processedHtml,
+        attachments: attachments.length > 0 ? attachments : undefined
+      };
+
+      const retryRes = await sendEmailWithRetry(
+        apiKey,
+        payload,
+        emailRecord.recipient_email,
+        payload.subject,
+        emailRecord.order_id || null
+      );
+
+      const nextRetryCount = Number(emailRecord.retry_count || 0) + 1;
+      const nowIso = new Date().toISOString();
+
+      await supabaseAdmin
+        .from('sent_emails')
+        .update({
+          status: retryRes.success ? 'sent' : 'failed',
+          error_message: retryRes.success ? null : (retryRes.error || retryRes.dataText || 'Gagal saat kirim ulang'),
+          retry_count: nextRetryCount,
+          last_retry_at: nowIso
+        })
+        .eq('id', emailRecord.id);
+
+      if (!retryRes.success) {
+        return res.status(200).json({
+          success: false,
+          emailSent: false,
+          status: 'failed',
+          retry_count: nextRetryCount,
+          message: retryRes.isDomainUnverified
+            ? 'Pengiriman ulang gagal (#MS42207: Domain pengirim belum diverifikasi di MailerSend).'
+            : (retryRes.error || 'Pengiriman ulang gagal.'),
+          details: retryRes.dataText || retryRes.error
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        emailSent: true,
+        status: 'sent',
+        retry_count: nextRetryCount,
+        message: `Email ke ${emailRecord.recipient_email} berhasil dikirim ulang.`
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        emailSent: false,
+        status: 'failed',
+        message: err?.message || 'Gagal melakukan pengiriman ulang email.'
       });
     }
   });
@@ -9598,8 +10711,131 @@ async function startServer() {
     });
   }
 
+  // =========================================================================
+  // R20: PRODUCTION BOOT CHECKS (Logs clear warnings without exposing secrets)
+  // =========================================================================
+  const runProductionBootChecks = () => {
+    const isProdEnv = process.env.NODE_ENV === 'production' || process.env.MIDTRANS_IS_PRODUCTION === 'true';
+    const warnings: string[] = [];
+
+    const midtransIsProd = process.env.MIDTRANS_IS_PRODUCTION === 'true';
+    const rawMidtransServerKey = (process.env.MIDTRANS_SERVER_KEY || '').trim().replace(/^["']|["']$/g, '').trim();
+    const rawMidtransClientKey = (process.env.VITE_MIDTRANS_CLIENT_KEY || process.env.MIDTRANS_CLIENT_KEY || '').trim().replace(/^["']|["']$/g, '').trim();
+
+    if (midtransIsProd && (rawMidtransServerKey.startsWith('SB-Mid-') || rawMidtransClientKey.startsWith('SB-Mid-'))) {
+      warnings.push(
+        '[BOOT CHECK R20 - MIDTRANS MISMATCH] MIDTRANS_IS_PRODUCTION=true tetapi kunci masih berawalan Sandbox ("SB-Mid-"). Gunakan Server/Client Key Production!'
+      );
+    } else if (!midtransIsProd && rawMidtransServerKey && !rawMidtransServerKey.startsWith('SB-Mid-') && rawMidtransServerKey !== 'YOUR_MIDTRANS_SERVER_KEY_HERE') {
+      warnings.push(
+        '[BOOT CHECK R20 - MIDTRANS MISMATCH] MIDTRANS_IS_PRODUCTION bukan true tetapi kunci Server Key tidak berawalan "SB-Mid-" (terindikasi kunci Production di mode Sandbox).'
+      );
+    }
+
+    const fromEmail = (process.env.MAILERSEND_FROM_EMAIL || '').trim();
+    if (!fromEmail || fromEmail.endsWith('.mlsender.net') || fromEmail.includes('example.com') || !fromEmail.includes('@')) {
+      warnings.push(
+        '[BOOT CHECK R20 - MAILERSEND DOMAIN] MAILERSEND_FROM_EMAIL kosong atau masih menggunakan domain trial/unverified. Verifikasi domain (SPF/DKIM) di MailerSend agar tidak terkena #MS42207.'
+      );
+    }
+
+    const appUrl = (process.env.APP_URL || '').trim();
+    if (!appUrl) {
+      warnings.push(
+        '[BOOT CHECK R20 - APP_URL] APP_URL kosong. Set APP_URL ke domain produksi (mis. https://samarastay.com) untuk CORS, tautan email, dan webhook Midtrans.'
+      );
+    }
+
+    const whitelistTotal =
+      getSuperAdminEmails().length +
+      getOwnerEmails().length +
+      getAnakOwnerEmails().length;
+    if (whitelistTotal === 0) {
+      warnings.push(
+        '[BOOT CHECK R20 - EMAIL WHITELIST] Daftar email whitelist (SUPER_ADMIN_EMAILS / OWNER_EMAILS / ANAK_OWNER_EMAILS) kosong.'
+      );
+    }
+
+    if (process.env.REQUIRE_EMAIL_CONFIRMED !== 'true') {
+      warnings.push(
+        '[BOOT CHECK R20 - AUTH] REQUIRE_EMAIL_CONFIRMED bukan "true". Disarankan mengaktifkan REQUIRE_EMAIL_CONFIRMED=true di produksi.'
+      );
+    }
+
+    if (warnings.length > 0) {
+      const header = isProdEnv
+        ? '⚠️ [PRODUCTION GO-LIVE BOOT CHECK WARNINGS]'
+        : 'ℹ️ [PRE-PRODUCTION GO-LIVE BOOT CHECK NOTICES]';
+      console.warn(`\n${header} (${warnings.length} item):`);
+      for (const w of warnings) {
+        console.warn(`  - ${w}`);
+      }
+      console.warn('');
+    }
+    return warnings;
+  };
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER RUNNING] Express backend listening on http://0.0.0.0:${PORT}`);
+    runProductionBootChecks();
+
+    // R18: Schedule cleanup_expired_room_holds() on server startup and every >= 5 minutes (non-overlapping)
+    const ROOM_HOLD_CLEANUP_INTERVAL_MS = Math.max(
+      5 * 60 * 1000,
+      Number(process.env.ROOM_HOLD_CLEANUP_INTERVAL_MS) || 5 * 60 * 1000
+    );
+    let roomHoldCleanupRunning = false;
+    const runBackgroundExpiredRoomHoldsCleanup = async () => {
+      if (roomHoldCleanupRunning || isServerQuotaActive()) return;
+      roomHoldCleanupRunning = true;
+      try {
+        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+        const serviceKey = getServiceRoleKeyOrThrow();
+        if (!supabaseUrl || !serviceKey) return;
+        const supabaseAdmin = createClient(supabaseUrl, serviceKey, {
+          auth: { persistSession: false, autoRefreshToken: false }
+        });
+
+        // 1. Call database RPC cleanup_expired_room_holds() if migration 049/052 is installed
+        const { error: rpcErr } = await supabaseAdmin.rpc('cleanup_expired_room_holds');
+
+        // 2. Code-level enforcement fallback (R18): release rooms whose hold_expires_at <= NOW()
+        if (rpcErr) {
+          const nowIso = new Date().toISOString();
+          const { data: expiredRooms } = await supabaseAdmin
+            .from('rooms')
+            .select('id, property_id, hold_by_booking_id')
+            .eq('status', 'reserved')
+            .not('hold_expires_at', 'is', null)
+            .lte('hold_expires_at', nowIso)
+            .limit(50);
+
+          for (const rm of expiredRooms || []) {
+            await supabaseAdmin
+              .from('rooms')
+              .update({
+                status: 'available',
+                current_tenant_name: null,
+                hold_expires_at: null,
+                hold_by_booking_id: null
+              })
+              .eq('id', rm.id)
+              .eq('status', 'reserved');
+            if (rm.property_id) {
+              await syncPropertyRoomCountInSupabase(supabaseAdmin, rm.property_id);
+            }
+          }
+        }
+      } catch {
+        // Silent catch for background cleanup job
+      } finally {
+        roomHoldCleanupRunning = false;
+      }
+    };
+
+    runBackgroundExpiredRoomHoldsCleanup();
+    const roomHoldCleanupTimer = setInterval(runBackgroundExpiredRoomHoldsCleanup, ROOM_HOLD_CLEANUP_INTERVAL_MS);
+    if (typeof roomHoldCleanupTimer.unref === 'function') roomHoldCleanupTimer.unref();
 
     // G7: Auto-release expired leases on server startup and every >=15 minutes (min 5m floor, non-overlapping)
     const EXPIRED_LEASE_SYNC_INTERVAL_MS = Math.max(
@@ -9633,7 +10869,9 @@ async function startServer() {
     const cleanupServerTimers = () => {
       clearInterval(rateLimitCleanupTimer);
       clearInterval(signatureCleanupTimer);
+      clearInterval(roomHoldCleanupTimer);
       clearInterval(expiredLeaseSyncTimer);
+      clearInterval(midtransReconcilerTimer);
       teardownServerBroadcastChannel();
     };
     process.once('SIGTERM', cleanupServerTimers);

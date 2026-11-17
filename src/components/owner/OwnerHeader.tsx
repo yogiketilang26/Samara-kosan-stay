@@ -1,13 +1,14 @@
 import React from 'react';
 import { Building2, Calendar, RefreshCw, Printer, Download, Sparkles, Filter, PenTool, ShieldCheck } from 'lucide-react';
 import { Property } from '../../types';
+import { FinancialReportPeriod } from '../../lib/financialMetrics';
 
 interface OwnerHeaderProps {
   properties: Property[];
   selectedPropertyId: string;
   onSelectProperty: (id: string) => void;
-  selectedPeriod: 'this_month' | 'last_month' | 'this_quarter' | 'ytd';
-  onSelectPeriod: (period: 'this_month' | 'last_month' | 'this_quarter' | 'ytd') => void;
+  selectedPeriod: FinancialReportPeriod;
+  onSelectPeriod: (period: FinancialReportPeriod) => void;
   onRefresh: () => void;
   isLoading: boolean;
   onPrint: () => void;
@@ -64,7 +65,7 @@ export const OwnerHeader: React.FC<OwnerHeaderProps> = ({
             >
               <option value="all">🏢 Semua Cabang ({properties.length} Properti)</option>
               {properties.map((p) => (
-                <option key={p.id} value={p.id}>
+                <option key={p.id} value={String(p.id)}>
                   📍 {p.name}
                 </option>
               ))}
@@ -76,9 +77,10 @@ export const OwnerHeader: React.FC<OwnerHeaderProps> = ({
           <div className="relative col-span-2 sm:col-span-1 sm:w-auto">
             <select
               value={selectedPeriod}
-              onChange={(e) => onSelectPeriod(e.target.value as any)}
+              onChange={(e) => onSelectPeriod(e.target.value as FinancialReportPeriod)}
               className="w-full sm:w-auto bg-slate-800/90 text-white border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-semibold focus:outline-none focus:border-emerald-500 pr-8 appearance-none cursor-pointer hover:bg-slate-750 transition-colors shadow-inner"
             >
+              <option value="all">♾️ Semua Periode (Akumulasi)</option>
               <option value="this_month">📅 Bulan Ini (M-T-D)</option>
               <option value="last_month">📅 Bulan Lalu</option>
               <option value="this_quarter">📊 Kuartal Ini (QTD)</option>
