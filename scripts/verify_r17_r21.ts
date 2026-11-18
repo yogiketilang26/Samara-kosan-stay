@@ -354,9 +354,32 @@ assertTest(
   'resolveCoupleNames di pdfGenerator.ts + live preview di BookingForm.tsx + liveReceipt di InvoiceCard.tsx + currentCtx/bookingReceiptPayload di Home.tsx + receipt_summary di /api/midtrans/status/:orderId + OwnerSignatureManager.tsx'
 );
 
+// ============================================================================
+// R26 TESTS: MailerSend Delivery Stability, Queueing, Deduplication & Diagnostics
+// ============================================================================
+const hasMailerSendStabilityAndDiagnostics =
+  serverSrc.includes('function enqueueMailerSendTask') &&
+  serverSrc.includes('orderEmailDedupCache') &&
+  serverSrc.includes('app.get(\'/api/email/diagnostics\'') &&
+  serverSrc.includes('app.post(\'/api/email/config\'') &&
+  serverSrc.includes('app.post(\'/api/admin/emails/retry-all\'') &&
+  serverSrc.includes('row.recipient || row.recipient_email') &&
+  serverSrc.includes('skipDbLog?: boolean') &&
+  homeSrc.includes('settledOrderIdsRef.current.delete(currentOrderId)') &&
+  ownerSigMgrSrc.includes('getAuthHeaders') &&
+  adminSrc.includes('handleSaveEmailSenderConfig') &&
+  adminSrc.includes('handleRetryAllFailedEmails');
+
+assertTest(
+  'R26.1',
+  'Pengiriman email MailerSend stabil dengan antrean berurutan (anti-429), deduplikasi per order_id (anti-triple-send), auto-fallback kandidat domain/trial owner, diagnostik live, dan retry gagal 1-klik',
+  hasMailerSendStabilityAndDiagnostics,
+  'enqueueMailerSendTask + orderEmailDedupCache + /api/email/diagnostics + /api/email/config + /api/admin/emails/retry-all + normalisasi kolom recipient/sent_at di sent_emails'
+);
+
 const failed = results.filter((r) => !r.passed);
 console.log(`\n============================================================`);
-console.log(`RINGKASAN VERIFIKASI R17–R25: ${results.length - failed.length}/${results.length} LULUS`);
+console.log(`RINGKASAN VERIFIKASI R17–R26: ${results.length - failed.length}/${results.length} LULUS`);
 console.log(`============================================================`);
 if (failed.length > 0) {
   process.exit(1);

@@ -1438,6 +1438,8 @@ export default function Home({}: HomeProps) {
     if (settledOrderIdsRef.current.has(currentOrderId)) {
       return;
     }
+    // Lock immediately before awaiting network calls so concurrent pollCtrl + snap.onSuccess callbacks cannot enter twice
+    settledOrderIdsRef.current.add(currentOrderId);
 
     const effectiveFlow = ctx?.checkoutFlow || (currentOrderId.startsWith('SRV-') ? 'survey' : checkoutFlow);
     const effectiveRoomNumber = activeRoom?.room_number || ctx?.roomNumber || '-';
@@ -1514,12 +1516,12 @@ export default function Home({}: HomeProps) {
     });
 
     if (!serverSettled) {
+      settledOrderIdsRef.current.delete(currentOrderId);
       alert('Pembayaran belum terkonfirmasi lunas oleh server Midtrans. Silakan cek kembali status pembayaran Anda.');
       return;
     }
 
-    // Mark orderId as settled on client and clear active session from localStorage
-    settledOrderIdsRef.current.add(currentOrderId);
+    // Clear active session from localStorage
     clearActivePaymentSession(currentOrderId);
 
     // Immediately close reservation form (FORMULIR RESERVASI KAMAR) & return to tampilan awal

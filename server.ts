@@ -4349,99 +4349,197 @@ async function startServer() {
     }
   }
 
+  // Runtime overrides for MailerSend sender config (modifiable from Admin UI without server restart)
+  const runtimeEmailConfig: {
+    apiKeyOverride?: string;
+    fromEmailOverride?: string;
+    fromNameOverride?: string;
+  } = {};
+
+  function getActiveMailerSendApiKey(): string {
+    let key = (runtimeEmailConfig.apiKeyOverride || process.env.MAILERSEND_API_KEY || '').trim();
+    if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+      key = key.slice(1, -1).trim();
+    }
+    return key;
+  }
+
+  function getActiveMailerSendFromEmail(customFrom?: string): string {
+    const candidate = (customFrom || runtimeEmailConfig.fromEmailOverride || process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net').trim();
+    return candidate || 'info@test-zkq340e73m2gd796.mlsender.net';
+  }
+
+  function getActiveMailerSendFromName(customName?: string): string {
+    const candidate = (customName || runtimeEmailConfig.fromNameOverride || process.env.MAILERSEND_FROM_NAME || 'Samara Stay').trim();
+    return candidate || 'Samara Stay';
+  }
+
+  // Serialized rate-limited outbound queue for MailerSend API (prevents burst 429 & race conditions)
+  let mailerSendQueuePromise: Promise<any> = Promise.resolve();
+  let lastMailerSendCallAt = 0;
+  const MAILERSEND_MIN_INTERVAL_MS = 650;
+
+  function enqueueMailerSendTask<T>(task: () => Promise<T>): Promise<T> {
+    const run = mailerSendQueuePromise.catch(() => {}).then(async () => {
+      const elapsed = Date.now() - lastMailerSendCallAt;
+      if (elapsed < MAILERSEND_MIN_INTERVAL_MS) {
+        await new Promise((r) => setTimeout(r, MAILERSEND_MIN_INTERVAL_MS - elapsed));
+      }
+      lastMailerSendCallAt = Date.now();
+      return task();
+    });
+    mailerSendQueuePromise = run.catch(() => {});
+    return run;
+  }
+
+  // Per-(orderId, recipientEmail) deduplication lock (prevents duplicate emails when webhook/status/client trigger together)
+  const orderEmailDedupCache = new Map<string, { timestamp: number; promise: Promise<any> }>();
+  const ORDER_EMAIL_DEDUP_TTL_MS = 90 * 1000;
+
   // Helper function to dynamically discover the verified domain or sender identity from MailerSend with in-memory cache (R8)
-  const verifiedDomainCache = new Map<string, { resolvedEmail: string; hasVerifiedSender: boolean; expiresAt: number }>();
-  const VERIFIED_DOMAIN_CACHE_TTL_MS = 5 * 60 * 1000;
+  const verifiedDomainCache = new Map<string, {
+    resolvedEmail: string;
+    candidates: string[];
+    hasVerifiedSender: boolean;
+    accountOwnerEmail?: string;
+    expiresAt: number;
+  }>();
+  const VERIFIED_DOMAIN_CACHE_TTL_MS = 3 * 60 * 1000;
 
   async function resolveVerifiedSenderInfo(
     apiKey: string,
     fallbackEmail: string
-  ): Promise<{ email: string; hasVerifiedSender: boolean }> {
+  ): Promise<{ email: string; candidates: string[]; hasVerifiedSender: boolean; accountOwnerEmail?: string }> {
     const cleanFallback = (fallbackEmail || 'info@samarastay.com').trim();
     const cacheKey = `${apiKey.slice(-6)}:${cleanFallback}`;
     const cached = verifiedDomainCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
-      return { email: cached.resolvedEmail, hasVerifiedSender: cached.hasVerifiedSender };
+      return {
+        email: cached.resolvedEmail,
+        candidates: cached.candidates,
+        hasVerifiedSender: cached.hasVerifiedSender,
+        accountOwnerEmail: cached.accountOwnerEmail
+      };
     }
 
-    try {
-      const res = await fetch('https://api.mailersend.com/v1/domains', {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
-        }
-      });
-      if (res.status === 200) {
-        const json = await res.json();
-        const domains = Array.isArray(json?.data) ? json.data : [];
-        const verifiedDomains = domains.filter(
-          (d: any) => d && (d.is_verified === true || d.is_verified === 'true' || d.is_verified === 1)
-        );
-        if (verifiedDomains.length > 0) {
-          const fallbackDomain = cleanFallback.split('@')[1];
-          const match = verifiedDomains.find((d: any) => d.name === fallbackDomain);
-          const selectedDomain = match ? match.name : verifiedDomains[0].name;
-          const userPrefix = cleanFallback.split('@')[0] || 'info';
-          const resolved = `${userPrefix}@${selectedDomain}`;
-          verifiedDomainCache.set(cacheKey, {
-            resolvedEmail: resolved,
-            hasVerifiedSender: true,
-            expiresAt: Date.now() + VERIFIED_DOMAIN_CACHE_TTL_MS
-          });
-          return { email: resolved, hasVerifiedSender: true };
-        }
+    const userPrefix = cleanFallback.split('@')[0] || 'info';
+    const fallbackDomain = (cleanFallback.split('@')[1] || '').toLowerCase();
+    const candidateSet = new Set<string>();
+    let hasVerifiedSender = false;
+    let accountOwnerEmail: string | undefined = undefined;
 
-        // Also check single verified sender identities (/v1/identities) if no verified domain was found
-        const idRes = await fetch('https://api.mailersend.com/v1/identities', {
+    try {
+      const [domRes, idRes, userRes] = await Promise.all([
+        fetch('https://api.mailersend.com/v1/domains', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${apiKey}`,
             'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
-          }
-        });
-        if (idRes.status === 200) {
-          const idJson = await idRes.json();
-          const identities = Array.isArray(idJson?.data) ? idJson.data : [];
-          const verifiedIdentities = identities.filter(
-            (idItem: any) =>
-              idItem &&
-              idItem.email &&
-              (idItem.is_verified === true || idItem.is_verified === 'true' || idItem.is_verified === 1 || idItem.status === 'verified')
-          );
-          if (verifiedIdentities.length > 0) {
-            const exactMatch = verifiedIdentities.find(
-              (idItem: any) => String(idItem.email).toLowerCase() === cleanFallback.toLowerCase()
-            );
-            const resolved = exactMatch ? exactMatch.email : verifiedIdentities[0].email;
-            verifiedDomainCache.set(cacheKey, {
-              resolvedEmail: resolved,
-              hasVerifiedSender: true,
-              expiresAt: Date.now() + VERIFIED_DOMAIN_CACHE_TTL_MS
-            });
-            return { email: resolved, hasVerifiedSender: true };
+          },
+          signal: AbortSignal.timeout(6000)
+        }).catch(() => null),
+        fetch('https://api.mailersend.com/v1/identities', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+          },
+          signal: AbortSignal.timeout(6000)
+        }).catch(() => null),
+        fetch('https://api.mailersend.com/v1/users', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+          },
+          signal: AbortSignal.timeout(5000)
+        }).catch(() => null)
+      ]);
+
+      if (userRes && userRes.status === 200) {
+        const uJson = await userRes.json().catch(() => ({}));
+        const users = Array.isArray(uJson?.data) ? uJson.data : [];
+        if (users[0]?.email) {
+          accountOwnerEmail = String(users[0].email).trim();
+        }
+      }
+
+      if (domRes && domRes.status === 200) {
+        const json = await domRes.json().catch(() => ({}));
+        const domains = Array.isArray(json?.data) ? json.data : [];
+        const verifiedDomains = domains.filter(
+          (d: any) => d && d.name && (d.is_verified === true || d.is_verified === 'true' || d.is_verified === 1 || d.is_dns_active === true)
+        );
+        const trialDomains = domains.filter(
+          (d: any) => d && d.name && String(d.name).toLowerCase().endsWith('.mlsender.net')
+        );
+        const otherDomains = domains.filter((d: any) => d && d.name);
+
+        if (verifiedDomains.length > 0) {
+          hasVerifiedSender = true;
+          const exactDom = verifiedDomains.find((d: any) => String(d.name).toLowerCase() === fallbackDomain);
+          if (exactDom) candidateSet.add(`${userPrefix}@${exactDom.name}`);
+          for (const d of verifiedDomains) {
+            candidateSet.add(`${userPrefix}@${d.name}`);
+            candidateSet.add(`info@${d.name}`);
           }
         }
 
-        // Account responded 200 OK on /v1/domains with 0 verified domains and 0 verified identities
-        verifiedDomainCache.set(cacheKey, {
-          resolvedEmail: cleanFallback,
-          hasVerifiedSender: false,
-          expiresAt: Date.now() + 60 * 1000 // re-check every 60s in case user verifies a domain in MailerSend dashboard
-        });
-        return { email: cleanFallback, hasVerifiedSender: false };
+        if (trialDomains.length > 0) {
+          hasVerifiedSender = true;
+          for (const d of trialDomains) {
+            candidateSet.add(`${userPrefix}@${d.name}`);
+            candidateSet.add(`info@${d.name}`);
+          }
+        }
+
+        for (const d of otherDomains) {
+          candidateSet.add(`${userPrefix}@${d.name}`);
+          candidateSet.add(`info@${d.name}`);
+        }
+      }
+
+      if (idRes && idRes.status === 200) {
+        const idJson = await idRes.json().catch(() => ({}));
+        const identities = Array.isArray(idJson?.data) ? idJson.data : [];
+        const verifiedIdentities = identities.filter(
+          (idItem: any) =>
+            idItem &&
+            idItem.email &&
+            (idItem.is_verified === true || idItem.is_verified === 'true' || idItem.is_verified === 1 || idItem.status === 'verified')
+        );
+        if (verifiedIdentities.length > 0) {
+          hasVerifiedSender = true;
+          const exactId = verifiedIdentities.find(
+            (idItem: any) => String(idItem.email).toLowerCase() === cleanFallback.toLowerCase()
+          );
+          if (exactId) candidateSet.add(exactId.email);
+          for (const idItem of verifiedIdentities) {
+            candidateSet.add(String(idItem.email).trim());
+          }
+        }
+        for (const idItem of identities) {
+          if (idItem?.email) candidateSet.add(String(idItem.email).trim());
+        }
       }
     } catch (err) {
-      console.warn('[MAILERSEND DISCOVERY NOTICE] Could not query domains:', err);
+      console.warn('[MAILERSEND DISCOVERY NOTICE] Could not query domains/identities:', err);
     }
 
-    // If token is a Sending-only key (HTTP 403 on /v1/domains), allow attempting with fallbackEmail
+    // Always include cleanFallback so sendEmailWithRetry can test POST /v1/email directly
+    candidateSet.add(cleanFallback);
+    const candidates = Array.from(candidateSet).filter(Boolean);
+    const resolvedEmail = candidates[0] || cleanFallback;
+
     verifiedDomainCache.set(cacheKey, {
-      resolvedEmail: cleanFallback,
-      hasVerifiedSender: true,
-      expiresAt: Date.now() + VERIFIED_DOMAIN_CACHE_TTL_MS
+      resolvedEmail,
+      candidates,
+      hasVerifiedSender,
+      accountOwnerEmail,
+      expiresAt: Date.now() + (hasVerifiedSender ? VERIFIED_DOMAIN_CACHE_TTL_MS : 30 * 1000)
     });
-    return { email: cleanFallback, hasVerifiedSender: true };
+
+    return { email: resolvedEmail, candidates, hasVerifiedSender, accountOwnerEmail };
   }
 
   async function resolveVerifiedFromEmail(apiKey: string, fallbackEmail: string): Promise<string> {
@@ -4452,19 +4550,14 @@ async function startServer() {
   // Diagnostic Utility Function for MailerSend API verification & email queue debugging
   async function runMailerSendDiagnostics() {
     const timestamp = new Date().toISOString();
-    let apiKey = process.env.MAILERSEND_API_KEY || '';
-    apiKey = apiKey.trim();
-    if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
-    else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
-    apiKey = apiKey.trim();
-
-    const rawFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
-    const rawFromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+    const apiKey = getActiveMailerSendApiKey();
+    const rawFromEmail = getActiveMailerSendFromEmail();
+    const rawFromName = getActiveMailerSendFromName();
 
     const credentialsCheck = {
       apiKeyConfigured: Boolean(apiKey && apiKey !== 'YOUR_MAILERSEND_API_KEY_HERE'),
-      apiKeyMasked: apiKey && apiKey !== 'YOUR_MAILERSEND_API_KEY_HERE' 
-        ? `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}` 
+      apiKeyMasked: apiKey && apiKey !== 'YOUR_MAILERSEND_API_KEY_HERE'
+        ? `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`
         : 'NOT_CONFIGURED',
       fromEmail: rawFromEmail,
       fromName: rawFromName,
@@ -4475,12 +4568,15 @@ async function startServer() {
       timestamp,
       environment: process.env.NODE_ENV || 'development',
       credentials: credentialsCheck,
+      accountOwner: null,
+      quota: null,
       connectivity: {
         status: 'pending',
         httpCode: null,
         message: ''
       },
       domains: [],
+      identities: [],
       activityLogs: [],
       resolvedSender: null,
       recommendations: []
@@ -4488,51 +4584,112 @@ async function startServer() {
 
     if (!credentialsCheck.apiKeyConfigured) {
       diagnostics.connectivity.status = 'failed';
-      diagnostics.connectivity.message = 'MAILERSEND_API_KEY is missing or set to default placeholder value.';
-      diagnostics.recommendations.push('Daftarkan MAILERSEND_API_KEY yang valid di environment variables (.env / settings).');
-      console.warn('[MAILERSEND DIAGNOSTICS] API Key not configured.');
+      diagnostics.connectivity.message = 'MAILERSEND_API_KEY belum dikonfigurasi.';
+      diagnostics.recommendations.push('Daftarkan MAILERSEND_API_KEY yang valid di environment variables (.env) atau lewat form Konfigurasi MailerSend.');
       return diagnostics;
     }
 
     try {
-      console.log('[MAILERSEND DIAGNOSTICS] Verifying MailerSend API connectivity & verified domains...');
-      const domainsRes = await fetch('https://api.mailersend.com/v1/domains', {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
-        }
-      });
+      const [domainsRes, identitiesRes, usersRes, quotaRes] = await Promise.all([
+        fetch('https://api.mailersend.com/v1/domains', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+          },
+          signal: AbortSignal.timeout(7000)
+        }),
+        fetch('https://api.mailersend.com/v1/identities', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+          },
+          signal: AbortSignal.timeout(7000)
+        }).catch(() => null),
+        fetch('https://api.mailersend.com/v1/users', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+          },
+          signal: AbortSignal.timeout(6000)
+        }).catch(() => null),
+        fetch('https://api.mailersend.com/v1/api-quota', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+          },
+          signal: AbortSignal.timeout(6000)
+        }).catch(() => null)
+      ]);
 
       diagnostics.connectivity.httpCode = domainsRes.status;
 
+      if (usersRes && usersRes.status === 200) {
+        const uJson = await usersRes.json().catch(() => ({}));
+        const u = Array.isArray(uJson?.data) ? uJson.data[0] : null;
+        if (u) {
+          diagnostics.accountOwner = {
+            name: [u.name, u.last_name].filter(Boolean).join(' ') || 'Admin',
+            email: u.email,
+            role: u.role
+          };
+        }
+      }
+
+      if (quotaRes && quotaRes.status === 200) {
+        diagnostics.quota = await quotaRes.json().catch(() => null);
+      }
+
+      if (identitiesRes && identitiesRes.status === 200) {
+        const idJson = await identitiesRes.json().catch(() => ({}));
+        if (Array.isArray(idJson?.data)) {
+          diagnostics.identities = idJson.data.map((i: any) => ({
+            id: i.id,
+            email: i.email,
+            name: i.name,
+            is_verified: i.is_verified ?? (i.status === 'verified')
+          }));
+        }
+      }
+
       if (domainsRes.status === 200) {
         diagnostics.connectivity.status = 'success';
-        diagnostics.connectivity.message = 'Koneksi ke MailerSend API Berhasil! (HTTP 200 OK)';
-        const domainsJson = await domainsRes.json();
-        
+        diagnostics.connectivity.message = 'Koneksi ke MailerSend API Berhasil (HTTP 200 OK)';
+        const domainsJson = await domainsRes.json().catch(() => ({}));
+
         if (domainsJson && Array.isArray(domainsJson.data)) {
           diagnostics.domains = domainsJson.data.map((d: any) => ({
             id: d.id,
             name: d.name,
-            is_verified: d.is_verified ?? true,
+            is_verified: Boolean(d.is_verified || d.is_dns_active),
             created_at: d.created_at
           }));
         }
 
-        const resolvedSender = await resolveVerifiedFromEmail(apiKey, rawFromEmail);
-        diagnostics.resolvedSender = resolvedSender;
+        const senderInfo = await resolveVerifiedSenderInfo(apiKey, rawFromEmail);
+        diagnostics.resolvedSender = senderInfo.email;
 
-        if (credentialsCheck.isTrialDomain) {
+        if (diagnostics.domains.length === 0 && diagnostics.identities.length === 0) {
+          const ownerInfo = diagnostics.accountOwner?.email ? ` (${diagnostics.accountOwner.email})` : '';
           diagnostics.recommendations.push(
-            'Perhatian: Anda sedang menggunakan domain trial MailerSend (*.mlsender.net). Pada mode trial, email booking HANYA terkirim ke alamat email pembuat akun MailerSend / Authorized Recipients.'
+            `PENYEBAB EMAIL BELUM TERKIRIM (#MS42207): Akun MailerSend Anda${ownerInfo} saat ini memiliki 0 domain aktif (daftar domain kosong di MailerSend, sedangkan From Email diset ke "${rawFromEmail}").`
           );
-        }
-
-        if (diagnostics.domains.length === 0) {
           diagnostics.recommendations.push(
-            'Tidak ada domain terverifikasi di akun MailerSend Anda. Silakan tambahkan dan verifikasi domain kos Anda di MailerSend Dashboard.'
+            'SOLUSI CEPAT: Buka https://app.mailersend.com/domains → Aktifkan Trial Domain (*.mlsender.net) atau tambahkan domain Anda, lalu salin alamat domain tersebut ke kolom "From Email" di samping dan klik "Simpan Konfigurasi Pengirim".'
+          );
+          diagnostics.recommendations.push(
+            'Setelah domain aktif di MailerSend, klik tombol "Kirim Ulang Semua Email Gagal" di tabel bawah untuk mengirim seluruh antrean email yang tertunda.'
+          );
+        } else if (credentialsCheck.isTrialDomain) {
+          diagnostics.recommendations.push(
+            `Mode Trial Domain (*.mlsender.net) aktif: MailerSend membatasi pengiriman langsung ke alamat administrator (${diagnostics.accountOwner?.email || 'email pemilik akun'}). Jika penyewa memakai email lain, sistem otomatis meneruskan salinannya ke email administrator Anda.`
           );
         }
       } else {
@@ -4542,26 +4699,25 @@ async function startServer() {
         diagnostics.connectivity.errorDetails = errorText;
 
         if (domainsRes.status === 401) {
-          diagnostics.recommendations.push('HTTP 401 Unauthorized: Periksa kembali apakah MAILERSEND_API_KEY aktif dan tepat.');
+          diagnostics.recommendations.push('HTTP 401 Unauthorized: Periksa kembali apakah MAILERSEND_API_KEY aktif dan tidak dicabut.');
         } else if (domainsRes.status === 422) {
           diagnostics.recommendations.push('HTTP 422 Unprocessable Entity: Alamat pengirim (From Email) atau domain belum sesuai di MailerSend.');
         }
       }
 
-      // Query recent email message queue logs for debugging failed booking emails
       try {
-        console.log('[MAILERSEND DIAGNOSTICS] Querying recent message queue logs...');
         const activityRes = await fetch('https://api.mailersend.com/v1/messages?limit=10', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
-          }
+          },
+          signal: AbortSignal.timeout(6000)
         });
 
         if (activityRes.status === 200) {
-          const actJson = await activityRes.json();
+          const actJson = await activityRes.json().catch(() => ({}));
           if (actJson && Array.isArray(actJson.data)) {
             diagnostics.activityLogs = actJson.data.slice(0, 10).map((msg: any) => ({
               id: msg.id,
@@ -4575,14 +4731,12 @@ async function startServer() {
       } catch (actErr: any) {
         console.warn('[MAILERSEND DIAGNOSTICS] Failed fetching activity queue:', actErr.message || actErr);
       }
-
     } catch (connErr: any) {
       diagnostics.connectivity.status = 'error';
       diagnostics.connectivity.message = `Gagal terhubung ke server MailerSend: ${connErr.message || connErr}`;
       diagnostics.recommendations.push('Periksa koneksi jaringan internet atau status layanan MailerSend.');
     }
 
-    console.log('[MAILERSEND DIAGNOSTICS RESULT]', JSON.stringify(diagnostics, null, 2));
     return diagnostics;
   }
 
@@ -4887,132 +5041,202 @@ async function startServer() {
     return { html, attachments };
   }
 
-  // Core MailerSend API fetcher with max 3 retries and exponential backoff (1s, 2s, 4s)
+  // Core MailerSend API fetcher with serialized queue, per-order deduplication, candidate sender fallback, and exponential backoff (1s, 2s, 4s)
   async function sendEmailWithRetry(
     apiKey: string,
     payload: MailerSendPayload,
     recipientEmail: string,
     subject: string,
-    orderId?: string | null
-  ): Promise<{ success: boolean; status?: number; dataText?: string; error?: string; isDomainUnverified?: boolean }> {
-    // Pre-check whether the MailerSend account has any verified domain/sender identity before calling POST /v1/email
-    const senderCheck = await resolveVerifiedSenderInfo(apiKey, payload.from.email);
-    if (!senderCheck.hasVerifiedSender) {
-      const msg = 'Akun MailerSend belum memiliki domain atau Sender Identity yang terverifikasi (#MS42207). Email diarsipkan ke database.';
-      console.info(`[MAILERSEND NOTICE] ${msg}`);
-      await logEmailEventToDatabase(recipientEmail, subject, 'failed', msg, {
-        htmlBody: payload.html,
-        textBody: payload.text,
-        orderId: orderId || undefined
-      });
-      return {
-        success: false,
-        status: 200,
-        isDomainUnverified: true,
-        dataText: JSON.stringify({ message: msg, code: 'MS42207_NO_VERIFIED_DOMAIN' }),
-        error: msg
-      };
+    orderId?: string | null,
+    options?: { skipDbLog?: boolean }
+  ): Promise<{ success: boolean; status?: number; dataText?: string; error?: string; isDomainUnverified?: boolean; deduplicated?: boolean }> {
+    const cleanRecipient = String(recipientEmail || '').trim().toLowerCase();
+    const cleanOrderId = orderId ? String(orderId).trim() : '';
+    const dedupKey = cleanOrderId ? `${cleanOrderId}:${cleanRecipient}` : '';
+
+    // Prevent duplicate concurrent/back-to-back sends for the same (orderId, recipientEmail) within 90s
+    if (dedupKey && !options?.skipDbLog) {
+      const existing = orderEmailDedupCache.get(dedupKey);
+      if (existing && Date.now() - existing.timestamp < ORDER_EMAIL_DEDUP_TTL_MS) {
+        console.log(`[MAILERSEND DEDUP] Skipping duplicate email dispatch for Order ${cleanOrderId} -> ${cleanRecipient}`);
+        return existing.promise;
+      }
     }
-    payload.from.email = senderCheck.email;
 
-    const delays = [1000, 2000, 4000]; // Exponential backoff delays (1s, 2s, 4s)
-    const maxAttempts = 3;
-    let lastError: string = '';
-    let lastStatus: number | undefined = undefined;
-    let lastResponseText = '';
+    const executeSend = () => enqueueMailerSendTask(async () => {
+      const senderCheck = await resolveVerifiedSenderInfo(apiKey, payload.from.email);
+      const candidates = senderCheck.candidates.length > 0 ? senderCheck.candidates : [payload.from.email];
+      payload.from.email = candidates[0];
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        console.log(`[MAILERSEND API] Attempt ${attempt}/${maxAttempts} sending email to: ${recipientEmail} ("${subject}")`);
+      const delays = [1000, 2000, 4000];
+      const maxAttempts = 3;
+      let lastError = '';
+      let lastStatus: number | undefined = undefined;
+      let lastResponseText = '';
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          console.log(`[MAILERSEND API] Attempt ${attempt}/${maxAttempts} sending email to: ${recipientEmail} from: ${payload.from.email} ("${subject}")`);
 
-        const res = await fetch('https://api.mailersend.com/v1/email', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-        clearTimeout(timeoutId);
-
-        lastStatus = res.status;
-        lastResponseText = await res.text();
-
-        if (res.status >= 200 && res.status < 300) {
-          console.log(`[MAILERSEND API SUCCESS] Email delivered on attempt ${attempt}. Status: ${res.status}`);
-          await logEmailEventToDatabase(recipientEmail, subject, 'sent', undefined, {
-            htmlBody: payload.html,
-            textBody: payload.text,
-            orderId: orderId || undefined
+          const res = await fetch('https://api.mailersend.com/v1/email', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+              'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal
           });
-          return { success: true, status: res.status, dataText: lastResponseText };
-        }
 
-        // Graceful handling for #MS42207 (unverified from.email domain) or #MS42225 (trial recipient limit)
-        if (res.status === 422 && (lastResponseText.includes('#MS42207') || lastResponseText.includes('#MS42225'))) {
-          verifiedDomainCache.clear();
-          const friendlyNotice = lastResponseText.includes('#MS42207')
-            ? `Domain pengirim (${payload.from.email}) belum diverifikasi di akun MailerSend (#MS42207). Silakan verifikasi domain di dasbor MailerSend.`
-            : `Akun trial MailerSend membatasi pengiriman hanya ke alamat email administrator (#MS42225).`;
-          console.info(`[MAILERSEND NOTICE] ${friendlyNotice}`);
-          await logEmailEventToDatabase(recipientEmail, subject, 'failed', friendlyNotice, {
-            htmlBody: payload.html,
-            textBody: payload.text,
-            orderId: orderId || undefined
-          });
-          return {
-            success: false,
-            status: 422,
-            isDomainUnverified: true,
-            dataText: lastResponseText,
-            error: friendlyNotice
-          };
-        }
+          clearTimeout(timeoutId);
 
-        // Check if error is non-transient 4xx (except 429)
-        const isTransient = res.status === 429 || res.status >= 500;
-        if (!isTransient) {
-          console.info(`[MAILERSEND NOTICE] Non-retryable HTTP ${res.status}. Skipping further retries.`);
+          lastStatus = res.status;
+          lastResponseText = await res.text();
+
+          if (res.status >= 200 && res.status < 300) {
+            console.log(`[MAILERSEND API SUCCESS] Email delivered on attempt ${attempt}. Status: ${res.status}`);
+            if (!options?.skipDbLog) {
+              await logEmailEventToDatabase(recipientEmail, subject, 'sent', undefined, {
+                htmlBody: payload.html,
+                textBody: payload.text,
+                orderId: orderId || undefined
+              });
+            }
+            return { success: true, status: res.status, dataText: lastResponseText };
+          }
+
+          // If #MS42207 (unverified from.email) and we have another discovered candidate domain/identity, try it immediately
+          if (res.status === 422 && lastResponseText.includes('#MS42207')) {
+            const currentIdx = candidates.indexOf(payload.from.email);
+            if (currentIdx >= 0 && currentIdx + 1 < candidates.length) {
+              const nextSender = candidates[currentIdx + 1];
+              console.info(`[MAILERSEND FALLBACK SENDER] Switching from ${payload.from.email} to ${nextSender} after #MS42207`);
+              payload.from.email = nextSender;
+              attempt--; // do not consume retry attempt when testing next candidate sender
+              continue;
+            }
+          }
+
+          // If #MS42225 (Trial account recipient restriction: can only send to account administrator email),
+          // automatically forward the email to the MailerSend account owner email (e.g. yogiketilang33@gmail.com)
+          if (res.status === 422 && lastResponseText.includes('#MS42225')) {
+            const adminFallbackEmail = (senderCheck.accountOwnerEmail || process.env.MAILERSEND_ADMIN_EMAIL || 'yogiketilang33@gmail.com').trim();
+            if (adminFallbackEmail && adminFallbackEmail.toLowerCase() !== cleanRecipient) {
+              console.info(`[MAILERSEND TRIAL FORWARD] #MS42225 for ${recipientEmail}; forwarding copy to administrator ${adminFallbackEmail}`);
+              const forwardedPayload: MailerSendPayload = {
+                ...payload,
+                to: [{ email: adminFallbackEmail, name: 'Administrator Samara Stay' }],
+                subject: `[Salinan Trial u/ ${recipientEmail}] ${payload.subject}`
+              };
+              const fwdRes = await fetch('https://api.mailersend.com/v1/email', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${apiKey}`,
+                  'User-Agent': 'SamaraStay-App/1.0 (Node.js)'
+                },
+                body: JSON.stringify(forwardedPayload),
+                signal: AbortSignal.timeout(12000)
+              }).catch(() => null);
+
+              if (fwdRes && fwdRes.status >= 200 && fwdRes.status < 300) {
+                const fwdNotice = `Mode Trial MailerSend (#MS42225): Email untuk ${recipientEmail} telah diteruskan otomatis ke inbox Administrator (${adminFallbackEmail}).`;
+                if (!options?.skipDbLog) {
+                  await logEmailEventToDatabase(recipientEmail, subject, 'sent', fwdNotice, {
+                    htmlBody: payload.html,
+                    textBody: payload.text,
+                    orderId: orderId || undefined
+                  });
+                }
+                return { success: true, status: fwdRes.status, dataText: JSON.stringify({ message: fwdNotice }) };
+              }
+            }
+          }
+
+          // Graceful handling for #MS42207 (unverified from.email domain) or #MS42225 (trial recipient limit)
+          if (res.status === 422 && (lastResponseText.includes('#MS42207') || lastResponseText.includes('#MS42225'))) {
+            verifiedDomainCache.clear();
+            const ownerHint = senderCheck.accountOwnerEmail ? ` pada akun MailerSend (${senderCheck.accountOwnerEmail})` : '';
+            const friendlyNotice = lastResponseText.includes('#MS42207')
+              ? `Domain pengirim (${payload.from.email}) belum terdaftar/terverifikasi${ownerHint} (#MS42207). Aktifkan domain di https://app.mailersend.com/domains lalu klik Kirim Ulang di Panel Admin.`
+              : `Akun trial MailerSend membatasi pengiriman hanya ke alamat email administrator (#MS42225).`;
+            console.info(`[MAILERSEND NOTICE] ${friendlyNotice}`);
+            if (!options?.skipDbLog) {
+              await logEmailEventToDatabase(recipientEmail, subject, 'failed', friendlyNotice, {
+                htmlBody: payload.html,
+                textBody: payload.text,
+                orderId: orderId || undefined
+              });
+            }
+            return {
+              success: false,
+              status: 422,
+              isDomainUnverified: true,
+              dataText: lastResponseText,
+              error: friendlyNotice
+            };
+          }
+
+          // Check if error is non-transient 4xx (except 429)
+          const isTransient = res.status === 429 || res.status >= 500;
+          if (!isTransient) {
+            console.info(`[MAILERSEND NOTICE] Non-retryable HTTP ${res.status}. Skipping further retries.`);
+            lastError = `HTTP ${res.status}: ${lastResponseText}`;
+            if (!options?.skipDbLog) {
+              await logFailedEmailToDatabase(recipientEmail, subject, lastError, {
+                htmlBody: payload.html,
+                textBody: payload.text,
+                orderId: orderId || undefined
+              });
+            }
+            return { success: false, status: res.status, dataText: lastResponseText, error: lastError };
+          }
+
+          console.warn(`[MAILERSEND API TRANSIENT ERROR] Attempt ${attempt}/${maxAttempts} failed with status ${res.status}: ${lastResponseText}`);
           lastError = `HTTP ${res.status}: ${lastResponseText}`;
-          await logFailedEmailToDatabase(recipientEmail, subject, lastError, {
-            htmlBody: payload.html,
-            textBody: payload.text,
-            orderId: orderId || undefined
-          });
-          return { success: false, status: res.status, dataText: lastResponseText, error: lastError };
+        } catch (err: any) {
+          console.warn(`[MAILERSEND API TIMEOUT/NETWORK ERROR] Attempt ${attempt}/${maxAttempts} failed: ${err.message || err}`);
+          lastError = err.message || String(err);
         }
 
-        console.warn(`[MAILERSEND API TRANSIENT ERROR] Attempt ${attempt}/${maxAttempts} failed with status ${res.status}: ${lastResponseText}`);
-        lastError = `HTTP ${res.status}: ${lastResponseText}`;
-
-      } catch (err: any) {
-        console.warn(`[MAILERSEND API TIMEOUT/NETWORK ERROR] Attempt ${attempt}/${maxAttempts} failed: ${err.message || err}`);
-        lastError = err.message || String(err);
+        if (attempt < maxAttempts) {
+          const delayMs = delays[attempt - 1] || 1000;
+          console.log(`[MAILERSEND API RETRY BACKOFF] Waiting ${delayMs}ms before attempt ${attempt + 1}...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
       }
 
-      // If transient error and attempt < maxAttempts, wait before retry
-      if (attempt < maxAttempts) {
-        const delayMs = delays[attempt - 1] || 1000;
-        console.log(`[MAILERSEND API RETRY BACKOFF] Waiting ${delayMs}ms before attempt ${attempt + 1}...`);
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+      console.warn(`[MAILERSEND API] Could not deliver email to ${recipientEmail} after ${maxAttempts} attempts.`);
+      if (!options?.skipDbLog) {
+        await logFailedEmailToDatabase(recipientEmail, subject, lastError, {
+          htmlBody: payload.html,
+          textBody: payload.text,
+          orderId: orderId || undefined
+        });
       }
-    }
 
-    // Failed after all 3 attempts
-    console.warn(`[MAILERSEND API] Could not deliver email to ${recipientEmail} after ${maxAttempts} attempts.`);
-    await logFailedEmailToDatabase(recipientEmail, subject, lastError, {
-      htmlBody: payload.html,
-      textBody: payload.text,
-      orderId: orderId || undefined
+      return { success: false, status: lastStatus, dataText: lastResponseText, error: lastError };
     });
 
-    return { success: false, status: lastStatus, dataText: lastResponseText, error: lastError };
+    const promise = executeSend();
+    if (dedupKey && !options?.skipDbLog) {
+      orderEmailDedupCache.set(dedupKey, { timestamp: Date.now(), promise });
+      promise.finally(() => {
+        // If the send failed, allow retrying after 8 seconds instead of holding the 90s lock
+        promise.then((res) => {
+          if (!res?.success) {
+            setTimeout(() => orderEmailDedupCache.delete(dedupKey), 8000);
+          }
+        }).catch(() => {
+          orderEmailDedupCache.delete(dedupKey);
+        });
+      });
+    }
+    return promise;
   }
 
   // Helper function to send email via MailerSend API with non-blocking retry & inline signatures
@@ -5021,25 +5245,19 @@ async function startServer() {
     subject: string,
     text: string,
     rawHtml: string,
-    options?: { ownerSigUrl?: string; tenantSigUrl?: string }
+    options?: { ownerSigUrl?: string; tenantSigUrl?: string; orderId?: string }
   ) {
-    // Non-blocking background execution using setImmediate
     setImmediate(async () => {
       try {
-        let apiKey = process.env.MAILERSEND_API_KEY || '';
-        apiKey = apiKey.trim();
-        if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
-        else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
-        apiKey = apiKey.trim();
-
+        const apiKey = getActiveMailerSendApiKey();
         if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
           console.warn('[SERVER EMAIL TRIGGER WARNING] MAILERSEND_API_KEY is not configured. Email skipped.');
           return;
         }
 
-        const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
+        const baseFromEmail = getActiveMailerSendFromEmail();
         const fromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
-        const fromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+        const fromName = getActiveMailerSendFromName();
 
         const { html, attachments } = await processEmailHtmlAndSignatures(rawHtml, options);
 
@@ -5052,8 +5270,8 @@ async function startServer() {
           attachments: attachments.length > 0 ? attachments : undefined
         };
 
-        console.log('[SERVER EMAIL TRIGGER] Initiating non-blocking send with retry:', subject, 'to:', to, 'inline attachments:', attachments.length);
-        await sendEmailWithRetry(apiKey, payload, to, subject);
+        console.log('[SERVER EMAIL TRIGGER] Initiating non-blocking send with retry:', subject, 'to:', to, 'orderId:', options?.orderId || '-', 'inline attachments:', attachments.length);
+        await sendEmailWithRetry(apiKey, payload, to, subject, options?.orderId || null);
       } catch (err) {
         console.error('[SERVER EMAIL TRIGGER ERROR]', err);
       }
@@ -5217,7 +5435,7 @@ async function startServer() {
             </div>
           </div>
         `;
-        sendServerEmail(survey.email, subject, text, html);
+        sendServerEmail(survey.email, subject, text, html, { orderId });
       }
     } else {
       console.warn(`[SETTLE SURVEY] Survey record not found for ${orderId}`);
@@ -5673,7 +5891,8 @@ async function startServer() {
           console.log(`[SETTLE BOOKING] Dispatching confirmation email to recipient: ${recipientEmail}`);
           sendServerEmail(recipientEmail, subject, text, html, {
             ownerSigUrl: settleOwnerSig,
-            tenantSigUrl: booking.signature_url
+            tenantSigUrl: booking.signature_url,
+            orderId
           });
         }
       } catch (emErr) {
@@ -8496,11 +8715,7 @@ async function startServer() {
         }
       }
 
-      let apiKey = process.env.MAILERSEND_API_KEY || '';
-      apiKey = apiKey.trim();
-      if (apiKey.startsWith('"') && apiKey.endsWith('"')) apiKey = apiKey.slice(1, -1);
-      else if (apiKey.startsWith("'") && apiKey.endsWith("'")) apiKey = apiKey.slice(1, -1);
-      apiKey = apiKey.trim();
+      const apiKey = getActiveMailerSendApiKey();
 
       if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
         await logEmailEventToDatabase(
@@ -8523,9 +8738,9 @@ async function startServer() {
       }
 
       // Prevent unauthenticated callers from spoofing sender headers
-      const baseFromEmail = (req.authProfile ? fromEmail : undefined) || process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
+      const baseFromEmail = getActiveMailerSendFromEmail(req.authProfile ? fromEmail : undefined);
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
-      const resolvedFromName = (req.authProfile ? fromName : undefined) || process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+      const resolvedFromName = getActiveMailerSendFromName(req.authProfile ? fromName : undefined);
 
       const cleanSubject = String(subject || 'Notifikasi Samara Stay').slice(0, 150);
       let rawHtml = String(html || `<p>${text || 'Ini adalah notifikasi penting dari Samara Stay.'}</p>`).slice(0, 100000);
@@ -8568,7 +8783,7 @@ async function startServer() {
             archived_in_db: true,
             can_retry_from_admin: true,
             warning_code: 'MS42207_DOMAIN_UNVERIFIED',
-            message: 'Pengiriman email GAGAL (#MS42207: domain pengirim belum terverifikasi di MailerSend). Email telah dicatat dengan status FAILED di log email dan dapat dikirim ulang dari panel Admin setelah domain diverifikasi.',
+            message: result.error || 'Pengiriman email GAGAL (#MS42207: domain pengirim belum terverifikasi di MailerSend). Email telah dicatat dengan status FAILED di log email dan dapat dikirim ulang dari panel Admin setelah domain diverifikasi.',
             details: result.dataText || result.error
           });
         }
@@ -8611,6 +8826,55 @@ async function startServer() {
     }
   });
 
+  // MailerSend Live Diagnostics & Runtime Sender Configuration Endpoints
+  app.get('/api/email/diagnostics', optionalAdminAuth, apiRateLimiter(60000, 30), async (_req, res) => {
+    try {
+      const diagnostics = await runMailerSendDiagnostics();
+      const ok = diagnostics.connectivity?.status === 'success' && (diagnostics.domains?.length > 0 || diagnostics.identities?.length > 0);
+      return res.status(200).json({
+        success: ok,
+        diagnostics
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'Gagal menjalankan diagnostik MailerSend.'
+      });
+    }
+  });
+
+  app.post('/api/email/config', requireAdminAuth, apiRateLimiter(60000, 20), async (req, res) => {
+    try {
+      const { fromEmail, fromName, apiKey } = req.body || {};
+      if (typeof fromEmail === 'string' && fromEmail.trim().includes('@')) {
+        runtimeEmailConfig.fromEmailOverride = fromEmail.trim();
+        process.env.MAILERSEND_FROM_EMAIL = fromEmail.trim();
+      }
+      if (typeof fromName === 'string' && fromName.trim()) {
+        runtimeEmailConfig.fromNameOverride = fromName.trim();
+        process.env.MAILERSEND_FROM_NAME = fromName.trim();
+      }
+      if (typeof apiKey === 'string' && apiKey.trim() && !apiKey.includes('---')) {
+        runtimeEmailConfig.apiKeyOverride = apiKey.trim();
+        process.env.MAILERSEND_API_KEY = apiKey.trim();
+      }
+      verifiedDomainCache.clear();
+      const diagnostics = await runMailerSendDiagnostics();
+      return res.status(200).json({
+        success: true,
+        message: 'Konfigurasi pengirim MailerSend berhasil diperbarui secara real-time.',
+        fromEmail: getActiveMailerSendFromEmail(),
+        fromName: getActiveMailerSendFromName(),
+        diagnostics
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        message: err?.message || 'Gagal menyimpan konfigurasi MailerSend.'
+      });
+    }
+  });
+
   // =========================================================================
   // R20.1: ADMIN SENT EMAILS LOG & RETRY FAILED EMAILS ENDPOINT
   // Allows Admin/Owner to view `sent_emails` and retry failed emails (#MS42207 or transient errors)
@@ -8629,8 +8893,8 @@ async function startServer() {
       const statusFilter = req.query.status ? String(req.query.status).trim() : '';
       let query = supabaseAdmin
         .from('sent_emails')
-        .select('id, recipient_email, subject, status, error_message, retry_count, last_retry_at, order_id, created_at')
-        .order('created_at', { ascending: false })
+        .select('*')
+        .order('id', { ascending: false })
         .limit(100);
 
       if (statusFilter) {
@@ -8641,13 +8905,19 @@ async function startServer() {
       if (error) {
         return res.status(400).json({ success: false, error: error.message, data: [] });
       }
-      return res.status(200).json({ success: true, data: data || [] });
+      const normalized = (data || []).map((row: any) => ({
+        ...row,
+        recipient: row.recipient || row.recipient_email || row.to || '-',
+        recipient_email: row.recipient || row.recipient_email || row.to || '-',
+        created_at: row.created_at || row.sent_at || null
+      }));
+      return res.status(200).json({ success: true, data: normalized });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Gagal memuat daftar log email.', data: [] });
     }
   });
 
-  app.post('/api/admin/emails/retry', requireAdminAuth, apiRateLimiter(60000, 20), async (req, res) => {
+  app.post('/api/admin/emails/retry', requireAdminAuth, apiRateLimiter(60000, 30), async (req, res) => {
     try {
       const { id } = req.body || {};
       if (!id) {
@@ -8673,21 +8943,26 @@ async function startServer() {
         return res.status(404).json({ success: false, message: 'Data log email tidak ditemukan di tabel sent_emails.' });
       }
 
-      let apiKey = (process.env.MAILERSEND_API_KEY || '').trim().replace(/^["']|["']$/g, '').trim();
+      const targetRecipient = String(emailRecord.recipient || emailRecord.recipient_email || emailRecord.to || '').trim();
+      if (!targetRecipient || !targetRecipient.includes('@')) {
+        return res.status(400).json({ success: false, message: 'Alamat penerima pada log email tidak valid.' });
+      }
+
+      const apiKey = getActiveMailerSendApiKey();
       if (!apiKey || apiKey === 'YOUR_MAILERSEND_API_KEY_HERE') {
         return res.status(400).json({ success: false, message: 'MAILERSEND_API_KEY belum dikonfigurasi di server.' });
       }
 
-      const baseFromEmail = process.env.MAILERSEND_FROM_EMAIL || 'info@test-zkq340e73m2gd796.mlsender.net';
+      const baseFromEmail = getActiveMailerSendFromEmail();
       const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
-      const resolvedFromName = process.env.MAILERSEND_FROM_NAME || 'Samara Stay';
+      const resolvedFromName = getActiveMailerSendFromName();
 
-      const rawHtml = emailRecord.html_body || `<p>${emailRecord.text_body || emailRecord.subject || 'Notifikasi Samara Stay'}</p>`;
+      const rawHtml = emailRecord.html_body || emailRecord.body || `<p>${emailRecord.text_body || emailRecord.subject || 'Notifikasi Samara Stay'}</p>`;
       const { html: processedHtml, attachments } = await processEmailHtmlAndSignatures(rawHtml);
 
       const payload: MailerSendPayload = {
         from: { email: resolvedFromEmail, name: resolvedFromName },
-        to: [{ email: emailRecord.recipient_email, name: String(emailRecord.recipient_email || '').split('@')[0].slice(0, 50) }],
+        to: [{ email: targetRecipient, name: targetRecipient.split('@')[0].slice(0, 50) }],
         subject: String(emailRecord.subject || 'Notifikasi Samara Stay').slice(0, 150),
         text: String(emailRecord.text_body || emailRecord.subject || 'Notifikasi Samara Stay').slice(0, 20000),
         html: processedHtml,
@@ -8697,23 +8972,36 @@ async function startServer() {
       const retryRes = await sendEmailWithRetry(
         apiKey,
         payload,
-        emailRecord.recipient_email,
+        targetRecipient,
         payload.subject,
-        emailRecord.order_id || null
+        emailRecord.order_id || null,
+        { skipDbLog: true }
       );
 
       const nextRetryCount = Number(emailRecord.retry_count || 0) + 1;
       const nowIso = new Date().toISOString();
 
-      await supabaseAdmin
+      const updatePayload: Record<string, any> = {
+        status: retryRes.success ? 'sent' : 'failed',
+        error_message: retryRes.success ? null : (retryRes.error || retryRes.dataText || 'Gagal saat kirim ulang').slice(0, 500),
+        sent_at: nowIso
+      };
+      // Include retry_count & last_retry_at if migration 052 columns exist
+      const { error: updErr } = await supabaseAdmin
         .from('sent_emails')
         .update({
-          status: retryRes.success ? 'sent' : 'failed',
-          error_message: retryRes.success ? null : (retryRes.error || retryRes.dataText || 'Gagal saat kirim ulang'),
+          ...updatePayload,
           retry_count: nextRetryCount,
           last_retry_at: nowIso
         })
         .eq('id', emailRecord.id);
+
+      if (updErr) {
+        await supabaseAdmin
+          .from('sent_emails')
+          .update(updatePayload)
+          .eq('id', emailRecord.id);
+      }
 
       if (!retryRes.success) {
         return res.status(200).json({
@@ -8722,7 +9010,7 @@ async function startServer() {
           status: 'failed',
           retry_count: nextRetryCount,
           message: retryRes.isDomainUnverified
-            ? 'Pengiriman ulang gagal (#MS42207: Domain pengirim belum diverifikasi di MailerSend).'
+            ? (retryRes.error || 'Pengiriman ulang gagal (#MS42207: Domain pengirim belum diverifikasi di MailerSend).')
             : (retryRes.error || 'Pengiriman ulang gagal.'),
           details: retryRes.dataText || retryRes.error
         });
@@ -8733,7 +9021,7 @@ async function startServer() {
         emailSent: true,
         status: 'sent',
         retry_count: nextRetryCount,
-        message: `Email ke ${emailRecord.recipient_email} berhasil dikirim ulang.`
+        message: `Email ke ${targetRecipient} berhasil dikirim ulang.`
       });
     } catch (err: any) {
       return res.status(500).json({
@@ -8742,6 +9030,88 @@ async function startServer() {
         status: 'failed',
         message: err?.message || 'Gagal melakukan pengiriman ulang email.'
       });
+    }
+  });
+
+  app.post('/api/admin/emails/retry-all', requireAdminAuth, apiRateLimiter(60000, 10), async (_req, res) => {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const serviceKey = getServiceRoleKeyOrThrow();
+      if (!supabaseUrl || !serviceKey) {
+        return res.status(500).json({ success: false, message: 'Supabase Server Client belum dikonfigurasi.' });
+      }
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+
+      const { data: failedRows } = await supabaseAdmin
+        .from('sent_emails')
+        .select('*')
+        .eq('status', 'failed')
+        .order('id', { ascending: false })
+        .limit(15);
+
+      if (!failedRows || failedRows.length === 0) {
+        return res.status(200).json({ success: true, sentCount: 0, failedCount: 0, message: 'Tidak ada antrean email berstatus failed.' });
+      }
+
+      const apiKey = getActiveMailerSendApiKey();
+      const baseFromEmail = getActiveMailerSendFromEmail();
+      const resolvedFromEmail = await resolveVerifiedFromEmail(apiKey, baseFromEmail);
+      const resolvedFromName = getActiveMailerSendFromName();
+
+      let sentCount = 0;
+      let failedCount = 0;
+      let lastErrorMsg = '';
+
+      for (const row of failedRows) {
+        const targetRecipient = String(row.recipient || row.recipient_email || row.to || '').trim();
+        if (!targetRecipient || !targetRecipient.includes('@')) continue;
+
+        const rawHtml = row.html_body || row.body || `<p>${row.text_body || row.subject || 'Notifikasi Samara Stay'}</p>`;
+        const { html: processedHtml, attachments } = await processEmailHtmlAndSignatures(rawHtml);
+
+        const payload: MailerSendPayload = {
+          from: { email: resolvedFromEmail, name: resolvedFromName },
+          to: [{ email: targetRecipient, name: targetRecipient.split('@')[0].slice(0, 50) }],
+          subject: String(row.subject || 'Notifikasi Samara Stay').slice(0, 150),
+          text: String(row.text_body || row.subject || 'Notifikasi Samara Stay').slice(0, 20000),
+          html: processedHtml,
+          attachments: attachments.length > 0 ? attachments : undefined
+        };
+
+        const r = await sendEmailWithRetry(apiKey, payload, targetRecipient, payload.subject, row.order_id || null, { skipDbLog: true });
+        const nowIso = new Date().toISOString();
+        await supabaseAdmin
+          .from('sent_emails')
+          .update({
+            status: r.success ? 'sent' : 'failed',
+            error_message: r.success ? null : (r.error || r.dataText || 'Gagal saat kirim ulang').slice(0, 500),
+            sent_at: nowIso
+          })
+          .eq('id', row.id);
+
+        if (r.success) {
+          sentCount++;
+        } else {
+          failedCount++;
+          lastErrorMsg = r.error || lastErrorMsg;
+          // Stop batch early if domain itself is still unverified (#MS42207)
+          if (r.isDomainUnverified) break;
+        }
+      }
+
+      return res.status(200).json({
+        success: sentCount > 0 && failedCount === 0,
+        emailSent: sentCount > 0,
+        sentCount,
+        failedCount,
+        message: sentCount > 0
+          ? `Berhasil mengirim ulang ${sentCount} email.`
+          : `Pengiriman ulang belum berhasil: ${lastErrorMsg || 'Periksa verifikasi domain di MailerSend.'}`
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Gagal mengirim ulang antrean email.' });
     }
   });
 

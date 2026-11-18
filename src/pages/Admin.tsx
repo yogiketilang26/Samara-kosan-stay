@@ -1145,13 +1145,23 @@ export default function Admin({}: AdminProps) {
   const [emailResult, setEmailResult] = useState<{ success: boolean; message: string; details?: any } | null>(null);
   const [emailDiagnosticsData, setEmailDiagnosticsData] = useState<any>(null);
   const [runningDiagnostics, setRunningDiagnostics] = useState(false);
+  const [savingEmailConfig, setSavingEmailConfig] = useState(false);
+  const [retryingAllEmails, setRetryingAllEmails] = useState(false);
 
   const handleRunEmailDiagnostics = async () => {
     setRunningDiagnostics(true);
     try {
-      const res = await fetch('/api/email/diagnostics');
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/email/diagnostics', { headers, credentials: 'include' });
       const data = await res.json();
-      setEmailDiagnosticsData(data.diagnostics || data);
+      const diag = data.diagnostics || data;
+      setEmailDiagnosticsData(diag);
+      if (diag?.credentials?.fromEmail) {
+        setEmailSenderEmail(diag.credentials.fromEmail);
+      }
+      if (diag?.credentials?.fromName) {
+        setEmailSenderName(diag.credentials.fromName);
+      }
       if (data.success) {
         database.logActivity("System", "EMAIL_DIAGNOSTICS_SUCCESS", "Sukses menjalankan tes diagnostik MailerSend API");
       } else {
@@ -1161,6 +1171,36 @@ export default function Admin({}: AdminProps) {
       setEmailDiagnosticsData({ error: err.message || 'Gagal terhubung ke endpoint diagnostik' });
     } finally {
       setRunningDiagnostics(false);
+    }
+  };
+
+  const handleSaveEmailSenderConfig = async () => {
+    setSavingEmailConfig(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/email/config', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          fromEmail: emailSenderEmail,
+          fromName: emailSenderName
+        })
+      });
+      const data = await res.json();
+      setEmailResult({
+        success: Boolean(res.ok && data.success),
+        message: data.message || (res.ok ? 'Konfigurasi pengirim disimpan.' : 'Gagal menyimpan konfigurasi pengirim.'),
+        details: data
+      });
+      await handleRunEmailDiagnostics();
+    } catch (err: any) {
+      setEmailResult({
+        success: false,
+        message: err?.message || 'Gagal menyimpan konfigurasi pengirim.'
+      });
+    } finally {
+      setSavingEmailConfig(false);
     }
   };
 
@@ -1339,9 +1379,37 @@ export default function Admin({}: AdminProps) {
     }
   };
 
+  const handleRetryAllFailedEmails = async () => {
+    setRetryingAllEmails(true);
+    try {
+      const headers = await getAuthHeaders();
+      const resp = await fetch('/api/admin/emails/retry-all', {
+        method: 'POST',
+        headers,
+        credentials: 'include'
+      });
+      const data = await resp.json();
+      setEmailResult({
+        success: Boolean(data.success && (data.sent > 0 || data.retried === 0)),
+        message: data.message || 'Proses kirim ulang massal selesai.',
+        details: data
+      });
+      await fetchSentEmailsLog();
+    } catch (err: any) {
+      setEmailResult({
+        success: false,
+        message: err?.message || 'Gagal menjalankan kirim ulang massal.',
+        details: err
+      });
+    } finally {
+      setRetryingAllEmails(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'email_integration' && !isAnakOwner) {
       fetchSentEmailsLog();
+      handleRunEmailDiagnostics();
     }
   }, [activeTab, isAnakOwner]);
 
@@ -4109,9 +4177,11 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                          if (!targetEmail) return;
                          
                          alert("Mengirim email uji coba invoice... Mohon tunggu.");
+                         const authHeaders = await getAuthHeaders();
                          const res = await fetch('/api/email/send', {
                            method: 'POST',
-                           headers: { 'Content-Type': 'application/json' },
+                           headers: authHeaders,
+                           credentials: 'include',
                            body: JSON.stringify({
                              to: targetEmail,
                              subject: "Uji Coba Invoice Pembayaran - Samara Kos",
@@ -4135,10 +4205,10 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                            })
                          });
                          const data = await res.json();
-                         if (res.ok) {
-                           alert("Sukses! Log MailerSend: " + JSON.stringify(data));
+                         if (res.ok && data.success && data.emailSent !== false) {
+                           alert("Sukses! Email invoice terkirim ke " + (data.deliveredTo || targetEmail));
                          } else {
-                           alert("Gagal mengirim email. Error: " + data.error + "\nPenyebab: " + (data.message || "Domain From belum diverifikasi di MailerSend. Silakan verifikasi domain Anda terlebih dahulu di dashboard MailerSend!"));
+                           alert("Gagal mengirim email.\nPenyebab: " + (data.message || data.error || "Domain From belum diverifikasi di MailerSend. Silakan verifikasi domain Anda terlebih dahulu di dashboard MailerSend!"));
                          }
                        } catch(e: any) {
                          alert("Terjadi kesalahan jaringan: " + e.message);
@@ -8118,6 +8188,16 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     />
                     <p className="text-[9px] text-slate-500 mt-1 font-sans">Nama yang akan tertera sebagai pengirim pada kotak masuk email penyewa kos.</p>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveEmailSenderConfig}
+                    disabled={savingEmailConfig}
+                    className="w-full bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold py-2 rounded-xl transition flex items-center justify-center gap-2 text-xs cursor-pointer"
+                  >
+                    <CheckCircle size={13} />
+                    {savingEmailConfig ? 'Menyimpan Konfigurasi...' : 'Simpan Konfigurasi Pengirim Aktif'}
+                  </button>
                 </div>
 
                 <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800 space-y-1.5 text-[10px]">
@@ -8240,6 +8320,18 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                           {emailDiagnosticsData.connectivity?.status === 'success' ? '200 OK (Terhubung)' : emailDiagnosticsData.connectivity?.message || 'Error'}
                         </span>
                       </div>
+                      {emailDiagnosticsData.accountOwner && (
+                        <div className="bg-slate-900/90 p-2 rounded-xl border border-slate-800">
+                          <span className="text-slate-500 block uppercase text-[8px] font-bold">Akun Pemilik MailerSend</span>
+                          <span className="text-teal-300 font-bold truncate block">{emailDiagnosticsData.accountOwner}</span>
+                        </div>
+                      )}
+                      {emailDiagnosticsData.quota && (
+                        <div className="bg-slate-900/90 p-2 rounded-xl border border-slate-800">
+                          <span className="text-slate-500 block uppercase text-[8px] font-bold">Sisa Kuota API</span>
+                          <span className="text-emerald-300 font-bold">{emailDiagnosticsData.quota.remaining ?? '-'} / {emailDiagnosticsData.quota.quota ?? '-'}</span>
+                        </div>
+                      )}
                     </div>
 
                     {emailDiagnosticsData.domains && emailDiagnosticsData.domains.length > 0 && (
@@ -8320,15 +8412,28 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                     Email yang gagal (termasuk #MS42207 domain belum terverifikasi) dicatat sebagai <code className="font-mono text-rose-400">failed</code> dan dapat dikirim ulang kapan saja.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={fetchSentEmailsLog}
-                  disabled={loadingSentEmails}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-[10px] font-bold flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-                >
-                  <RotateCw size={11} className={loadingSentEmails ? 'animate-spin' : ''} />
-                  Muat Ulang Log
-                </button>
+                <div className="flex items-center gap-2 self-start sm:self-auto">
+                  {sentEmailsLog.some((item: any) => item.status === 'failed') && (
+                    <button
+                      type="button"
+                      onClick={handleRetryAllFailedEmails}
+                      disabled={retryingAllEmails}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-xl text-[10px] font-extrabold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RotateCw size={11} className={retryingAllEmails ? 'animate-spin' : ''} />
+                      {retryingAllEmails ? 'Mengirim Ulang Semua...' : 'Kirim Ulang Semua Gagal'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={fetchSentEmailsLog}
+                    disabled={loadingSentEmails}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-[10px] font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCw size={11} className={loadingSentEmails ? 'animate-spin' : ''} />
+                    Muat Ulang Log
+                  </button>
+                </div>
               </div>
 
               {sentEmailsLog.length === 0 ? (
@@ -8350,12 +8455,14 @@ ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;`}
                       {sentEmailsLog.slice(0, 25).map((item: any) => {
                         const isFailed = item.status === 'failed';
                         const isRetrying = retryingEmailId === item.id;
+                        const timeVal = item.created_at || item.sent_at;
+                        const recipientVal = item.recipient_email || item.recipient || '-';
                         return (
                           <tr key={item.id} className="hover:bg-slate-800/30">
                             <td className="py-2.5 pr-3 font-mono text-[10px] text-slate-400 whitespace-nowrap">
-                              {item.created_at ? new Date(item.created_at).toLocaleString('id-ID') : '-'}
+                              {timeVal ? new Date(timeVal).toLocaleString('id-ID') : '-'}
                             </td>
-                            <td className="py-2.5 px-3 font-mono text-slate-200">{item.recipient_email}</td>
+                            <td className="py-2.5 px-3 font-mono text-slate-200">{recipientVal}</td>
                             <td className="py-2.5 px-3 text-slate-300 max-w-[220px] truncate">{item.subject}</td>
                             <td className="py-2.5 px-3">
                               <span className={`px-2 py-0.5 rounded-md text-[9px] font-mono font-bold uppercase border ${

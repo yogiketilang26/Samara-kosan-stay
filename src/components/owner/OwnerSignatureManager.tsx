@@ -8,7 +8,7 @@ import {
   Shield, Copy, Award
 } from 'lucide-react';
 import { Property, Room, Tenant, Booking, SystemSettings } from '../../types';
-import { database, DEFAULT_OWNER_SIGNATURE, isSupabaseConfigured } from '../../lib/supabase';
+import { database, DEFAULT_OWNER_SIGNATURE, isSupabaseConfigured, getAuthHeaders } from '../../lib/supabase';
 import {
   uploadToSupabaseStorage,
   cacheRealtimeSignaturePreview,
@@ -415,9 +415,11 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
         </html>
       `;
 
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/email/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
+        credentials: 'include',
         body: JSON.stringify({
           to: testEmail,
           subject: `[Verifikasi TTD] Spesimen Tanda Tangan Digital Resmi Pemilik - Samara Stay`,
@@ -428,7 +430,7 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
       });
 
       const resData = await response.json();
-      if (response.ok && resData.success) {
+      if (response.ok && resData.success && resData.emailSent !== false) {
         setEmailSendStatus({
           status: 'success',
           message: `Email spesimen TTD berhasil dikirim via MailerSend ke ${testEmail}!`
@@ -570,11 +572,14 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
             </html>
           `;
 
+          const authHeaders = await getAuthHeaders();
           const emailRes = await fetch('/api/email/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders,
+            credentials: 'include',
             body: JSON.stringify({
               to: tenantEmail,
+              order_id: booking.midtrans_order_id || undefined,
               subject: `[Kontrak Disahkan] Surat Perjanjian Sewa Kamar #${booking.id} - ${propertyName}`,
               text: `Selamat! Kontrak sewa Anda di ${propertyName} kamar ${booking.room_number} telah resmi disahkan dan ditandatangani oleh Pemilik Samara Stay.`,
               html: contractHtml,
@@ -583,7 +588,7 @@ export const OwnerSignatureManager: React.FC<OwnerSignatureManagerProps> = ({
           });
 
           const mailResData = await emailRes.json();
-          if (emailRes.ok && mailResData.success) {
+          if (emailRes.ok && mailResData.success && mailResData.emailSent !== false) {
             emailStatusMsg = `Email kontrak sah berhasil dikirim via MailerSend ke ${tenantEmail}!`;
           } else {
             emailStatusMsg = `Kontrak disahkan di database, namun email gagal: ${mailResData.message || 'MailerSend belum aktif'}`;
